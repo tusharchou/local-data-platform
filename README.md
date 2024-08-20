@@ -15,6 +15,7 @@ I like to organise data and I don't like paying cloud companies who train their 
    5. DuckDB
    6. Space and Time
 4. Catalog
+   5. Rest
 
 ### References
 
