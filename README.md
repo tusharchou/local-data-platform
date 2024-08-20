@@ -5,17 +5,17 @@ I like to organise data and I don't like paying cloud companies who train their 
 ## Components 
 
 1. Orchestrator 
-   2. cron
-   3. Airflow
+   - cron
+   - Airflow
 2. Source
-   3. APIs
-   4. Files
+   - APIs
+   - Files
 3. Target
-   4. Iceberg
-   5. DuckDB
-   6. Space and Time
+   - Iceberg
+   - DuckDB
+   - Space and Time
 4. Catalog
-   5. Rest
+   - Rest
 
 ### References
 
