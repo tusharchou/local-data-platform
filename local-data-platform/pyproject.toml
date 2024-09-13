@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "local-data-platform"
+version = "0.1.0"
+description = ""
+authors = ["Tushar Choudhary <151359025+tusharchou@users.noreply.github.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+pyiceberg = "^0.7.1"
+pyarrow = "^17.0.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
