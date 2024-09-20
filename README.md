@@ -19,7 +19,7 @@
 
 - [ ] 0.0.1 : Minimum viable product
   - [ ] 1. [#6](https://github.com/tusharchou/local-data-platform/issues/6) : README 🥇 explain with clarity what I want to build and when
-  - [ ] 2. [#1](https://github.com/tusharchou/local-data-platform/issues/1) : pyiceberg 0.7.1 list limitations
+  - [ ] 2. [#1](https://github.com/tusharchou/local-data-platform/issues/1) : pyiceberg 0.7.1 list limitations [#2](https://github.com/tusharchou/local-data-platform/pull/2)
   - [ ] 3. [#3](https://github.com/tusharchou/local-data-platform/issues/3) : nyc data proof of concept with duck db
   - [ ] 4. [#5](https://github.com/tusharchou/local-data-platform/issues/5) : roll out library on pipy 
 
