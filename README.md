@@ -8,7 +8,12 @@
 > 5. Wiki
 > 6. Documentation
 
+## Plan
 
+| Milestone  | Epic | Target Date |
+| ------------- | ------------- | ------------ |
+| 0.0.1  | Ready for Feedback  | 1st Oct 24 |
+| 1.0.0  | Ready for Production | 1st Nov 24 |
 
 
 # Local Data Platform 
