@@ -15,6 +15,14 @@
 | 0.0.1  | Ready for Feedback  | 1st Oct 24 |
 | 1.0.0  | Ready for Production | 1st Nov 24 |
 
+### Milestone
+
+- [ ] 0.0.1 : Minimum viable product
+  - [ ] #6 : README 🥇 explain with clarity what I want to build and when
+  - [ ] #1 : pyiceberg 0.7.1 list limitations
+  - [ ] #3 : nyc data proof of concept with duck db
+  - [ ] #5 : roll out library on pipy
+
 
 # Local Data Platform 
 
