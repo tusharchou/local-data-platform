@@ -18,10 +18,10 @@
 ### Milestone
 
 - [ ] 0.0.1 : Minimum viable product
-  - [ ] #6 : README 🥇 explain with clarity what I want to build and when
-  - [ ] #1 : pyiceberg 0.7.1 list limitations
-  - [ ] #3 : nyc data proof of concept with duck db
-  - [ ] #5 : roll out library on pipy
+  - [ ] 1. #6 : README 🥇 explain with clarity what I want to build and when
+  - [ ] 2. #1 : pyiceberg 0.7.1 list limitations
+  - [ ] 3. #3 : nyc data proof of concept with duck db
+  - [ ] 4. #5 : roll out library on pipy 
 
 
 # Local Data Platform 
