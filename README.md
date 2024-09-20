@@ -3,6 +3,8 @@
 Business information systems require fresh data every day organised in a manner that retrival is cost effective.
 Making a local data platform requires a setup where you can recreate production usecases and develop new pipelines.
 
+## Problem Statement
+
 ## Components 
 
 1. Orchestrator 
