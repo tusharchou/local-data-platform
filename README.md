@@ -32,6 +32,14 @@ Making a local data platform requires a setup where you can recreate production 
 
 ## Problem Statement
 
+ What? : a local data platform that can scale up to cloud
+ Why? : save costs on cloud infra and developement time
+ When? : start of product development life cycle
+ Where? : local first
+ Who? : Business who want a product data platform that will run locally and scale up when the time comes.
+
+> A python library that uses open source tools to orchestrate a data platform operations locally for development and testing
+
 ## Components 
 
 1. Orchestrator 
