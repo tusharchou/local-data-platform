@@ -7,3 +7,7 @@
 `poetry install`
 
 `poetry run python hello_world`
+
+`poetry build`
+
+`poetry publish`
