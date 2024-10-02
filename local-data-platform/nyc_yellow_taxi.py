@@ -1,33 +1,49 @@
 import os
+
 from local_data_platform.catalog.sql import LocalIcebergCatalog
 from local_data_platform.target.iceberg.table import IcebergTable
 from local_data_platform.source.parquet.pyarrow_table import PyarrowTable
+from local_data_platform import BaseConfig
+
 
 config = {
-    "name": "NYC Yellow Taxi",
+    "name": "nyc_yellow_taxi_rides",
     "path": "/Users/tushar/Documents/GitHub/local-data-platform/local-data-platform/yellow_tripdata_2023-01.parquet",
-    "warehouse_path": "./tmp/warehouse"
+    "warehouse_path": "./tmp/warehouse",
+    "catalog_identifier": "pyiceberg_catalog_db",
+    "format": "PARQUET"
 }
 
-class nyc_yellow_taxi_rides_table(IcebergTable):
+class NYCYellowTaxiRides(IcebergTable):
+
+    def __init__(self, config: BaseConfig, *args, **kwargs):
+        self.warehouse_path = config['warehouse_path']
+        self.catalog_identifier = config['catalog_identifier']
+        # self.catalog_uri = config['catalog_uri']
+        try:
+            # Ensure the directory exists
+            os.makedirs(self.warehouse_path, exist_ok=True)
+        except:
+            pass
+        try:
+            self.catalog = LocalIcebergCatalog(
+                self.catalog_identifier,
+                **{
+                    "uri": f"sqlite:///{self.warehouse_path}/pyiceberg_catalog.db",  # Ensure .db file extension
+                    "warehouse": f"file://{self.warehouse_path}",
+                },
+            )
+        except:
+            pass
+
+        super(NYCYellowTaxiRides, self).__init__(catalog=self.catalog , *args, **config)
 
 
-warehouse_path = config['warehouse_path']
-# Ensure the directory exists
-os.makedirs(warehouse_path, exist_ok=True)
 
-
-catalog = LocalIcebergCatalog(
-    "pyiceberg_catalog_db",
-    **{
-        "uri": f"sqlite:///{warehouse_path}/pyiceberg_catalog.db",  # Ensure .db file extension
-        "warehouse": f"file://{warehouse_path}",
-    },
-)
-
+table = NYCYellowTaxiRides(config)
 
 # Verify if the catalog is set up correctly
-print("Catalog set up successfully:", catalog)
+print("Catalog set up successfully:", table.catalog)
 
 '''
 CLI COMMAND to grab data -
@@ -38,13 +54,14 @@ References:
 path = config['path']
 nyc_yellow_taxi_rides = PyarrowTable()
 df = nyc_yellow_taxi_rides.from_parquet(path)
+try:
+    table.catalog.create_namespace("pyiceberg_catalog_db")
+except:
+    pass
 
-# catalog.create_namespace("pyiceberg_catalog_db")
+table = NYCYellowTaxiRides(config)
 
-table = catalog.create_table_if_not_exists(
-    "pyiceberg_catalog_db.taxi_dataset",
-    schema=df.schema,
-)
+table.put(schema=df.schema)
 
 # table.append(df)
 print(len(table.scan().to_arrow()))
