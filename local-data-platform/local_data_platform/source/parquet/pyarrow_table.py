@@ -1,7 +1,9 @@
-from pyarrow import Table, parquet
+from pyarrow import parquet
 
-class PyarrowTable(Table):
+class PyarrowTable():
 
 
-    def get_from_parquet(self, path):
+    def from_parquet(self, path):
         self.df = parquet.read_table(path)
+
+        return self.df
