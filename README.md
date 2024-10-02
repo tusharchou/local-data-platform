@@ -10,10 +10,12 @@
 
 ## Plan
 
-| Milestone  | Epic | Target Date |
-| ------------- | ------------- | ------------ |
-| 0.0.1  | Ready for Feedback  | 1st Oct 24 |
-| 1.0.0  | Ready for Production | 1st Nov 24 |
+| Milestone | Epic                 | Target Date |
+|-----------|----------------------|-------------|
+| 0.1.0     | Hello world          | 1st Oct 24  |
+| 0.1.1     | Source: BiqQuery     | 2nd Oct 24  |
+| 0.1.2     | Target: Iceberg      | 1st Oct 24 |
+| 1.0.0     | Ready for Production | 1st Nov 24  |
 
 ### Milestone
 
