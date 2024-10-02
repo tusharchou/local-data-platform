@@ -1,5 +1,6 @@
 import os
-from local_data_platform.catalog.sql import LocalCatalog
+from local_data_platform.catalog.sql import LocalIcebergCatalog
+from local_data_platform.target.iceberg.table import IcebergTable
 from local_data_platform.source.parquet.pyarrow_table import PyarrowTable
 
 config = {
@@ -8,12 +9,15 @@ config = {
     "warehouse_path": "./tmp/warehouse"
 }
 
+class nyc_yellow_taxi_rides_table(IcebergTable):
+
+
 warehouse_path = config['warehouse_path']
 # Ensure the directory exists
 os.makedirs(warehouse_path, exist_ok=True)
 
 
-catalog = LocalCatalog(
+catalog = LocalIcebergCatalog(
     "pyiceberg_catalog_db",
     **{
         "uri": f"sqlite:///{warehouse_path}/pyiceberg_catalog.db",  # Ensure .db file extension
@@ -37,10 +41,10 @@ df = nyc_yellow_taxi_rides.from_parquet(path)
 
 # catalog.create_namespace("pyiceberg_catalog_db")
 
-# table = catalog.create_table(
-#     "pyiceberg_catalog_db.taxi_dataset",
-#     schema=df.schema,
-# )
+table = catalog.create_table_if_not_exists(
+    "pyiceberg_catalog_db.taxi_dataset",
+    schema=df.schema,
+)
 
-nyc_yellow_taxi_rides.append(df)
-len(table.scan().to_arrow())
+# table.append(df)
+print(len(table.scan().to_arrow()))

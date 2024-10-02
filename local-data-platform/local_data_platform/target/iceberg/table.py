@@ -1,9 +1,7 @@
+from  import
 
-
-class IcebergTable:
-    ```
-    namespace
-    table name
-    ```
-
-    def
+class IcebergTable():
+    catalog
+    name
+    df
+    def get_table(self, catalog, name):
