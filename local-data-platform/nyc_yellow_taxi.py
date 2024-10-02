@@ -32,5 +32,15 @@ References:
     https://py.iceberg.apache.org/#write-a-pyarrow-dataframe
 '''
 path = config['path']
-nyc_yellow_taxi_rides_df = PyarrowTable()
-nyc_yellow_taxi_rides_df.from_parquet(path)
+nyc_yellow_taxi_rides = PyarrowTable()
+df = nyc_yellow_taxi_rides.from_parquet(path)
+
+# catalog.create_namespace("pyiceberg_catalog_db")
+
+# table = catalog.create_table(
+#     "pyiceberg_catalog_db.taxi_dataset",
+#     schema=df.schema,
+# )
+
+nyc_yellow_taxi_rides.append(df)
+len(table.scan().to_arrow())
