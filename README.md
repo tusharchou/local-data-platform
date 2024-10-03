@@ -1,29 +1,49 @@
 > [!NOTE]
 > Hi Followers,
-> Thank you for taking the time to read me. Let me help you understand the scope and progess with better ease below:
-> 1. Projects
-> 2. Milestones
-> 3. Issues
-> 4. Pull Request
-> 5. Wiki
-> 6. Documentation
+> Thank you for taking the time to read me. Let me help you understand the scope and progress with better ease below:
+> 1. [Milestones](https://github.com/tusharchou/local-data-platform/milestones)
+> 2. README.md (This document) 
+> 3. [Enhancements](https://github.com/tusharchou/local-data-platform/pulls)
+> 6. Documentation (Coming Soon)
+
+Updated At Thu 3 Oct 2024
+
+# Local Data Engineering Toolkit in Python
 
 ## Plan
 
-| Milestone  | Epic | Target Date |
-| ------------- | ------------- | ------------ |
-| 0.0.1  | Ready for Feedback  | 1st Oct 24 |
-| 1.0.0  | Ready for Production | 1st Nov 24 |
+| Milestone | Epic                 | Target Date  | Delivery Date | Release Owner |
+|-----------|----------------------|--------------|---------------|---------------|
+| 0.1.0     | HelloWorld           | 1st Oct 24   | 1st Oct 24    | @tusharchou   |
+| 0.1.1     | BigQuery             | 3rd Oct 24   | 3rd Oct 24    | TBD           |
+| 1.0.0     | Ready for Production | 1st Nov 24   | TBD           | TBD           |
 
 ### Milestone
 
-- [ ] 0.0.1 : Minimum viable product
-  - [ ] 1. [#6](https://github.com/tusharchou/local-data-platform/issues/6) : README 🥇 explain with clarity what I want to build and when
-  - [ ] 2. [#1](https://github.com/tusharchou/local-data-platform/issues/1) : pyiceberg 0.7.1 list limitations [#2](https://github.com/tusharchou/local-data-platform/pull/2)
-  - [ ] 3. [#3](https://github.com/tusharchou/local-data-platform/issues/3) : nyc data proof of concept with duck db
-  - [ ] 4. [#5](https://github.com/tusharchou/local-data-platform/issues/5) : roll out library on pipy 
+- [x] 0.1.0 : Done+ Published Library on [PyPI](https://pypi.org/project/local-data-platform/)
 
-[#6](https://github.com/tusharchou/local-data-platform/issues/6)
+- [ ] 0.1.1 : In Progress- [Demo BigQuery compatibility](https://github.com/tusharchou/local-data-platform/milestone/2)
+  - [x] 0.1.1 : Done+ [Documentation: Updated README to explain clearly problem and plan of excecution](https://github.com/tusharchou/local-data-platform/issues/6) 
+  - [ ] PR : In Progress- [Feature: Simply query NEAR Coin GCP Data Lake through BiqQuery](https://github.com/tusharchou/local-data-platform/pull/25)
+  - [ ] PR : In Progress- [Feature: Privately store NYC Yellow Taxi Rides Data in Local Data Platform](https://github.com/tusharchou/local-data-platform/pull/26)
+  - [ ] FR : In Progress- [Change: Easily solve for User's Local Data Need](https://github.com/tusharchou/local-data-platform/pull/28)
+  - [ ] IS : In Progress- [Documentation: Align on Product Framework](https://github.com/tusharchou/local-data-platform/issues/29)
+  - [ ] IS : In Progress- [Request: Source Parquet Table](https://github.com/tusharchou/local-data-platform/issues/24)
+  - [ ] IS : In Progress- [Request: Source Iceberg Table](https://github.com/tusharchou/local-data-platform/issues/21)
+  - [ ] IS : In Progress- [Request: Target Iceberg Table](https://github.com/tusharchou/local-data-platform/issues/22)
+  - [ ] IS : In Progress- [Request: Target.put() Iceberg Table](https://github.com/tusharchou/local-data-platform/issues/20)
+  - [ ] IS : In Progress- [Request: NYCYellowTaxi.rides.put()](https://github.com/tusharchou/local-data-platform/issues/8)
+  - [ ] IS : In Progress- [Request: NYCYellowTaxi.rides.get()](https://github.com/tusharchou/local-data-platform/issues/3)
+  - [ ] IS : In Progress- [Request: test.iceberg.exception()](https://github.com/tusharchou/local-data-platform/issues/1)
+  - [ ] IS : In Progress- [Documentation: NEAR Trader-How to use NEAR Data Lake](https://github.com/tusharchou/local-data-platform/issues/12)
+  - [ ] IS : In Progress- [Request: Source.get() BigQuery](https://github.com/tusharchou/local-data-platform/issues/19)
+  - [ ] IS : To-do- [Request: Iceberg Partitioning and Version Control](https://github.com/tusharchou/local-data-platform/issues/29)
+  - [ ] IS : To-do- [Request: Align on Product Framework](https://github.com/tusharchou/local-data-platform/issues/29)
+  - [ ] IS : In Progress- [Align on Product Framework](https://github.com/tusharchou/local-data-platform/issues/29)
+- [ ] 0.1.2 : To-do Continuous Integration
+- [ ] 0.1.9 : To-do[Launch Documentation](https://github.com/tusharchou/local-data-platform/milestone/2)
+- [ ] 0.2.0 : To-do [Cloud Integration](https://github.com/tusharchou/local-data-platform/milestone/3)
+- [ ] 1.0.0 : To-do [Demo BigQuery compatibility](https://github.com/tusharchou/local-data-platform/milestone/2)
 
 # Local Data Platform 
 
