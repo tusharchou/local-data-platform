@@ -35,8 +35,9 @@ class NYCYellowTaxiRides(IcebergTable):
             )
         except:
             pass
-
-        super(NYCYellowTaxiRides, self).__init__(catalog=self.catalog , *args, **config)
+        print(f"arg {args}")
+        print(f"config {config}")
+        super(NYCYellowTaxiRides, self).__init__(catalog=self.catalog, **config)
 
 
 
@@ -59,9 +60,17 @@ try:
 except:
     pass
 
+
 table = NYCYellowTaxiRides(config)
 
-table.put(schema=df.schema)
+print(f"""
+    Config {config}
+    df.schema {df.schema}
+    table.name {table.name}
+    table.catalog_identifier {table.catalog_identifier}
+""")
 
-# table.append(df)
-print(len(table.scan().to_arrow()))
+local_table = table.put(schema=df.schema)
+
+local_table.append(df)
+print(len(local_table.scan().to_arrow()))

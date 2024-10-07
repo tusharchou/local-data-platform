@@ -31,7 +31,6 @@ class Table(Base):
             *args,
             **kwargs
     ):
-        self.name = name
         self.path = path
         self.format = format
         self.metadata = kwargs
