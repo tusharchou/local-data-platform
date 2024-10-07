@@ -6,10 +6,14 @@ authors = ["Tushar Choudhary <151359025+tusharchou@users.noreply.github.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.12"
+python = ">=3.9,<4.0"
 pyiceberg = "^0.7.1"
 pyarrow = "^17.0.0"
-sqlalchemy = "^2.0.35"
+google-auth = "^2.35.0"
+pytest = "^8.3.3"
+magicmock = "^0.3"
+google = "^3.0.0"
+google-cloud-bigquery = "^3.26.0"
 
 
 [build-system]
