@@ -12,11 +12,12 @@ Updated At Thu 3 Oct 2024
 
 ## Plan
 
-| Milestone | Epic                 | Target Date  | Delivery Date | Release Owner |
-|-----------|----------------------|--------------|---------------|---------------|
-| 0.1.0     | HelloWorld           | 1st Oct 24   | 1st Oct 24    | @tusharchou   |
-| 0.1.1     | BigQuery             | 3rd Oct 24   | 3rd Oct 24    | TBD           |
-| 1.0.0     | Ready for Production | 1st Nov 24   | TBD           | TBD           |
+| Milestone | Epic                 | Target Date | Delivery Date | Release Owner   | Comment      |
+|-----------|----------------------|-------------|---------------|-----------------|--------------|
+| 0.1.0     | HelloWorld           | 1st Oct 24  | 1st Oct 24    | @tusharchou     | Good Start   |
+| 0.1.1     | Ingestion            | 3rd Oct 24  | 9th Oct 24    | @tusharchou     | First Sprint | 
+| 0.1.2     | Warehousing          | 18th Oct 24 | TBD           | @tusharchou     | Coming Soon  |
+| 1.0.0     | Ready for Production | 1st Nov 24  | TBD           | TBD             | End Game     |
 
 ### Milestone
 
@@ -52,11 +53,13 @@ Making a local data platform requires a setup where you can recreate production 
 
 ## Problem Statement
 
- What? : a local data platform that can scale up to cloud
- Why? : save costs on cloud infra and developement time
- When? : start of product development life cycle
- Where? : local first
- Who? : Business who want a product data platform that will run locally and scale up when the time comes.
+| Question | Answer                                                                                            |
+|----------|---------------------------------------------------------------------------------------------------|
+| What?    | a local data platform that can scale up to cloud                                                  |
+| Why?     | save costs on cloud infra and developement time                                                   |
+| When?    | start of product development life cycle                                                           |
+| Where?   | local first                                                                                       |
+| Who?     | Business who want a product data platform that will run locally and scale up when the time comes. |
 
 > A python library that uses open source tools to orchestrate a data platform operations locally for development and testing
 
@@ -77,7 +80,7 @@ Making a local data platform requires a setup where you can recreate production 
 
 ### Source
 
-#### Bulk data
+#### Parquet
 
 Data can be available as single file in the source format. For example New York Yellow taxi data is available to be 
 pulled from [here](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page)
@@ -89,11 +92,17 @@ curl https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2023-01.par
 
 ### Target
 
-#### CSV
+1. CSV
+2. Google Sheet
+3. Iceberg 
 
-Human readable format and accessible platforms like google sheets or notion
-Easily pushed into 
 ### References
 
+[iceberg-python](https://py.iceberg.apache.org)
+[near-data-lake](https://docs.near.org/concepts/advanced/near-lake-framework)
+[duckdb](https://duckdb.org/docs/extensions/iceberg.html)
 
 #### Self Promotion
+
+[Reliable Change Data Capture using Iceberg](https://medium.com/@tushar.choudhary.de/reliable-cdc-apache-spark-ingestion-pipeline-using-iceberg-5d8f0fee6fd6)
+[Introduction to pyiceberg](https://medium.com/@tushar.choudhary.de/internals-of-apache-pyiceberg-10c2302a5c8b)
