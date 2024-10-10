@@ -79,8 +79,35 @@ Making a local data platform requires a setup where you can recreate production 
    - Rest
 
 ### Source
+Our local data platform supports a wide range of data sources, enabling seamless integration and processing from various formats and storage systems:
 
-#### Parquet
+Parquet Files: High-performance columnar storage format, optimized for efficient reading and querying of large datasets.
+Near Blockchain Data: Access and process blockchain data from the NEAR Protocol, supporting decentralized application analytics.
+S3 Buckets: Integrate directly with Amazon S3 for scalable storage and retrieval of objects, including structured and unstructured data.
+JSON Files: Support for JSON widely used for APIs and unstructured data.
+Each source type can be configured and accessed within the platform, ensuring versatility and flexibility for your data workflows.
+Support for other data formats and systems will be released soon or feel free to open a pull request.
+
+
+### Data Catalog with Apache Iceberg on SQLite
+Our platform uses Apache Iceberg to manage large-scale datasets efficiently while ensuring ACID compliance, schema evolution, and performant queries.
+Our platform leverages Apache Iceberg as the data catalog on top of SQLite for storing and transforming raw data.
+Initially, raw data from various sources (Parquet files, blockchain data, S3 buckets, JSON, etc.) is ingested into SQLite. SQLite, being a lightweight, serverless database, serves as an intermediary layer where the data can be stored, processed, and transformed as needed. Apache Iceberg acts as the data catalog throughout the process. It manages metadata for all datasets, including raw data in SQLite.
+
+### Transformations 
+Once raw data is ingested into SQLite, we use DBT (Data Build Tool) for transforming and modeling the data.
+
+### Target
+Once the transformations are complete, the processed and clean data is stored in DuckDB using Apache Iceberg's table format
+Apache Iceberg acts as a unified metadata layer across both the raw and processed data. The platform can handle complex data versioning, schema evolution, and partition pruning, ensuring optimal performance during querying. With DuckDB’s in-memory analytical capabilities and Iceberg’s efficient data layout, querying the processed data becomes highly performant and scalable.
+
+### Workflow Overview
+1. Raw Data Ingestion into SQLite
+2. Apache Iceberg as the Data Catalog
+3. Data Transformation and Processing with DBT
+4. Storing Processed Data in DuckDB using Iceberg Format
+
+#### Sample Data
 
 Data can be available as single file in the source format. For example New York Yellow taxi data is available to be 
 pulled from [here](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page)
@@ -90,11 +117,6 @@ curl https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2023-01.par
 ```
 `local-data-platform/`
 
-### Target
-
-1. CSV
-2. Google Sheet
-3. Iceberg 
 
 ### References
 
