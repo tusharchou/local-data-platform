@@ -34,10 +34,17 @@ class Table(Base):
 
 @dataclass
 class Config(Base):
-    __slots__ = ("identifier","database","path")
+    __slots__ = ("identifier", "who", "metadata")
     identifier: str
-    database: str
-    path: str
+    who: str
+    what: str
+    where: str
+    when: str
+    how: str
+    metadata: str
+
+
+
 
 class Flow(Base):
     source: Table
