@@ -8,8 +8,6 @@ class SupportedFormat(Enum):
     CSV = 3
 
 
-
-
 class Base(ABC):
 
     def __init__(self, *args, **kwargs): pass
@@ -27,19 +25,32 @@ class Table(Base):
             self,
             name: str,
             path: str,
-            format: SupportedFormat,
-            *args,
-            **kwargs
+            format: SupportedFormat
     ):
+        self.name = name
         self.path = path
         self.format = format
-        self.metadata = kwargs
 
 
 @dataclass
-class BaseConfig(Base):
+class Config(Base):
     __slots__ = ("identifier","database","path")
     identifier: str
     database: str
     path: str
+
+class Flow(Base):
+    source: Table
+    target: Table
+
+    def extract(self):
+        pass
+
+    def transform(self):
+        pass
+
+    def load(self):
+        pass
+
+
 
