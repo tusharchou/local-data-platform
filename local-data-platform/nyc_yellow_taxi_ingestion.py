@@ -1,6 +1,3 @@
+from local_data_platform.etl import etl
 
-
-dataset_config = {
-    "name": "NYC Yellow Taxi",
-    "source": ""
-}
+etl()
