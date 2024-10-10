@@ -9,10 +9,7 @@ class Iceberg(Target):
     def __init__(self, catalog: str, *args, **kwargs):
         self.catalog = LocalIcebergCatalog(
             catalog['identifier'],
-            **{
-                "uri": f"sqlite:///{catalog['warehouse_path']}/pyiceberg_catalog.db",  # Ensure .db file extension
-                "warehouse": f"file://{catalog['warehouse_path']}",
-            },
+            path=catalog['warehouse_path']
         )
 
         self.identifier = f"{catalog['identifier']}.{kwargs['name']}"
