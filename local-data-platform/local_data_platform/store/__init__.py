@@ -1,7 +1,7 @@
-from local_data_platform import Base
+from local_data_platform import Table
 
 
-class Catalog(Base):
+class Store(Table):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
