@@ -4,20 +4,14 @@ This library provides solutions for all stages ranging from ingestion to reporti
 
 ## Problem Statement
 
-| Question | Answer |
 
+| Question | Answer                                                                                            |
 |----------|---------------------------------------------------------------------------------------------------|
-
-| What? | a local data platform that can scale up to cloud |
-
-| Why? | save costs on cloud infra and developement time |
-
-| When? | start of product development life cycle |
-
-| Where? | local first |
-
-| Who? | Business who want a product data platform that will run locally and scale up when the time comes. |
-
+| What?    | a local data platform that can scale up to cloud                                                  |
+| Why?     | save costs on cloud infra and developement time                                                   |
+| When?    | start of product development life cycle                                                           |
+| Where?   | local first                                                                                       |
+| Who?     | Business who want a product data platform that will run locally and scale up when the time comes. |
 
 ## Components
 
@@ -83,17 +77,13 @@ Please refer given ingestion layer [python script](https://github.com/tusharchou
 
   
 
-| Milestone | Epic | Target Date | Delivery Date | Release Owner | Comment |
 
+| Milestone | Epic                 | Target Date | Delivery Date | Release Owner   | Comment      |
 |-----------|----------------------|-------------|---------------|-----------------|--------------|
-
-| 0.1.0 | HelloWorld | 1st Oct 24 | 1st Oct 24 | @tusharchou | Good Start |
-
-| 0.1.1 | Ingestion | 3rd Oct 24 | 9th Oct 24 | @tusharchou | First Sprint |
-
-| 0.1.2 | Warehousing | 18th Oct 24 | TBD | @tusharchou | Coming Soon |
-
-| 1.0.0 | Ready for Production | 1st Nov 24 | TBD | TBD | End Game |
+| 0.1.0     | HelloWorld           | 1st Oct 24  | 1st Oct 24    | @tusharchou     | Good Start   |
+| 0.1.1     | Ingestion            | 3rd Oct 24  | 9th Oct 24    | @tusharchou     | First Sprint | 
+| 0.1.2     | Warehousing          | 18th Oct 24 | TBD           | @tusharchou     | Coming Soon  |
+| 1.0.0     | Ready for Production | 1st Nov 24  | TBD           | TBD             | End Game     |
 
   
 
