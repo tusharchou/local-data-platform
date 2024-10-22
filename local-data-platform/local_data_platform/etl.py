@@ -14,7 +14,12 @@ def etl():
             format='JSON'
         ).get()
     )
-    print(f" config.metadata {config.metadata['source']}")
+    # print(f" config.metadata {config.metadata['source']}")
     etl = PyArrow(config)
-    df = etl.extract()
-    etl.load()
+    # df = etl.extract()
+    # etl.load()
+    local = etl.target.catalog
+    for db in local.get_dbs():
+        for table in local.get_tables(db):
+            print(local.get_table(table).scan(limit=1).to_arrow())
+            input()

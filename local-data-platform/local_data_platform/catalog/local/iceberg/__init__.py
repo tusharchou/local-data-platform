@@ -1,6 +1,7 @@
 from pyiceberg.catalog.sql import SqlCatalog
 from typing import List
 from pyiceberg.typedef import Identifier
+from pyiceberg.table import Table
 
 
 class LocalIcebergCatalog(SqlCatalog):
@@ -14,8 +15,9 @@ class LocalIcebergCatalog(SqlCatalog):
     def get_dbs(self) -> List[Identifier]:
         return self.list_namespaces()
 
-    def get_tables(self, namespace: Identifier):
+    def get_tables(self, namespace: Identifier) -> List[Identifier]:
         return self.list_tables(namespace=namespace)
 
-
+    def get_table(self, name: Identifier) -> Table:
+        return self.load_table(identifier=name)
 
