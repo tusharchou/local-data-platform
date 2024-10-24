@@ -22,6 +22,11 @@ class Iceberg(Format):
 
     def put(self, df: Table) -> Table:
         logger.info(f"self.identifier {self.identifier}")
+        logger.info(
+            f"""
+            Writing {len(df)} to Iceberg Table 
+            """
+        )
         table = self.catalog.create_table_if_not_exists(identifier=self.identifier, schema=df.schema)
         table.append(df)
         return table
