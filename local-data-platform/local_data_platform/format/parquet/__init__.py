@@ -28,6 +28,7 @@ class Parquet(Format):
         logger.info(
             f"""
             df type {type(df)}
+            df records {len(df)}
             """
         )
         if df is not None:
