@@ -19,16 +19,10 @@ from local_data_platform import Config, SupportedFormat
 from local_data_platform.store.source.json import Json
 from local_data_platform.exceptions import PipelineNotFound
 import os
-from logging import (
-    getLogger,
-    basicConfig,
-    INFO
-)
+from local_data_platform.logger import log
 
 
-basicConfig(level=INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-logger = getLogger('nyc_yellow_taxi')
+logger = log()
 
 
 def put_nyc_yellow_taxi_dataset(
