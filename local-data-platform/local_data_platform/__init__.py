@@ -1,12 +1,18 @@
 from abc import ABC
 from enum import Enum
 from dataclasses import dataclass, asdict
-from .exceptions import TableNotFound, PipelineNotFound
+from .exceptions import TableNotFound, PipelineNotFound, EngineNotFound
 
 class SupportedFormat(Enum):
     ICEBERG = 'ICEBERG'
     PARQUET = 'PARQUET'
     CSV = 'CSV'
+
+
+class SupportedEngine(Enum):
+    PYARROW = 'PYARROW'
+    PYSPARK = 'PYSPARK'
+    DUCKDB = 'DUCKDB'
 
 
 class Base(ABC):
@@ -50,6 +56,21 @@ class Flow(Base):
 
     def load(self):
         raise PipelineNotFound(f"Pipeline {self.name} cannot load data at {self.target.name}")
+
+
+class Worker(Base):
+
+    def __init__(
+            self,
+            name: str
+    ):
+        self.name = name
+
+    def get(self):
+        raise EngineNotFound(f"Worker {self.name} is not a supported engine")
+
+    def put(self):
+        raise EngineNotFound(f"Worker {self.name} is not a supported engine")
 
 
 
