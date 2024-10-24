@@ -1,12 +1,12 @@
 from abc import ABC
 from enum import Enum
 from dataclasses import dataclass, asdict
-from .exceptions import TableNotFound
+from .exceptions import TableNotFound, PipelineNotFound
 
 class SupportedFormat(Enum):
-    ICEBERG = 1
-    PARQUET = 2
-    CSV = 3
+    ICEBERG = 'ICEBERG'
+    PARQUET = 'PARQUET'
+    CSV = 'CSV'
 
 
 class Base(ABC):
@@ -25,12 +25,10 @@ class Table(Base):
     def __init__(
             self,
             name: str,
-            path: str,
-            format: SupportedFormat
+            path: str = None
     ):
         self.name = name
         self.path = path
-        self.format = format
 
     def get(self):
         raise TableNotFound(f"Table {self.name} of type {self.format} cannot be accessed at {self.path}")
@@ -38,32 +36,41 @@ class Table(Base):
     def put(self):
         raise TableNotFound(f"Table {self.name} of type {self.format} cannot be accessed at {self.path}")
 
+
+class Flow(Base):
+    name: str
+    source: Table
+    target: Table
+
+    def extract(self):
+        raise PipelineNotFound(f"Pipeline {self.name} cannot extract data from {self.source.name}")
+
+    def transform(self):
+        raise PipelineNotFound(f"Pipeline {self.name} cannot transform data from {self.source.name}")
+
+    def load(self):
+        raise PipelineNotFound(f"Pipeline {self.name} cannot load data at {self.target.name}")
+
+
+
 @dataclass
 class Config(Base):
-    __slots__ = ("identifier", "who", "metadata")
+    __slots__ = (
+        "identifier",
+        "who",
+        "metadata"
+    )
     identifier: str
     who: str
     what: str
     where: str
     when: str
     how: str
-    metadata: str
+    metadata: Flow
 
 
 
 
-class Flow(Base):
-    source: Table
-    target: Table
-
-    def extract(self):
-        pass
-
-    def transform(self):
-        pass
-
-    def load(self):
-        pass
 
 
 
