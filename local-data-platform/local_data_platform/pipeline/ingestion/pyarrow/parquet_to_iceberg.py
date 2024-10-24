@@ -1,10 +1,15 @@
-from local_data_platform.pipeline.ingestion import Ingestion
+from . import PyArrowLoader
 from pyarrow import parquet, Table
 from local_data_platform.format.parquet import Parquet
 from local_data_platform.format.iceberg import Iceberg
 from local_data_platform import Config
+from local_data_platform.logger import log
 
-class ParquetToIceberg(Ingestion):
+
+logger = log()
+
+
+class ParquetToIceberg(PyArrowLoader):
 
     def __init__(self, config: Config, *args, **kwargs):
         self.source = config.metadata['source']
@@ -17,10 +22,10 @@ class ParquetToIceberg(Ingestion):
             name=self.target['name'],
             catalog=self.target['catalog']
         )
-        self._extract()
-    def _extract(self) -> Table:
-        self.df = parquet.read_table(self.source.path)
-
-
-    def load(self):
-        self.target.put(self.df)
+        logger.info(
+            f"""
+            ParquetToIceberg initialised with
+            source {self.source}
+            target {self.target}
+            """
+        )
