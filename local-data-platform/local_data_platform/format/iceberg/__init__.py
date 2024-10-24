@@ -3,6 +3,10 @@ from local_data_platform.catalog.local.iceberg import LocalIcebergCatalog
 from pyiceberg.schema import Schema
 from pyiceberg.typedef import Identifier
 from pyarrow import Table
+from local_data_platform.logger import log
+
+logger = log()
+
 
 class Iceberg(Format):
 
@@ -17,8 +21,9 @@ class Iceberg(Format):
         super().__init__(*args, **kwargs)
 
     def put(self, df: Table) -> Table:
-        print(f"self.identifier {self.identifier}")
-        return self.catalog.create_table_if_not_exists(identifier=self.identifier, schema=df.schema)
+        logger.info(f"self.identifier {self.identifier}")
+        table = self.catalog.create_table_if_not_exists(identifier=self.identifier, schema=df.schema)
+        table.append(df)
 
     def get_10_rows(self, catalog, name):
         pass
