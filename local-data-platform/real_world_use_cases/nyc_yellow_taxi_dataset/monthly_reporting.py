@@ -14,7 +14,7 @@ Trip data will be published monthly (with two months delay) instead of bi-annual
 HVFHV files will now include 17 more columns (please see High Volume FHV Trips Dictionary for details).
 Additional columns will be added to the old files as well.
 '''
-from local_data_platform.pipeline.ingestion.pyarrow.parquet_to_iceberg import ParquetToIceberg
+from local_data_platform.pipeline.ingestion.parquet_to_iceberg import ParquetToIceberg
 from local_data_platform.pipeline.egression.iceberg_to_csv import IcebergToCSV
 from local_data_platform import Config, SupportedFormat
 from local_data_platform.store.source.json import Json
@@ -68,7 +68,7 @@ def get_nyc_yellow_taxi_dataset(
 
 def put_nyc_yellow_taxi_dataset(
         dataset='nyc_taxi',
-        config_path='/real_world_use_cases/nyc_yellow_taxi_dataset/config.json'
+        config_path='/real_world_use_cases/nyc_yellow_taxi_dataset/config/ingestion.json'
 ):
     logger.info(
         """
@@ -106,5 +106,5 @@ def put_nyc_yellow_taxi_dataset(
         )
 
 
-# put_nyc_yellow_taxi_dataset()
-get_nyc_yellow_taxi_dataset()
+put_nyc_yellow_taxi_dataset()
+# get_nyc_yellow_taxi_dataset()
