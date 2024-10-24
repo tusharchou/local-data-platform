@@ -24,6 +24,18 @@ class Iceberg(Format):
         logger.info(f"self.identifier {self.identifier}")
         table = self.catalog.create_table_if_not_exists(identifier=self.identifier, schema=df.schema)
         table.append(df)
+        return table
 
-    def get_10_rows(self, catalog, name):
-        pass
+    def get(self):
+        logger.info(
+            f"""
+            Fetching data from Iceberg Table
+            """
+        )
+        data = self.catalog.load_table(self.identifier).scan().to_arrow()
+        logger.info(
+            f"""
+            Returning {len(data)} records from Iceberg Table
+            """
+        )
+        return data
