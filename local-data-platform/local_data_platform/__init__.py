@@ -1,6 +1,7 @@
 from abc import ABC
 from enum import Enum
 from dataclasses import dataclass, asdict
+from .exceptions import TableNotFound
 
 class SupportedFormat(Enum):
     ICEBERG = 1
@@ -31,6 +32,11 @@ class Table(Base):
         self.path = path
         self.format = format
 
+    def get(self):
+        raise TableNotFound(f"Table {self.name} of type {self.format} cannot be accessed at {self.path}")
+
+    def put(self):
+        raise TableNotFound(f"Table {self.name} of type {self.format} cannot be accessed at {self.path}")
 
 @dataclass
 class Config(Base):
