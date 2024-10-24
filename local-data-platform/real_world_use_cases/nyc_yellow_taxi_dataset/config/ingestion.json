@@ -1,0 +1,27 @@
+
+{
+  "identifier": "nyc_taxi",
+  "who": "tourist",
+  "what": "trust",
+  "where": "NYC",
+  "when": "travel",
+  "how": "taxi",
+  "metadata": {
+    "dataset": "nyc_yellow_taxi_rides",
+    "source": {
+      "name": "rides",
+      "format": "PARQUET",
+      "path": "/Users/tushar/Documents/GitHub/local-data-platform/local-data-platform/yellow_tripdata_2023-01.parquet"
+    },
+    "target": {
+      "name": "rides",
+      "format": "ICEBERG",
+      "path": "yellow_tripdata_2023-01.parquet",
+      "catalog": {
+        "type": "LocalIceberg",
+        "identifier": "pyiceberg_catalog_db",
+        "warehouse_path": "./tmp/warehouse"
+      }
+    }
+  }
+}

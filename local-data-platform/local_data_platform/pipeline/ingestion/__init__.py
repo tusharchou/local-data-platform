@@ -8,4 +8,4 @@ class Ingestion(Pipeline):
         self.source.get()
 
     def load(self):
-        self.target.put(self.source.get())
+        self.target.put(self.extract())
