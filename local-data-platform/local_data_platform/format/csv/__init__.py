@@ -9,7 +9,7 @@ logger = log()
 
 class CSV(Format):
     """
-    A base class for Parquet File implementation
+    A base class for CSV File implementation
     """
 
     def __init__(self, *args, **kwargs):
