@@ -1,0 +1,12 @@
+iceberg_profile:
+  target: dev
+  outputs:
+    dev:
+      type: spark  # Use Spark as the query engine for Iceberg
+      method: thrift
+      host: localhost
+      port: 10000
+      database: iceberg_db  # Your Iceberg catalog database
+      schema: public
+      connect_timeout: 10
+      retries: 1
