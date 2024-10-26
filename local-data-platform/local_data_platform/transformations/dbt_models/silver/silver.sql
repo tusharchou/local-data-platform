@@ -1,4 +1,4 @@
--- gold/silver_to_gold.sql
+-- silver layer
 with silver_data as (
     select * from {{ ref('bronze_to_silver') }}
 )

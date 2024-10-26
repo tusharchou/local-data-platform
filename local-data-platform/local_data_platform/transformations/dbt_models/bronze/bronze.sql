@@ -1,4 +1,4 @@
--- silver/bronze_to_silver.sql
+-- bronze_layer
 with bronze_data as (
     select * from {{ source('bronze', 'airbnb_flat') }}
 )
