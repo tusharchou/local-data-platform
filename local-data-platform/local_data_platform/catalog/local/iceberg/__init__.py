@@ -2,14 +2,17 @@ from pyiceberg.catalog.sql import SqlCatalog
 from typing import List
 from pyiceberg.typedef import Identifier
 from sqlite3 import OperationalError
+from local_data_platform.logger import log
 
+logger = log()
 class LocalIcebergCatalog(SqlCatalog):
 
     def __init__(self, name: str, path: str, *args, **kwargs):
         self.name = name
-        self.uri = f"sqlite:///{path}/pyiceberg_catalog.db"  # Ensure .db file extension
+        self.uri = f"sqlite:///{path}/{name}.db"  # Ensure .db file extension
         self.warehouse = f"file://{path}"
         try: 
+            logger.error(f"Initializing LocalIcebergCatalog with {self.uri}")
             super().__init__(*args, **kwargs, **self.__dict__)
         except Exception as e:
             print(e)

@@ -1,4 +1,4 @@
-from local_data_platform.pipeline.ingestion.csv_to_iceberg import CsvToIceberg
+from local_data_platform.pipeline.egression.csv_to_iceberg import CsvToIceberg
 from local_data_platform.pipeline.ingestion.bigquery_to_csv import BigQueryToCsv
 from local_data_platform import Config, SupportedFormat, SupportedEngine
 from local_data_platform.store.source.json import Json
@@ -46,7 +46,7 @@ def get_near_trasaction_dataset(
 
 def put_near_trasaction_dataset(
         dataset='near_transactions',
-        config_path='/real_world_use_cases/near_data_lake/config/ingestion.json'
+        config_path='/real_world_use_cases/near_data_lake/config/egression.json'
 ):
     
     config = Config(
@@ -78,5 +78,5 @@ def put_near_trasaction_dataset(
         )  
 
 
-get_near_trasaction_dataset();
-#put_near_trasaction_dataset();    
+#get_near_trasaction_dataset();
+put_near_trasaction_dataset();    

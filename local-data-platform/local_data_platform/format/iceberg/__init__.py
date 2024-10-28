@@ -11,13 +11,14 @@ logger = log()
 class Iceberg(Format):
 
     def __init__(self, catalog: str, *args, **kwargs):
+        logger.info(f"Iceberg catalog : {catalog}")
         self.catalog = LocalIcebergCatalog(
             catalog['identifier'],
             path=catalog['warehouse_path']
         )
-
         self.identifier = f"{catalog['identifier']}.{kwargs['name']}"
         self.metadata = kwargs
+        logger.info(f"Iceberg initialised with {self.identifier}")
         super().__init__(*args, **kwargs)
 
     def put(self, df: Table) -> Table:

@@ -13,6 +13,12 @@ class CsvToIceberg(Ingestion):
                 name=self.source['name'],
                 path=self.source['path']
             )
+            logger.info(
+                f"""
+                CsvToIceberg initialised with
+                source {self.source}
+                """
+            )
             self.target = Iceberg(
                 name=self.target['name'],
                 catalog=self.target['catalog']

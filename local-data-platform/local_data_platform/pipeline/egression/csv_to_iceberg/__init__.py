@@ -20,12 +20,12 @@ class CsvToIceberg(Egression):
         self.source = config.metadata['source']
         self.target = config.metadata['target']
         self.source = CSV(
-            name=self.target['name'],
-            path=self.target['path']
+            name=self.source['name'],
+            path=self.source['path']
         )
         self.target = Iceberg(
-            name=self.source['name'],
-            catalog=self.source['catalog']
+            name=self.target['name'],
+            catalog=self.target['catalog']
         )
         logger.info(
             f"""
