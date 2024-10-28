@@ -1,5 +1,7 @@
 from abc import ABC
 from enum import Enum
+from pathlib import Path
+import os
 from dataclasses import dataclass, asdict
 from .exceptions import TableNotFound, PipelineNotFound, EngineNotFound
 
@@ -31,7 +33,7 @@ class Table(Base):
     def __init__(
             self,
             name: str,
-            path: str = None
+            path: Path = os.getcwd()
     ):
         self.name = name
         self.path = path

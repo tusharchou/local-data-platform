@@ -1,0 +1,27 @@
+
+{
+  "identifier": "near_transactions",
+  "who": "investor",
+  "what": "gain",
+  "where": "near",
+  "when": "trade",
+  "how": "gcp",
+  "metadata": {
+    "dataset": "near_transactions",
+    "source": {
+      "name": "transactions",
+      "format": "CSV",
+      "path": "./local-data-platform/real_world_use_cases/near_data_lake/near_transactions.csv"
+    },
+    "target": {
+      "name": "near_transactions",
+      "format": "ICEBERG",
+      "path": "./local-data-platform/real_world_use_cases/near_data_lake/local_db/",
+      "catalog": {
+        "type": "LocalIceberg",
+        "identifier": "near_data_lake",
+        "warehouse_path": "./local-data-platform/real_world_use_cases/near_data_lake/local_db/"
+      }
+    }
+  }
+}
