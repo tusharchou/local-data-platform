@@ -6,7 +6,7 @@ import os
 """
 creadentials.json is the path to the credentials file that you downloaded from GCP.
 """  
-local_gcp_credential_path =   Path(os.getcwd()+'/local-data-platform/samples/near-protocol-public-dataset-0467b3684beb.json')
+local_gcp_credential_path =   Path(os.getcwd()+'/local-data-platform/samples/credentials.json')
 store = BigQuery(credential_path=local_gcp_credential_path)
 
 df = store.query(NEAR_TRANSACTION_QUERY.query)
