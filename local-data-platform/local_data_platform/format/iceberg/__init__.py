@@ -12,12 +12,15 @@ class Iceberg(Format):
 
     def __init__(self, catalog: str, *args, **kwargs):
         logger.info(f"Iceberg catalog : {catalog}")
+        self.catalog_identifier = catalog['identifier']
         self.catalog = LocalIcebergCatalog(
-            catalog['identifier'],
+            self.catalog_identifier,
             path=catalog['warehouse_path']
         )
-        self.identifier = f"{catalog['identifier']}.{kwargs['name']}"
+        self.catalog.create_namespace(self.catalog_identifier)
+        self.identifier = f"{self.catalog_identifier}.{kwargs['name']}"
         self.metadata = kwargs
+        logger.info(f"Iceberg created namespace with {self.catalog_identifier}")
         logger.info(f"Iceberg initialised with {self.identifier}")
         super().__init__(*args, **kwargs)
 

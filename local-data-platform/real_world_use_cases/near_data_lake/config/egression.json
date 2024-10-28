@@ -14,7 +14,7 @@
       "catalog": {
         "type": "LocalIceberg",
         "identifier": "near_transactions",
-        "warehouse_path": "/real_world_use_cases/near_data_lake/data"
+        "warehouse_path": "real_world_use_cases/near_data_lake/data"
       }
     },
     "source": {

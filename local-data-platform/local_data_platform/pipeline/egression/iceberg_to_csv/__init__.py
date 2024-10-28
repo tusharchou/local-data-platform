@@ -9,27 +9,27 @@ from local_data_platform.logger import log
 logger = log()
 
 
-class CsvToIceberg(Egression):
+class IcebergToCSV(Egression):
 
     def __init__(self, config: Config, *args, **kwargs):
         logger.info(
             f"""
-            Initialising CsvToIceberg with config {config}
+            Initialising IcebergToCSV with config {config}
             """
         )
         self.source = config.metadata['source']
         self.target = config.metadata['target']
-        self.source = CSV(
+        self.target = CSV(
             name=self.target['name'],
             path=self.target['path']
         )
-        self.target = Iceberg(
+        self.source = Iceberg(
             name=self.source['name'],
             catalog=self.source['catalog']
         )
         logger.info(
             f"""
-            CsvToIceberg initialised with
+            IcebergToCSV initialised with
             source {self.source}
             target {self.target}
             """

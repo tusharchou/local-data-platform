@@ -15,7 +15,7 @@ class LocalIcebergCatalog(SqlCatalog):
             logger.error(f"Initializing LocalIcebergCatalog with {self.uri}")
             super().__init__(*args, **kwargs, **self.__dict__)
         except Exception as e:
-            print(e)
+            logger.error(f"Failed to initialize LocalIcebergCatalog {e}")
             raise Exception(f"Failed to initialize LocalIcebergCatalog {e}") 
         
     def get_dbs(self) -> List[Identifier]:
