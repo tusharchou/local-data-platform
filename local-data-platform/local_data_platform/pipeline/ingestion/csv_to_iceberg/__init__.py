@@ -1,12 +1,12 @@
 from local_data_platform.pipeline.ingestion import Ingestion
 from local_data_platform.format.csv import CSV
 from local_data_platform.format.iceberg import Iceberg
+from local_data_platform.logger import log
 
 logger = log()
 
 class CsvToIceberg(Ingestion):
         def __init__(self, config, *args, **kwargs):
-            super().__init__(config, *args, **kwargs)
             self.source = config.metadata['source']
             self.target = config.metadata['target']
             self.source = CSV(
@@ -24,3 +24,4 @@ class CsvToIceberg(Ingestion):
                 target {self.target}
                 """
             )
+            super().__init__(config, *args, **kwargs)

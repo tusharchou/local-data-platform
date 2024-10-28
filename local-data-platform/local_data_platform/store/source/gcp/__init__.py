@@ -1,12 +1,31 @@
 from  local_data_platform.store.source import Source
 from pathlib import Path    
 import json
+from local_data_platform import Credentials
 
 
-@dataclass
-class GCPCredentials(Path):
-    path : str
-    project_id : str
+
+class GCPCredentials(Credentials):
+    def __init__(self,path,kwargs):
+        """
+        todo: 
+            path,
+            type, 
+            project_id, 
+            private_key_id, 
+            private_key, 
+            client_email, 
+            client_id, 
+            auth_uri, 
+            token_uri, 
+            auth_provider_x509_cert_url, 
+            client_x509_cert_url, 
+            universe_domain
+        """
+        
+        self.path = path
+        self.project_id = kwargs.get('project_id')
+        super().__init__(path = self.path,project_id = self.project_id)
     
     def get_project_id(self):
         with open(self.path, 'r') as file:
@@ -17,7 +36,7 @@ class GCP(Source):
     """
     A base class for Source Store implementation
     """
-    def __init__(self, name: str,path: GCPCredentials):
+    def __init__(self, name: str,path: Path):
         self.name = name 
         self.path = path
         super().__init__(self.name,self.path)

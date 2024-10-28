@@ -9,19 +9,19 @@
   "metadata": {
     "dataset": "near_transactions",
     "source": {
-      "name": "transactions",
-      "format": "CSV",
-      "path": "./local-data-platform/real_world_use_cases/near_data_lake/near_transactions.csv"
+      "name": "transaction_query",
+      "format": "JSON",
+      "path": "/real_world_use_cases/near_data_lake/config/sample_queries/near_transaction.json",
+      "engine":  "BIGQUERY",
+      "credentials": {
+        "name":"GCP",
+        "path": "/../samples/creadentials.json"
+      }
     },
     "target": {
       "name": "near_transactions",
-      "format": "ICEBERG",
-      "path": "./local-data-platform/real_world_use_cases/near_data_lake/local_db/",
-      "catalog": {
-        "type": "LocalIceberg",
-        "identifier": "near_data_lake",
-        "warehouse_path": "./local-data-platform/real_world_use_cases/near_data_lake/local_db/"
-      }
+      "format": "CSV",
+      "path": "/real_world_use_cases/near_data_lake/near_transactions.csv"
     }
   }
 }

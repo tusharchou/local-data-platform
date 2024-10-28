@@ -1,7 +1,7 @@
 from pyiceberg.catalog.sql import SqlCatalog
 from typing import List
 from pyiceberg.typedef import Identifier
-
+from sqlite3 import OperationalError
 
 class LocalIcebergCatalog(SqlCatalog):
 
@@ -9,8 +9,12 @@ class LocalIcebergCatalog(SqlCatalog):
         self.name = name
         self.uri = f"sqlite:///{path}/pyiceberg_catalog.db"  # Ensure .db file extension
         self.warehouse = f"file://{path}"
-        super().__init__(*args, **kwargs, **self.__dict__)
-
+        try: 
+            super().__init__(*args, **kwargs, **self.__dict__)
+        except Exception as e:
+            print(e)
+            raise Exception(f"Failed to initialize LocalIcebergCatalog {e}") 
+        
     def get_dbs(self) -> List[Identifier]:
         return self.list_namespaces()
 

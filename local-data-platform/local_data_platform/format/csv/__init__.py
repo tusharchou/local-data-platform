@@ -41,5 +41,7 @@ class CSV(Format):
             Writing data from PyArrow Table of size {len(df)} records
             """
         )
+        logger.info(self.path)
+        logger.info(type(df))
         with open(self.path, 'wb') as f:
             csv.write_csv(df, f)

@@ -4,17 +4,22 @@ from pathlib import Path
 import os
 from dataclasses import dataclass, asdict
 from .exceptions import TableNotFound, PipelineNotFound, EngineNotFound
+from collections import namedtuple
+
+Transaction = namedtuple('Transaction', ['query', 'desc'])
 
 class SupportedFormat(Enum):
     ICEBERG = 'ICEBERG'
     PARQUET = 'PARQUET'
     CSV = 'CSV'
+    JSON = 'JSON'
 
 
 class SupportedEngine(Enum):
     PYARROW = 'PYARROW'
     PYSPARK = 'PYSPARK'
     DUCKDB = 'DUCKDB'
+    BIGQUERY = 'BIGQUERY'
 
 
 class Base(ABC):
@@ -74,8 +79,6 @@ class Worker(Base):
     def put(self):
         raise EngineNotFound(f"Worker {self.name} is not a supported engine")
 
-
-
 @dataclass
 class Config(Base):
     __slots__ = (
@@ -91,7 +94,14 @@ class Config(Base):
     how: str
     metadata: Flow
 
-
+@dataclass
+class Credentials(Base):
+    __slots__ = (
+        "path",
+        "project_id"
+    )
+    path: Path
+    project_id: str
 
 
 
