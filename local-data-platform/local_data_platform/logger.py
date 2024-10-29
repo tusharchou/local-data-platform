@@ -8,10 +8,7 @@ from logging import (
 def log():
     basicConfig(level=INFO, format=
                 """
-                %(filename)s - %(funcName)s 
-                - %(asctime)s - %(name)s 
-                - %(levelname)s 
-                - message : %(message)s
+                 %(message)s
                 """
             )
 
