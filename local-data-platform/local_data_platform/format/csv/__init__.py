@@ -41,5 +41,9 @@ class CSV(Format):
             Writing data from PyArrow Table of size {len(df)} records
             """
         )
-        with open(self.path, 'wb') as f:
-            csv.write_csv(df, f)
+        if df is not None or len(df) > 0:
+            with open(self.path, "wb") as f:
+                csv.write_csv(df, f)
+        else:
+            logger.error("No data to write to CSV as the data is empty")
+            raise ValueError("No data to write")

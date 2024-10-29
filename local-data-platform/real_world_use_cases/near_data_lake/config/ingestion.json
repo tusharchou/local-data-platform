@@ -1,0 +1,27 @@
+
+{
+  "identifier": "near_transactions",
+  "who": "investor",
+  "what": "gain",
+  "where": "near",
+  "when": "trade",
+  "how": "gcp",
+  "metadata": {
+    "dataset": "near_transactions",
+    "source": {
+      "name": "transaction_query",
+      "format": "JSON",
+      "path": "/real_world_use_cases/near_data_lake/config/sample_queries/near_transaction.json",
+      "engine":  "BIGQUERY",
+      "credentials": {
+        "name":"GCP",
+        "path": "/../samples/creadentials.json"
+      }
+    },
+    "target": {
+      "name": "near_transactions",
+      "format": "CSV",
+      "path": "/real_world_use_cases/near_data_lake/near_transactions.csv"
+    }
+  }
+}
