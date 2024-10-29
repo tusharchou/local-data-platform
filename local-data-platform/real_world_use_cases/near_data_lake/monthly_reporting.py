@@ -14,6 +14,19 @@ def get_near_trasaction_dataset(
     dataset="near_transactions",
     config_path="/real_world_use_cases/near_data_lake/config/ingestion.json",
 ):
+    """
+    Retrieves and processes the near transaction dataset based on the provided configuration.
+
+    Args:
+        dataset (str): The name of the dataset to be processed. Defaults to "near_transactions".
+        config_path (str): The path to the configuration file. Defaults to "/real_world_use_cases/near_data_lake/config/ingestion.json".
+
+    Raises:
+        PipelineNotFound: If the source and target formats specified in the configuration are not supported.
+
+    Returns:
+        None
+    """
 
     config = Config(
         **Json(
@@ -49,7 +62,20 @@ def put_near_trasaction_dataset(
     dataset="near_transactions",
     config_path="/real_world_use_cases/near_data_lake/config/egression.json",
 ):
+    """
+    Loads and processes a dataset based on the provided configuration.
 
+    This function reads a configuration file and uses it to load and process
+    a dataset. It currently supports loading data from CSV format and converting
+    it to Iceberg format.
+
+    Args:
+        dataset (str): The name of the dataset to be processed. Defaults to "near_transactions".
+        config_path (str): The path to the configuration file. Defaults to "/real_world_use_cases/near_data_lake/config/egression.json".
+
+    Raises:
+        PipelineNotFound: If the source and target formats specified in the configuration are not supported.
+    """        
     config = Config(
         **Json(
             name=dataset,
