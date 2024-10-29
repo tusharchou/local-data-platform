@@ -17,6 +17,7 @@ class CSV(Format):
 
     def get(self) -> Table:
         if not os.path.isfile(self.path):
+            logger.error(f"This path {self.path} is invalid")
             raise FileNotFoundError
 
         logger.info(
@@ -24,10 +25,10 @@ class CSV(Format):
             reading CSV from {self.path}
             """
         )
-        df = csv.read_table(self.path)
+        df = csv.read_csv(self.path)
         logger.info(
             f"""
-            df type {type(df)}
+            df type {type(df)} len {len(df)}
             """
         )
         if df is not None:
