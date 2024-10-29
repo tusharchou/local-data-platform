@@ -1,4 +1,4 @@
-from local_data_platform.pipeline.egression.csv_to_iceberg import CSVToIceberg
+from local_data_platform.pipeline.ingestion.csv_to_iceberg import CSVToIceberg
 from local_data_platform.pipeline.ingestion.bigquery_to_csv import BigQueryToCSV
 from local_data_platform import Config, SupportedFormat, SupportedEngine
 from local_data_platform.store.source.json import Json
@@ -79,7 +79,7 @@ def put_near_trasaction_dataset(
     config = Config(
         **Json(
             name=dataset,
-            path=os.getcwd() + config_path,
+            path=config_path,
         ).get()
     )
 

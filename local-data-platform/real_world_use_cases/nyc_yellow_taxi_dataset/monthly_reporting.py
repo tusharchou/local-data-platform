@@ -39,7 +39,7 @@ def get_nyc_yellow_taxi_dataset(
     config = Config(
         **Json(
             name=dataset,
-            path=os.getcwd()+config_path,
+            path=config_path,
         ).get()
     )
 
@@ -80,7 +80,7 @@ def put_nyc_yellow_taxi_dataset(
     config = Config(
         **Json(
             name=dataset,
-            path=os.getcwd()+config_path,
+            path=config_path,
         ).get()
     )
 
@@ -107,4 +107,4 @@ def put_nyc_yellow_taxi_dataset(
 
 
 put_nyc_yellow_taxi_dataset()
-# get_nyc_yellow_taxi_dataset()
+get_nyc_yellow_taxi_dataset()
