@@ -5,7 +5,7 @@ from local_data_platform.logger import log
 
 logger = log()
 
-class CsvToIceberg(Ingestion):
+class CSVToIceberg(Ingestion):
         def __init__(self, config, *args, **kwargs):
             self.source = config.metadata['source']
             self.target = config.metadata['target']
@@ -15,7 +15,7 @@ class CsvToIceberg(Ingestion):
             )
             logger.info(
                 f"""
-                CsvToIceberg initialised with
+                CSVToIceberg initialised with
                 source {self.source}
                 """
             )
@@ -25,7 +25,7 @@ class CsvToIceberg(Ingestion):
             )
             logger.info(
                 f"""
-                CsvToIceberg initialised with
+                CSVToIceberg initialised with
                 source {self.source}
                 target {self.target}
                 """

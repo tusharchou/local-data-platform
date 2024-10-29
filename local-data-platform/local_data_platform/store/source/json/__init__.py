@@ -1,8 +1,10 @@
 import json
 from local_data_platform.store.source import Source
-from local_data_platform.logger import log  
+from local_data_platform.logger import log
 
 logger = log()
+
+
 class Json(Source):
 
     def __init__(self, *args, **kwargs):
@@ -11,5 +13,5 @@ class Json(Source):
 
     def get(self):
         logger.info(f"Reading Json with path {self.path}")
-        with open(self.path, 'r') as file:
+        with open(self.path, "r") as file:
             return json.load(file)

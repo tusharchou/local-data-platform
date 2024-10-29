@@ -22,6 +22,7 @@ class BigQuery(GCP):
         self.project_id = self.credentials.project_id
         self.path = path
         self.client = self._get_bigquery_client()
+        logger.info(f"BigQuery initialised with {self.path}")
         super().__init__(self.name, self.path)
 
     def get(self, query: str) -> Table:
@@ -37,8 +38,7 @@ class BigQuery(GCP):
             logger.error(e)
             raise e
         logger.info(f"Data from BigQuery {self.name} fetched successfully")
-        logger.info(f"Data: {len(df)}")
-        logger.info(f"type: {type(df)}")    
+        logger.info(f"Data: {len(df)} type: {type(df)}")
         return Table.from_pandas(df)
 
     def _get_bigquery_client(self) -> bigquery.Client:

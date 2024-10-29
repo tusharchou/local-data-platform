@@ -17,16 +17,10 @@ class IcebergToCSV(Egression):
             Initialising IcebergToCSV with config {config}
             """
         )
-        self.source = config.metadata['source']
-        self.target = config.metadata['target']
-        self.target = CSV(
-            name=self.target['name'],
-            path=self.target['path']
-        )
-        self.source = Iceberg(
-            name=self.source['name'],
-            catalog=self.source['catalog']
-        )
+        self.source = config.metadata["source"]
+        self.target = config.metadata["target"]
+        self.target = CSV(name=self.target["name"], path=self.target["path"])
+        self.source = Iceberg(name=self.source["name"], catalog=self.source["catalog"])
         logger.info(
             f"""
             IcebergToCSV initialised with
