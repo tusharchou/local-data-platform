@@ -9,7 +9,25 @@ logger = log()
 
 
 class Iceberg(Format):
+    """
+    Iceberg class for handling data operations with Iceberg tables.
 
+    Attributes:
+        catalog_identifier (str): Identifier for the Iceberg catalog.
+        catalog (LocalIcebergCatalog): Instance of LocalIcebergCatalog for managing Iceberg tables.
+        identifier (str): Unique identifier for the Iceberg table.
+        metadata (dict): Metadata associated with the Iceberg table.
+
+    Methods:
+        __init__(catalog: str, *args, **kwargs):
+            Initializes the Iceberg instance with the given catalog and metadata.
+            
+        put(df: Table) -> Table:
+            Writes the given data frame to the Iceberg table.
+            
+        get():
+            Fetches data from the Iceberg table and returns it as an Arrow table.
+    """
     def __init__(self, catalog: str, *args, **kwargs):
         logger.info(f"Iceberg catalog : {catalog}")
         self.catalog_identifier = catalog["identifier"]

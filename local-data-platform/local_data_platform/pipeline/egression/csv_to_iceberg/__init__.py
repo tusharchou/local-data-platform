@@ -10,7 +10,18 @@ logger = log()
 
 
 class CSVToIceberg(Egression):
+    """
+    CSVToIceberg is a class that handles the transformation of CSV data to Iceberg format.
 
+    Attributes:
+        source (CSV): The source CSV configuration.
+        target (Iceberg): The target Iceberg configuration.
+
+    Methods:
+        __init__(config: Config, *args, **kwargs):
+            Initializes the CSVToIceberg instance with the provided configuration.
+            Logs the initialization process and sets up the source and target attributes.
+    """
     def __init__(self, config: Config, *args, **kwargs):
         logger.info(
             f"""

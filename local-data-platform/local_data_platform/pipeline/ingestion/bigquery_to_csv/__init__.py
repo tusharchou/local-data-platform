@@ -10,7 +10,24 @@ logger = log()
 
 
 class BigQueryToCSV(Ingestion):
+    """
+    BigQueryToCSV is a class responsible for extracting data from Google BigQuery and saving it as a CSV file.
 
+    Attributes:
+        source_config (dict): Configuration details for the data source.
+        target_config (dict): Configuration details for the data target.
+        credentials_path (Path): Path to the credentials file for Google Cloud Platform.
+        credentials (GCPCredentials): Credentials object for accessing Google Cloud Platform.
+        source (BigQuery): BigQuery object for interacting with Google BigQuery.
+        target_path (Path): Path where the CSV file will be saved.
+        target (CSV): CSV object for handling CSV file operations.
+        source_config_path (Path): Path to the source configuration file.
+        query (str): SQL query to be executed on the BigQuery source.
+
+    Methods:
+        __init__(config, *args, **kwargs): Initializes the BigQueryToCSV object with the provided configuration.
+        extract(): Executes the query on the BigQuery source and returns the result.
+    """
     def __init__(self, config, *args, **kwargs):
         self.source_config = config.metadata["source"]
         print("source_config", self.source_config)
