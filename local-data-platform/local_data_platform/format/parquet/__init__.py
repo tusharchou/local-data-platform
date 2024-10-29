@@ -16,14 +16,14 @@ class Parquet(Format):
         super().__init__(*args, **kwargs)
 
     def get(self) -> Table:
-        if not os.path.isfile(self.path):
-            raise FileNotFoundError
-
         logger.info(
             f"""
             reading parquet from {self.path}
             """
         )
+        if not os.path.isfile(self.path):
+            raise FileNotFoundError
+
         df = parquet.read_table(self.path)
         logger.info(
             f"""

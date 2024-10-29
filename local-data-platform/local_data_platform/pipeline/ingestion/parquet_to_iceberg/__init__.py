@@ -34,7 +34,7 @@ class ParquetToIceberg(Egression):
         )
         self.target = Iceberg(
             name=self.target['name'],
-            catalog=self.target['catalog']
+            config=self.target['catalog']
         )
         logger.info(
             f"""
