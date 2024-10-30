@@ -32,7 +32,7 @@ jobs:
           cd local-data-platform
           poetry build
       - name: Create dist directory
-        run: mkdir -p /.github/workspace/dist
+        run: mkdir -p $GITHUB_WORKSPACE/.github/workspace/dist
       - name: Copy distribution files to root
         run: |
           cp local-data-platform/dist/* /.github/workspace/dist
