@@ -2,7 +2,7 @@ from local_data_platform.store.source import Source
 from pathlib import Path
 import json
 from local_data_platform import Credentials
-from local_data_platform import logger
+from local_data_platform.logger import log
 
 logger = log()
 

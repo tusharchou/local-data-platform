@@ -5,6 +5,7 @@ from local_data_platform.logger import log
 
 logger = log()
 
+
 class CSVToIceberg(Ingestion):
         """
         CSVToIceberg is a class responsible for ingesting data from a CSV source and 
@@ -39,7 +40,7 @@ class CSVToIceberg(Ingestion):
             )
             self.target = Iceberg(
                 name=self.target['name'],
-                catalog=self.target['catalog']
+                config=self.target['catalog']
             )
             logger.info(
                 f"""

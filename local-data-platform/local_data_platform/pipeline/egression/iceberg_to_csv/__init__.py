@@ -36,7 +36,7 @@ class IcebergToCSV(Egression):
         self.source = config.metadata["source"]
         self.target = config.metadata["target"]
         self.target = CSV(name=self.target["name"], path=self.target["path"])
-        self.source = Iceberg(name=self.source["name"], catalog=self.source["catalog"])
+        self.source = Iceberg(name=self.source["name"], config=self.source["catalog"])
         logger.info(
             f"""
             IcebergToCSV initialised with
