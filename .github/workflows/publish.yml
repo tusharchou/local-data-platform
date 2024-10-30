@@ -34,8 +34,7 @@ jobs:
       - name: Create dist directory
         run: mkdir -p $GITHUB_WORKSPACE/.github/workspace/dist
       - name: Copy distribution files to root
-        run: |
-          cp local-data-platform/dist/* /.github/workspace/dist
+        run: cp local-data-platform/dist/* $GITHUB_WORKSPACE/.github/workspace/dist
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
       - name: pypi-publish
