@@ -28,6 +28,7 @@ jobs:
           poetry install
       - name: Build package
         run: |
+          pwd
           cd local-data-platform
           poetry build
       - name: Publish package distributions to PyPI
