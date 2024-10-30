@@ -28,7 +28,9 @@ jobs:
           poetry install
       - name: Build package
         run: |
-          poetry publish
+          pwd
+          cd local-data-platform
+          poetry build
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
       - name: pypi-publish
