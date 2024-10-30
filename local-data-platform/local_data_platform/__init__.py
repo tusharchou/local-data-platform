@@ -1,16 +1,32 @@
 from abc import ABC
 from enum import Enum
+from pathlib import Path
+import os
 from dataclasses import dataclass, asdict
+from .exceptions import TableNotFound, PipelineNotFound, EngineNotFound
+from collections import namedtuple
+
+Transaction = namedtuple("Transaction", ["query", "desc"])
+
 
 class SupportedFormat(Enum):
-    ICEBERG = 1
-    PARQUET = 2
-    CSV = 3
+    ICEBERG = "ICEBERG"
+    PARQUET = "PARQUET"
+    CSV = "CSV"
+    JSON = "JSON"
+
+
+class SupportedEngine(Enum):
+    PYARROW = "PYARROW"
+    PYSPARK = "PYSPARK"
+    DUCKDB = "DUCKDB"
+    BIGQUERY = "BIGQUERY"
 
 
 class Base(ABC):
 
-    def __init__(self, *args, **kwargs): pass
+    def __init__(self, *args, **kwargs):
+        pass
 
     def get(self):
         pass
@@ -21,15 +37,52 @@ class Base(ABC):
 
 class Table(Base):
 
-    def __init__(
-            self,
-            name: str,
-            path: str,
-            format: SupportedFormat
-    ):
+    def __init__(self, name: str, path: Path = os.getcwd()):
         self.name = name
-        self.path = path
-        self.format = format
+        self.path = os.getcwd()+path
+
+    def get(self):
+        raise TableNotFound(
+            f"Table {self.name} of type {self.format} cannot be accessed at {self.path}"
+        )
+
+    def put(self):
+        raise TableNotFound(
+            f"Table {self.name} of type {self.format} cannot be accessed at {self.path}"
+        )
+
+
+class Flow(Base):
+    name: str
+    source: Table
+    target: Table
+
+    def extract(self):
+        raise PipelineNotFound(
+            f"Pipeline {self.name} cannot extract data from {self.source.name}"
+        )
+
+    def transform(self):
+        raise PipelineNotFound(
+            f"Pipeline {self.name} cannot transform data from {self.source.name}"
+        )
+
+    def load(self):
+        raise PipelineNotFound(
+            f"Pipeline {self.name} cannot load data at {self.target.name}"
+        )
+
+
+class Worker(Base):
+
+    def __init__(self, name: str):
+        self.name = name
+
+    def get(self):
+        raise EngineNotFound(f"Worker {self.name} is not a supported engine")
+
+    def put(self):
+        raise EngineNotFound(f"Worker {self.name} is not a supported engine")
 
 
 @dataclass
@@ -41,23 +94,11 @@ class Config(Base):
     where: str
     when: str
     how: str
-    metadata: str
+    metadata: Flow
 
 
-
-
-class Flow(Base):
-    source: Table
-    target: Table
-
-    def extract(self):
-        pass
-
-    def transform(self):
-        pass
-
-    def load(self):
-        pass
-
-
-
+@dataclass
+class Credentials(Base):
+    __slots__ = ("path", "project_id")
+    path: Path
+    project_id: str

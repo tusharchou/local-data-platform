@@ -8,19 +8,18 @@
   "how": "taxi",
   "metadata": {
     "dataset": "nyc_yellow_taxi_rides",
-    "source": {
-      "name": "rides",
-      "format": "PARQUET",
-      "path": "yellow_tripdata_2023-01.parquet"
-    },
     "target": {
       "name": "rides",
+      "format": "CSV",
+      "path": "/real_world_use_cases/nyc_yellow_taxi_dataset/data/nyc_yellow_taxi_rides.csv"
+    },
+    "source": {
+      "name": "rides",
       "format": "ICEBERG",
-      "path": "yellow_tripdata_2023-01.parquet",
       "catalog": {
         "type": "LocalIceberg",
-        "identifier": "pyiceberg_catalog_db",
-        "warehouse_path": "./tmp/warehouse"
+        "identifier": "nyc_yellow_taxi_dataset",
+        "warehouse_path": "real_world_use_cases/nyc_yellow_taxi_dataset/data"
       }
     }
   }

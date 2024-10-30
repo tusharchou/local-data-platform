@@ -1,0 +1,4 @@
+{   
+    "query":"SELECT * FROM `bigquery-public-data.crypto_near_mainnet_us.transactions` WHERE block_date = '2024-09-30' LIMIT 5",
+    "desc":"Get the first 5 transactions from the Near Protocol Mainnet for the date 2024-09-30"
+}
