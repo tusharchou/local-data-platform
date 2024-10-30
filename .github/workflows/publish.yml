@@ -31,6 +31,9 @@ jobs:
           pwd
           cd local-data-platform
           poetry build
+      - name: Copy distribution files to root
+        run: |
+          cp local-data-platform/dist/* ./
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
       - name: pypi-publish
