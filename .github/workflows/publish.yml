@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/<PYPI_PACKAGE_NAME>
+      url: https://pypi.org/p/local-data-platform
     permissions:
       id-token: write
     steps:
@@ -28,6 +28,6 @@ jobs:
           python setup.py sdist bdist_wheel  # Could also be python -m build
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        - name: pypi-publish
-                uses: pypa/gh-action-pypi-publish@v1.10.3
+      - name: pypi-publish
+        uses: pypa/gh-action-pypi-publish@v1.11.0
             
