@@ -33,8 +33,7 @@ jobs:
           poetry build
       - name: Copy distribution files to root
         run: |
-          mkdir ./github/workspace/dist
-          cp local-data-platform/dist/* ./github/workspace/dist
+          cp local-data-platform/dist/* /.github/workspace/dist
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
       - name: pypi-publish
