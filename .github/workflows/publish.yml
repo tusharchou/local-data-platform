@@ -10,7 +10,7 @@ jobs:
     name: Publish release to PyPI
     runs-on: ubuntu-latest
     environment:
-      name: pypi
+      name: production
       url: https://pypi.org/p/local-data-platform
     permissions:
       id-token: write
