@@ -44,11 +44,8 @@ jobs:
             name: python-package-distributions
             path: local-data-platform/dist
 
-      - name: Download all the dists
-        uses: actions/download-artifact@v1.11.0
-        with:
-          name: python-package-distributions
-          path: local-data-platform/dist/
-
       - name: Publish package to PyPI
         uses: pypa/gh-action-pypi-publish@v1.11.0
+        with: 
+          path: local-data-platform/
+          
