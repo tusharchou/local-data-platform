@@ -38,5 +38,5 @@ jobs:
       - name: Publish package to PyPI
         uses: pypa/gh-action-pypi-publish@v1.11.0
         with: 
-          path: local-data-platform/
+          packages-dir: local-data-platform/dist/
           
