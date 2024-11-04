@@ -1,3 +1,44 @@
+
+It uses below tools:
+1. Ingestion using [Apache Arrow](https://arrow.apache.org/) in [Parquet](https://parquet.apache.org/) file format.
+2. Data Catalog using [Iceberg](https://iceberg.apache.org/)
+3. [DuckDB](https://duckdb.org/) as Datawarehouse
+4. [DBT](https://www.getdbt.com/) for transformation operations.
+5. [Apache Airflow](https://airflow.apache.org/) for orchestration
+
+
+### Milestones
+
+- [x] 0.1.1 : Done- [Documentation: Updated README to explain clearly problem and plan of excecution](https://github.com/tusharchou/local-data-platform/issues/6)
+
+  - [x] 0.1.1.A : Done- [Feature: Simply query NEAR Coin GCP Data Lake through BiqQuery](https://github.com/tusharchou/local-data-platform/pull/25)
+
+  - [x] 0.1.1.B : Done- [Feature: Privately store NYC Yellow Taxi Rides Data in Local Data Platform](https://github.com/tusharchou/local-data-platform/pull/26)
+
+  - [ ] 0.1.1.C : In Progress- [Change: Easily solve for User's Local Data Need](https://github.com/tusharchou/local-data-platform/pull/28)
+
+  - [ ] 0.1.1.D : In Progress- [Documentation: Align on Product Framework](https://github.com/tusharchou/local-data-platform/issues/29)
+
+  - [x] 0.1.1.E : Done- [Request: Source Parquet Table](https://github.com/tusharchou/local-data-platform/issues/24)
+
+  - [x] 0.1.1.F : Done- [Request: Source Iceberg Table](https://github.com/tusharchou/local-data-platform/issues/21)
+
+  - [x] 0.1.1.G : Done- [Request: Target Iceberg Table](https://github.com/tusharchou/local-data-platform/issues/22)
+
+  - [x] 0.1.1.H : Done- [Request: Target.put() Iceberg Table](https://github.com/tusharchou/local-data-platform/issues/20)
+
+  - [x] 0.1.1.I : Done- [Request: NYCYellowTaxi.rides.put()](https://github.com/tusharchou/local-data-platform/issues/8)
+
+  - [x] 0.1.1.J : Done- [Request: NYCYellowTaxi.rides.get()](https://github.com/tusharchou/local-data-platform/issues/3)
+
+  - [x] 0.1.1.K : Done- [Request: test.iceberg.exception()](https://github.com/tusharchou/local-data-platform/issues/1)
+
+  - [ ] 0.1.1.L : In Progress- [Documentation: NEAR Trader-How to use NEAR Data Lake](https://github.com/tusharchou/local-data-platform/issues/12)
+
+  - [x] 0.1.1.M : Done- [Request: Source.get() BigQuery](https://github.com/tusharchou/local-data-platform/issues/19)
+
+  - [ ] 0.1.1.N : To-do- [Request: Iceberg Partitioning and Version Control](https://github.com/tusharchou/local-data-platform/issues/29)
+
 ### Source
 
 Our local data platform supports `Parquet Files` for now and new formats and sources will be added in subsequent releases.<br/>
