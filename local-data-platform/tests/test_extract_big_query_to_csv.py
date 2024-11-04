@@ -17,23 +17,26 @@ class TestBigQueryToCSV:
             config_path="/sample_data" + "/real_world_use_cases/near_data_lake/config/ingestion.json",
     ):
 
-        self.config = Config(
+        config = Config(
             **Json(
                 name=dataset,
                 path=config_path,
             ).get()
         )
         if (
-                self.config.metadata["source"]["format"] == SupportedFormat.JSON.value
-                and self.config.metadata["target"]["format"] == SupportedFormat.CSV.value
-                and self.config.metadata["source"]["engine"] == SupportedEngine.BIGQUERY.value
+                config.metadata["source"]["format"] == SupportedFormat.JSON.value
+                and config.metadata["target"]["format"] == SupportedFormat.CSV.value
+                and config.metadata["source"]["engine"] == SupportedEngine.BIGQUERY.value
         ):
+            data_loader = BigQueryToCSV(config=config)
+            data_loader.load()
+
             assert True
         else:
             raise AssertionError(
                 f"""
-                    source {self.config.metadata['source']['format']} 
-                    to target {self.config.metadata['target']['format']}
+                    source {config.metadata['source']['format']} 
+                    to target {config.metadata['target']['format']}
                     pipeline is not supported yet
                     """
             )
