@@ -1,19 +1,75 @@
+Dear User
 # Local Data Platform
-Local Data Platform is a python library that uses open source tools to orchestrate a data platform operations locally for development and testing. <br/>
-This library provides solutions for all stages ranging from ingestion to reporting all of which one can build data pipeline locally, test and easily scale up to cloud. 
+### Explain this to me like I am five 
+Imagine you have a toy box where you keep all your favorite toys. 
+A local data platform is like that toy box, but for storing and 
+organizing important information instead of toys.
+Just like how your toy box, 
+**a local data platform keeps all your data** 
+(like pictures, documents, and other info) **in one place 
+so you can easily find, use and manage it.**
+
+It's really handy for keeping everything organized and in one spot! 🌟📦
+
+Got it? What else are you curious about?
+
+> **Vision:** Local Data Platform is used as a python library to learn 
+> and operate data lake house locally. <br/>
+> **Mission:** Develop a python package which provides solutions for all stages
+> of data organisation, ranging from ingestion to reporting. 
+> The goal is that one can build data pipeline locally, test and 
+> easily scale up to cloud.  <br/>
+> <br/>
+> **By 2025,** local-data-platform is a python package that uses open source 
+> tools to orchestrate a data platform operation, locally, for development 
+> and testing. <br/>
 
 ## Problem Statement
 
 
-| Question | Answer                                                                                            |
-|----------|---------------------------------------------------------------------------------------------------|
-| What?    | a local data platform that can scale up to cloud                                                  |
-| Why?     | save costs on cloud infra and developement time                                                   |
-| When?    | start of product development life cycle                                                           |
-| Where?   | local first                                                                                       |
-| Who?     | Business who want a product data platform that will run locally and scale up when the time comes. |
+| Question | Answer                                                                                             |
+|----------|----------------------------------------------------------------------------------------------------|
+| What?    | a local data platform that can scale up to cloud                                                   |
+| Why?     | save costs on cloud infra and development time                                                    |
+| When?    | start of product development life cycle                                                            |
+| Where?   | local first                                                                                        |
+| Who?     | Business who wants a product data platform that will run locally and scale up when the time comes. |
+
+# Technical Specifications
+This will help you understand how to read the repository. \
+**Note:** The users install the package and the developer import the library.
+
+## Directory Structure
+
+### local-data-platform/ `repository`
+- **.github/** `hidden folder`
+  - ISSUE-TEMPLATE/ `samples`
+    - bug_report.md `Report bugs here`
+    - custom.md `Report ad hoc issues here`
+    - feature_request.md `Request a new feature here`
+  - pull_request_template.md `Raise a pull request on the repo`
+
+- **docs/** `Documentation for Read the Docs`
+
+- **local-data-platform** `package`
+  - local_data_platform `library`
+    - hello_world.py `module`
+      - hello_world `function`
+        - prints 'Hello, world!' `output`
+
+- **samples/** `tutorials`
+    - bigQueryTutorial.py `Demo bigQuery compatibility here`
+- .gitignore `Mention files to ignore in your PR`
+- .readthedocs.yaml `Configuration for Read the Docs`
+- LICENSE `for legal purposes`
+- lumache.py `Template used in Sphinx projects for Read the Docs`
+- pyproject.toml `template configuration`
+- README.md `How to understand the repo`
+- README.rst `Configuration for Read the Docs`
+
 
 ## Components
+
 
 It uses below tools:
 1. Ingestion using [Apache Arrow](https://arrow.apache.org/) in [Parquet](https://parquet.apache.org/) file format.
@@ -21,62 +77,8 @@ It uses below tools:
 3. [DuckDB](https://duckdb.org/) as Datawarehouse
 4. [DBT](https://www.getdbt.com/) for transformation operations.
 5. [Apache Airflow](https://airflow.apache.org/) for orchestration
-### Source
 
-Our local data platform supports `Parquet Files` for now and new formats and sources will be added in subsequent releases.<br/>
-
-`Parquet Files` : High-performance columnar storage format, optimized for efficient reading and querying of large datasets.<br  />
-
-  
-
-### Data Catalog with Apache Iceberg on SQLite
-
-Our platform uses Apache Iceberg to manage large-scale datasets efficiently while ensuring ACID compliance, schema evolution, and performant queries.<br  />
-
-Our platform leverages Apache Iceberg as the data catalog on top of SQLite for storing and transforming raw data.<br  />
-
-Initially, raw data in form of Parquet files are ingested into SQLite. SQLite, being a lightweight, serverless database, serves as an intermediary layer where the data can be stored, processed, and transformed as needed. Apache Iceberg acts as the data catalog throughout the process. It manages metadata for all datasets, including raw data in SQLite.
-
-  
-
-### Transformations
-
-Once raw data is ingested into SQLite, we use `DBT` (Data Build Tool) for transforming and modeling the data.
-
-  
-
-### Target
-
-Once the transformations are complete, the processed and clean data is stored in `DuckDB` using Apache Iceberg's table format.<br  />
-
-Apache Iceberg acts as a unified metadata layer across both the raw and processed data. The platform can handle complex data versioning, schema evolution, and partition pruning, ensuring optimal performance during querying. With DuckDB’s in-memory analytical capabilities and Iceberg’s efficient data layout, querying the processed data becomes highly performant and scalable.
-
-
-
-## Example
-#### Sample Data
-
-Data can be available as single file in the source format. For example New York Yellow taxi data is available to be
-
-pulled from [here](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page)
-
-  
-
-```
-
-curl https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2023-01.parquet -o /tmp/yellow_tripdata_2023-01.parquet
-
-```
-#### Ingestion Layer
-Please refer given ingestion layer [python script](https://github.com/tusharchou/local-data-platform/blob/main/local-data-platform/nyc_yellow_taxi.py)
-
-#### Subsequent Layers
-[yet to be released](null) . Please check the Plan and milestone below. 
-
-  ## Plan
-
-  
-
+## Plan
 
 | Milestone | Epic                 | Target Date | Delivery Date | Release Owner   | Comment      |
 |-----------|----------------------|-------------|---------------|-----------------|--------------|
@@ -89,55 +91,50 @@ Please refer given ingestion layer [python script](https://github.com/tusharchou
 
 ### Milestone
 
-  
-
-- [x] 0.1.0 : Done+ Published Library on [PyPI](https://pypi.org/project/local-data-platform/)
-
-  
+- [x] 0.1.0 : Done- Published Library on [PyPI](https://pypi.org/project/local-data-platform/)
 
 - [ ] 0.1.1 : In Progress- [Demo BigQuery compatibility](https://github.com/tusharchou/local-data-platform/milestone/2)
 
-- [x] 0.1.1 : Done+ [Documentation: Updated README to explain clearly problem and plan of excecution](https://github.com/tusharchou/local-data-platform/issues/6)
+- [x] 0.1.1 : Done- [Documentation: Updated README to explain clearly problem and plan of excecution](https://github.com/tusharchou/local-data-platform/issues/6)
 
-- [ ] PR : In Progress- [Feature: Simply query NEAR Coin GCP Data Lake through BiqQuery](https://github.com/tusharchou/local-data-platform/pull/25)
+  - [x] 0.1.1.A : Done- [Feature: Simply query NEAR Coin GCP Data Lake through BiqQuery](https://github.com/tusharchou/local-data-platform/pull/25)
 
-- [ ] PR : In Progress- [Feature: Privately store NYC Yellow Taxi Rides Data in Local Data Platform](https://github.com/tusharchou/local-data-platform/pull/26)
+  - [x] 0.1.1.B : Done- [Feature: Privately store NYC Yellow Taxi Rides Data in Local Data Platform](https://github.com/tusharchou/local-data-platform/pull/26)
 
-- [ ] FR : In Progress- [Change: Easily solve for User's Local Data Need](https://github.com/tusharchou/local-data-platform/pull/28)
+  - [ ] 0.1.1.C : In Progress- [Change: Easily solve for User's Local Data Need](https://github.com/tusharchou/local-data-platform/pull/28)
 
-- [ ] IS : In Progress- [Documentation: Align on Product Framework](https://github.com/tusharchou/local-data-platform/issues/29)
+  - [ ] 0.1.1.D : In Progress- [Documentation: Align on Product Framework](https://github.com/tusharchou/local-data-platform/issues/29)
 
-- [ ] IS : In Progress- [Request: Source Parquet Table](https://github.com/tusharchou/local-data-platform/issues/24)
+  - [x] 0.1.1.E : Done- [Request: Source Parquet Table](https://github.com/tusharchou/local-data-platform/issues/24)
 
-- [ ] IS : In Progress- [Request: Source Iceberg Table](https://github.com/tusharchou/local-data-platform/issues/21)
+  - [x] 0.1.1.F : Done- [Request: Source Iceberg Table](https://github.com/tusharchou/local-data-platform/issues/21)
 
-- [ ] IS : In Progress- [Request: Target Iceberg Table](https://github.com/tusharchou/local-data-platform/issues/22)
+  - [x] 0.1.1.G : Done- [Request: Target Iceberg Table](https://github.com/tusharchou/local-data-platform/issues/22)
 
-- [ ] IS : In Progress- [Request: Target.put() Iceberg Table](https://github.com/tusharchou/local-data-platform/issues/20)
+  - [x] 0.1.1.H : Done- [Request: Target.put() Iceberg Table](https://github.com/tusharchou/local-data-platform/issues/20)
 
-- [ ] IS : In Progress- [Request: NYCYellowTaxi.rides.put()](https://github.com/tusharchou/local-data-platform/issues/8)
+  - [x] 0.1.1.I : Done- [Request: NYCYellowTaxi.rides.put()](https://github.com/tusharchou/local-data-platform/issues/8)
 
-- [ ] IS : In Progress- [Request: NYCYellowTaxi.rides.get()](https://github.com/tusharchou/local-data-platform/issues/3)
+  - [x] 0.1.1.J : Done- [Request: NYCYellowTaxi.rides.get()](https://github.com/tusharchou/local-data-platform/issues/3)
 
-- [ ] IS : In Progress- [Request: test.iceberg.exception()](https://github.com/tusharchou/local-data-platform/issues/1)
+  - [x] 0.1.1.K : Done- [Request: test.iceberg.exception()](https://github.com/tusharchou/local-data-platform/issues/1)
 
-- [ ] IS : In Progress- [Documentation: NEAR Trader-How to use NEAR Data Lake](https://github.com/tusharchou/local-data-platform/issues/12)
+  - [ ] 0.1.1.L : In Progress- [Documentation: NEAR Trader-How to use NEAR Data Lake](https://github.com/tusharchou/local-data-platform/issues/12)
 
-- [ ] IS : In Progress- [Request: Source.get() BigQuery](https://github.com/tusharchou/local-data-platform/issues/19)
+  - [x] 0.1.1.M : Done- [Request: Source.get() BigQuery](https://github.com/tusharchou/local-data-platform/issues/19)
 
-- [ ] IS : To-do- [Request: Iceberg Partitioning and Version Control](https://github.com/tusharchou/local-data-platform/issues/29)
+  - [ ] 0.1.1.N : To-do- [Request: Iceberg Partitioning and Version Control](https://github.com/tusharchou/local-data-platform/issues/29)
 
-- [ ] IS : To-do- [Request: Align on Product Framework](https://github.com/tusharchou/local-data-platform/issues/29)
-
-- [ ] IS : In Progress- [Align on Product Framework](https://github.com/tusharchou/local-data-platform/issues/29)
-
-- [ ] 0.1.2 : To-do Continuous Integration
-
-- [ ] 0.1.9 : To-do[Launch Documentation](https://github.com/tusharchou/local-data-platform/milestone/2)
-
+- [ ] 0.1.2 : To-do [Warehousing: DuckDB, Iceberg, DBT](https://github.com/tusharchou/local-data-platform/milestone/5)
+- [ ] 0.1.3 : To-do [Orchestration](https://github.com/tusharchou/local-data-platform/milestone/6)
+- [ ] 0.1.4 : To-do [Self Serving Gold Layer](https://github.com/tusharchou/local-data-platform/milestone/11)
+- [ ] 0.1.5 : To-do [Monitoring](https://github.com/tusharchou/local-data-platform/milestone/10)
+- [ ] 0.1.6 : To-do [Business Intelligence Reporting Dashboard](https://github.com/tusharchou/local-data-platform/milestone/9)
+- [ ] 0.1.7 : To-do [Data Science Insights](https://github.com/tusharchou/local-data-platform/milestone/8)
+- [ ] 0.1.8 : To-do [LLM](https://github.com/tusharchou/local-data-platform/milestone/7)
+- [ ] 0.1.9 : To-do [Launch Documentation](https://github.com/tusharchou/local-data-platform/milestone/2)
 - [ ] 0.2.0 : To-do [Cloud Integration](https://github.com/tusharchou/local-data-platform/milestone/3)
-
-- [ ] 1.0.0 : To-do [Demo BigQuery compatibility](https://github.com/tusharchou/local-data-platform/milestone/2)
+- [ ] 1.0.0 : To-do Product
 
 
 ### References
