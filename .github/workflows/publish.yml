@@ -30,6 +30,11 @@ jobs:
           cd local-data-platform
           poetry install
 
+      - name: Clean up dist directory
+        run: |
+          cd local-data-platform
+          rm -rf dist/*
+
       - name: Build package
         run: |
           cd local-data-platform
