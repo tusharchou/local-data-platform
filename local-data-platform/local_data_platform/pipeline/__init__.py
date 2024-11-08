@@ -11,7 +11,5 @@ class Pipeline(Flow):
 
     def __init__(self, config: Config, *args, **kwargs):
         self.config = config
-        self.source = Source(**config.metadata['source'])
-        self.target = Target(**config.metadata['target'])
         super().__init__(*args, **kwargs)
 

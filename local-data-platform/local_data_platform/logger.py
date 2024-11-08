@@ -6,6 +6,10 @@ from logging import (
 
 
 def log():
-    basicConfig(level=INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    basicConfig(level=INFO, format=
+                """
+                 %(message)s
+                """
+            )
 
-    return getLogger('loca_data_platform')
+    return getLogger('loca_data_platform-demo')

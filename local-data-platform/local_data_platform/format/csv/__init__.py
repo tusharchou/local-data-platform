@@ -17,6 +17,7 @@ class CSV(Format):
 
     def get(self) -> Table:
         if not os.path.isfile(self.path):
+            logger.error(f"This path {self.path} is invalid")
             raise FileNotFoundError
 
         logger.info(
@@ -24,10 +25,10 @@ class CSV(Format):
             reading CSV from {self.path}
             """
         )
-        df = csv.read_table(self.path)
+        df = csv.read_csv(self.path)
         logger.info(
             f"""
-            df type {type(df)}
+            df type {type(df)} len {len(df)}
             """
         )
         if df is not None:
@@ -41,5 +42,9 @@ class CSV(Format):
             Writing data from PyArrow Table of size {len(df)} records
             """
         )
-        with open(self.path, 'wb') as f:
-            csv.write_csv(df, f)
+        if df is not None or len(df) > 0:
+            with open(self.path, "wb") as f:
+                csv.write_csv(df, f)
+        else:
+            logger.error("No data to write to CSV as the data is empty")
+            raise ValueError("No data to write")

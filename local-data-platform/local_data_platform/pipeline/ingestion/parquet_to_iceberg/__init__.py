@@ -10,7 +10,21 @@ logger = log()
 
 
 class ParquetToIceberg(Egression):
+    """
+    ParquetToIceberg is a class responsible for transforming data from a Parquet source to an Iceberg target.
 
+    Attributes:
+        source (Parquet): The source Parquet configuration.
+        target (Iceberg): The target Iceberg configuration.
+
+    Methods:
+        __init__(config: Config, *args, **kwargs):
+            Initializes the ParquetToIceberg instance with the provided configuration.
+            Args:
+                config (Config): Configuration object containing metadata for source and target.
+                *args: Variable length argument list.
+                **kwargs: Arbitrary keyword arguments.
+    """
     def __init__(self, config: Config, *args, **kwargs):
         self.source = config.metadata['source']
         self.target = config.metadata['target']
@@ -20,7 +34,7 @@ class ParquetToIceberg(Egression):
         )
         self.target = Iceberg(
             name=self.target['name'],
-            catalog=self.target['catalog']
+            config=self.target['catalog']
         )
         logger.info(
             f"""

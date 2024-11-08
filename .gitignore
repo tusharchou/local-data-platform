@@ -6,3 +6,5 @@
 *.pyc
 __pycache__/
 *.parquet
+**/__pycache__/
+
