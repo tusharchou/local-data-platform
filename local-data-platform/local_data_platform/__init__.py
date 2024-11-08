@@ -39,7 +39,7 @@ class Table(Base):
 
     def __init__(self, name: str, path: Path = os.getcwd()):
         self.name = name
-        self.path = os.getcwd()+path
+        self.path = path
 
     def get(self):
         raise TableNotFound(
