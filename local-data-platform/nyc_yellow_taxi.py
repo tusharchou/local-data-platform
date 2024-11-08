@@ -8,8 +8,8 @@ from local_data_platform import BaseConfig
 
 config = {
     "name": "nyc_yellow_taxi_rides",
-    "path": "/Users/tushar/Documents/GitHub/local-data-platform/local-data-platform/yellow_tripdata_2023-01.parquet",
-    "warehouse_path": "./tmp/warehouse",
+    "path": "C:\\Users\\singsina\\Desktop\\local-data-platform\\local-data-platform\\tmp\\yellow_tripdata_2023-01.parquet",
+    "warehouse_path": ".\\tmp\\warehouse",
     "catalog_identifier": "pyiceberg_catalog_db",
     "format": "PARQUET"
 }
