@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "local-data-platform"
-version = "0.1.0"
-description = ""
+version = "0.1.1"
+description = "Python library for iceberg lake house on your local"
 authors = ["Tushar Choudhary <151359025+tusharchou@users.noreply.github.com>"]
 readme = "README.md"
 
@@ -14,7 +14,8 @@ pytest = "^8.3.3"
 magicmock = "^0.3"
 google = "^3.0.0"
 google-cloud-bigquery = "^3.26.0"
-sqlalchemy = "^2.0.36"
+pandas = "^2.2.3"
+db-dtypes = "^1.3.0"
 
 
 [build-system]
