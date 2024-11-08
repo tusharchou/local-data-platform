@@ -3,4 +3,8 @@
 .idea/modules.xml
 .idea/vcs.xml
 .idea/workspace.xml
+*.pyc
+__pycache__/
+*.parquet
 **/__pycache__/
+
