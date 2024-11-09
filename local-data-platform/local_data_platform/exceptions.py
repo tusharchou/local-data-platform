@@ -8,3 +8,6 @@ class PipelineNotFound(Exception):
 
 class EngineNotFound(Exception):
     """Raised when engine is not supported"""
+
+class PlanNotFound(Exception):
+    """Raised when issue doesn't have resolution estimate"""
