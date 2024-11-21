@@ -12,6 +12,10 @@ from pyiceberg.typedef import Properties
 import pyarrow as pa
 import pytest
 from pyiceberg.catalog.sql import SqlCatalog
+from local_data_platform.logger import log
+
+
+logger = log()
 
 warehouse_path = "sample_data/"
 catalog = SqlCatalog(
@@ -71,5 +75,6 @@ def test_table_statistics_from_iceberg_metadata():
         iceberg_table_io=table.io,
         iceberg_metadata=table.metadata
     )
+    logger.error(stats.)
     if stats.partition_count != 1:
         assert False
