@@ -1,0 +1,51 @@
+from pyspark.sql import SparkSession
+from typing import List
+
+
+def spark() -> "SparkSession":
+    import importlib.metadata
+
+    from pyspark.sql import SparkSession
+
+    # Remember to also update `dev/Dockerfile`
+    spark_version = ".".join(importlib.metadata.version("pyspark").split(".")[:2])
+    scala_version = "2.12"
+    iceberg_version = "1.6.0"
+
+    os.environ["PYSPARK_SUBMIT_ARGS"] = (
+        f"--packages org.apache.iceberg:iceberg-spark-runtime-{spark_version}_{scala_version}:{iceberg_version},"
+        f"org.apache.iceberg:iceberg-aws-bundle:{iceberg_version} pyspark-shell"
+    )
+    os.environ["AWS_REGION"] = "us-east-1"
+    os.environ["AWS_ACCESS_KEY_ID"] = "admin"
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "password"
+
+    spark = (
+        SparkSession.builder.appName("PyIceberg integration test")
+        .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
+        .config("spark.sql.catalog.integration", "org.apache.iceberg.spark.SparkCatalog")
+        .config("spark.sql.catalog.integration.catalog-impl", "org.apache.iceberg.rest.RESTCatalog")
+        .config("spark.sql.catalog.integration.cache-enabled", "false")
+        .config("spark.sql.catalog.integration.uri", "http://localhost:8181")
+        .config("spark.sql.catalog.integration.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
+        .config("spark.sql.catalog.integration.warehouse", "s3://warehouse/wh/")
+        .config("spark.sql.catalog.integration.s3.endpoint", "http://localhost:9000")
+        .config("spark.sql.catalog.integration.s3.path-style-access", "true")
+        .config("spark.sql.defaultCatalog", "integration")
+        .config("spark.sql.catalog.hive", "org.apache.iceberg.spark.SparkCatalog")
+        .config("spark.sql.catalog.hive.type", "hive")
+        .config("spark.sql.catalog.hive.uri", "http://localhost:9083")
+        .config("spark.sql.catalog.hive.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
+        .config("spark.sql.catalog.hive.warehouse", "s3://warehouse/hive/")
+        .config("spark.sql.catalog.hive.s3.endpoint", "http://localhost:9000")
+        .config("spark.sql.catalog.hive.s3.path-style-access", "true")
+        .config("spark.sql.execution.arrow.pyspark.enabled", "true")
+        .getOrCreate()
+    )
+
+    return spark
+
+def run_spark_commands(spark: SparkSession, sqls: List[str]) -> None:
+    for sql in sqls:
+        spark.sql(sql)
