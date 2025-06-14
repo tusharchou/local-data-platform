@@ -16,7 +16,6 @@ build:
     # golang: "1.19"
 
 python:
-  version: 3.9
   install:
     - requirements: requirements.txt
 
