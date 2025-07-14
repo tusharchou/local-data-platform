@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Local Data Platform &mdash; My Personal Data Project  documentation</title>
+  <title>Welcome to local-data-platform’s documentation! &mdash; local-data-platform  documentation</title>
       <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
   <!--[if lt IE 9]>
@@ -16,7 +16,8 @@
         <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="genindex.html" />
-    <link rel="search" title="Search" href="search.html" /> 
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Local Data Platform Recipes" href="recipes.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -24,7 +25,7 @@
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search" >
-            <a href="#" class="icon icon-home"> My Personal Data Project
+            <a href="#" class="icon icon-home"> local-data-platform
           </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -34,39 +35,22 @@
   </form>
 </div>
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
-              <!-- Local TOC -->
-              <div class="local-toc"><ul>
-<li><a class="reference internal" href="#">Local Data Platform</a><ul>
-<li><a class="reference internal" href="#explain-this-to-me-like-i-am-five">Explain this to me like I am five</a></li>
-<li><a class="reference internal" href="#problem-statement">Problem Statement</a></li>
+              <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="recipes.html">Local Data Platform Recipes</a></li>
 </ul>
-</li>
-<li><a class="reference internal" href="#technical-specifications">Technical Specifications</a><ul>
-<li><a class="reference internal" href="#directory-structure">Directory Structure</a><ul>
-<li><a class="reference internal" href="#local-data-platform-repository">local-data-platform/ <code class="docutils literal notranslate"><span class="pre">repository</span></code></a></li>
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="source/api/modules.html">local_data_platform</a></li>
 </ul>
-</li>
-<li><a class="reference internal" href="#how-to-test-pre-release-as-a-user">How to test Pre-release as a User</a></li>
-<li><a class="reference internal" href="#package-structure">Package structure</a></li>
-<li><a class="reference internal" href="#plan">Plan</a><ul>
-<li><a class="reference internal" href="#releases">Releases</a></li>
-<li><a class="reference internal" href="#references">References</a><ul>
-<li><a class="reference internal" href="#self-promotion">Self Promotion</a></li>
-</ul>
-</li>
-</ul>
-</li>
-</ul>
-</li>
-</ul>
-</div>
+
         </div>
       </div>
     </nav>
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="#">My Personal Data Project</a>
+          <a href="#">local-data-platform</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -74,7 +58,7 @@
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
       <li><a href="#" class="icon icon-home"></a> &raquo;</li>
-      <li>Local Data Platform</li>
+      <li>Welcome to local-data-platform’s documentation!</li>
       <li class="wy-breadcrumbs-aside">
             <a href="_sources/index.md.txt" rel="nofollow"> View page source</a>
       </li>
@@ -84,418 +68,38 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <p>Dear User</p>
-<section id="local-data-platform">
-<h1>Local Data Platform<a class="headerlink" href="#local-data-platform" title="Link to this heading"></a></h1>
-<section id="explain-this-to-me-like-i-am-five">
-<h2>Explain this to me like I am five<a class="headerlink" href="#explain-this-to-me-like-i-am-five" title="Link to this heading"></a></h2>
-<p>Imagine you have a toy box where you keep all your favorite toys.
-A local data platform is like that toy box, but for storing and
-organizing important information instead of toys.
-Just like how your toy box,
-<strong>a local data platform keeps all your data</strong>
-(like pictures, documents, and other info) <strong>in one place
-so you can easily find, use and manage it.</strong></p>
-<p>It’s really handy for keeping everything organized and in one spot! 🌟📦</p>
-<p>Got it? What else are you curious about?</p>
-<blockquote>
-<div><p><strong>Vision:</strong> Local Data Platform is used as a python library to learn
-and operate data lake house locally. <br/>
-<strong>Mission:</strong> Develop a python package which provides solutions for all stages
-of data organisation, ranging from ingestion to reporting.
-The goal is that one can build data pipeline locally, test and
-easily scale up to cloud.  <br/>
-<br/>
-<strong>By 2025,</strong> local-data-platform is a python package that uses open source
-tools to orchestrate a data platform operation, locally, for development
-and testing. <br/></p>
-</div></blockquote>
-</section>
-<section id="problem-statement">
-<h2>Problem Statement<a class="headerlink" href="#problem-statement" title="Link to this heading"></a></h2>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>Question</p></th>
-<th class="head"><p>Answer</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>What?</p></td>
-<td><p>a local data platform that can scale up to cloud</p></td>
-</tr>
-<tr class="row-odd"><td><p>Why?</p></td>
-<td><p>save costs on cloud infra and development time</p></td>
-</tr>
-<tr class="row-even"><td><p>When?</p></td>
-<td><p>start of product development life cycle</p></td>
-</tr>
-<tr class="row-odd"><td><p>Where?</p></td>
-<td><p>local first</p></td>
-</tr>
-<tr class="row-even"><td><p>Who?</p></td>
-<td><p>Business who wants a product data platform that will run locally and scale up when the time comes.</p></td>
-</tr>
-</tbody>
-</table>
-</section>
-</section>
-<section id="technical-specifications">
-<h1>Technical Specifications<a class="headerlink" href="#technical-specifications" title="Link to this heading"></a></h1>
-<p>This will help you understand how to read the repository. <br />
-<strong>Note:</strong> The users install the package and the developer import the library.</p>
-<section id="directory-structure">
-<h2>Directory Structure<a class="headerlink" href="#directory-structure" title="Link to this heading"></a></h2>
-<section id="local-data-platform-repository">
-<h3>local-data-platform/ <code class="docutils literal notranslate"><span class="pre">repository</span></code><a class="headerlink" href="#local-data-platform-repository" title="Link to this heading"></a></h3>
-<ul class="simple">
-<li><p><strong>.github/</strong> <code class="docutils literal notranslate"><span class="pre">hidden</span> <span class="pre">folder</span></code></p>
+  <section id="welcome-to-local-data-platform-s-documentation">
+<h1>Welcome to local-data-platform’s documentation!<a class="headerlink" href="#welcome-to-local-data-platform-s-documentation" title="Link to this heading"></a></h1>
+<p><strong>local-data-platform</strong> is a Python library to build, test, and run a complete data platform on your local machine. The core idea is to provide a “toy box for data”—a local environment where you can manage the entire data lifecycle, from ingestion to reporting, before needing to scale up to a cloud environment.</p>
+<p>This documentation will help you get started with the library.</p>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
 <ul>
-<li><p>ISSUE-TEMPLATE/ <code class="docutils literal notranslate"><span class="pre">samples</span></code></p>
-<ul>
-<li><p>bug_report.md <code class="docutils literal notranslate"><span class="pre">Report</span> <span class="pre">bugs</span> <span class="pre">here</span></code></p></li>
-<li><p>custom.md <code class="docutils literal notranslate"><span class="pre">Report</span> <span class="pre">ad</span> <span class="pre">hoc</span> <span class="pre">issues</span> <span class="pre">here</span></code></p></li>
-<li><p>feature_request.md <code class="docutils literal notranslate"><span class="pre">Request</span> <span class="pre">a</span> <span class="pre">new</span> <span class="pre">feature</span> <span class="pre">here</span></code></p></li>
-</ul>
-</li>
-<li><p>pull_request_template.md <code class="docutils literal notranslate"><span class="pre">Raise</span> <span class="pre">a</span> <span class="pre">pull</span> <span class="pre">request</span> <span class="pre">on</span> <span class="pre">the</span> <span class="pre">repo</span></code></p></li>
-</ul>
-</li>
-<li><p><strong>docs/</strong> <code class="docutils literal notranslate"><span class="pre">Documentation</span> <span class="pre">for</span> <span class="pre">Read</span> <span class="pre">the</span> <span class="pre">Docs</span></code></p></li>
-<li><p><strong>local-data-platform</strong> <code class="docutils literal notranslate"><span class="pre">package</span></code></p>
-<ul>
-<li><p>local_data_platform <code class="docutils literal notranslate"><span class="pre">library</span></code></p>
-<ul>
-<li><p>hello_world.py <code class="docutils literal notranslate"><span class="pre">module</span></code></p>
-<ul>
-<li><p>hello_world <code class="docutils literal notranslate"><span class="pre">function</span></code></p>
-<ul>
-<li><p>prints ‘Hello, world!’ <code class="docutils literal notranslate"><span class="pre">output</span></code></p></li>
+<li class="toctree-l1"><a class="reference internal" href="recipes.html">Local Data Platform Recipes</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="recipes.html#recipe-read-a-json-file">Recipe: Read a JSON File</a></li>
+<li class="toctree-l2"><a class="reference internal" href="recipes.html#recipe-json-to-parquet-data-pipeline">Recipe: JSON to Parquet Data Pipeline</a></li>
+<li class="toctree-l2"><a class="reference internal" href="recipes.html#sample-json-file">Sample JSON File</a></li>
 </ul>
 </li>
 </ul>
-</li>
-</ul>
-</li>
-</ul>
-</li>
-<li><p><strong>samples/</strong> <code class="docutils literal notranslate"><span class="pre">tutorials</span></code></p>
+</div>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
 <ul>
-<li><p>bigQueryTutorial.py <code class="docutils literal notranslate"><span class="pre">Demo</span> <span class="pre">bigQuery</span> <span class="pre">compatibility</span> <span class="pre">here</span></code></p></li>
-</ul>
-</li>
-<li><p>.gitignore <code class="docutils literal notranslate"><span class="pre">Mention</span> <span class="pre">files</span> <span class="pre">to</span> <span class="pre">ignore</span> <span class="pre">in</span> <span class="pre">your</span> <span class="pre">PR</span></code></p></li>
-<li><p>.readthedocs.yaml <code class="docutils literal notranslate"><span class="pre">Configuration</span> <span class="pre">for</span> <span class="pre">Read</span> <span class="pre">the</span> <span class="pre">Docs</span></code></p></li>
-<li><p>LICENSE <code class="docutils literal notranslate"><span class="pre">for</span> <span class="pre">legal</span> <span class="pre">purposes</span></code></p></li>
-<li><p>lumache.py <code class="docutils literal notranslate"><span class="pre">Template</span> <span class="pre">used</span> <span class="pre">in</span> <span class="pre">Sphinx</span> <span class="pre">projects</span> <span class="pre">for</span> <span class="pre">Read</span> <span class="pre">the</span> <span class="pre">Docs</span></code></p></li>
-<li><p>pyproject.toml <code class="docutils literal notranslate"><span class="pre">template</span> <span class="pre">configuration</span></code></p></li>
-<li><p>README.md <code class="docutils literal notranslate"><span class="pre">How</span> <span class="pre">to</span> <span class="pre">understand</span> <span class="pre">the</span> <span class="pre">repo</span></code></p></li>
-<li><p>README.rst <code class="docutils literal notranslate"><span class="pre">Configuration</span> <span class="pre">for</span> <span class="pre">Read</span> <span class="pre">the</span> <span class="pre">Docs</span></code></p></li>
-</ul>
-</section>
-</section>
-<section id="how-to-test-pre-release-as-a-user">
-<h2>How to test Pre-release as a User<a class="headerlink" href="#how-to-test-pre-release-as-a-user" title="Link to this heading"></a></h2>
-<ol class="arabic simple">
-<li><p>Check the directory structure <br />
-<code class="docutils literal notranslate"><span class="pre">ls</span></code></p></li>
-<li><p>Change directory to local-data-platform<br />
-<code class="docutils literal notranslate"><span class="pre">cd</span> <span class="pre">local-data-platform</span></code></p></li>
-<li><p>Install the dependencies listed in your pyproject.toml file <br />
-<code class="docutils literal notranslate"><span class="pre">$poetry</span> <span class="pre">install</span></code></p></li>
-<li><p>Execute your test suite to ensure everything is working as expected <br />
-<code class="docutils literal notranslate"><span class="pre">poetry</span> <span class="pre">run</span> <span class="pre">pytest</span></code></p></li>
-<li><p>Run hello world command <br />
-<code class="docutils literal notranslate"><span class="pre">poetry</span> <span class="pre">run</span> <span class="pre">python</span> <span class="pre">hello_world.py</span></code></p></li>
-</ol>
-</section>
-<section id="package-structure">
-<h2>Package structure<a class="headerlink" href="#package-structure" title="Link to this heading"></a></h2>
-<ul class="simple">
-<li><p><strong>local-data-platform</strong> <code class="docutils literal notranslate"><span class="pre">package</span></code></p>
-<ul>
-<li><p><strong>dist</strong> <code class="docutils literal notranslate"><span class="pre">Package</span> <span class="pre">distribution</span> <span class="pre">files</span></code></p></li>
-<li><p><strong>docs</strong> <code class="docutils literal notranslate"><span class="pre">Documentation</span></code></p></li>
-<li><p><strong>local_data_platform</strong> <code class="docutils literal notranslate"><span class="pre">library</span></code></p>
-<ul>
-<li><p><strong>catalog</strong> <code class="docutils literal notranslate"><span class="pre">Catalog</span> <span class="pre">your</span> <span class="pre">data</span></code></p>
-<ul>
-<li><p><strong>local</strong> <code class="docutils literal notranslate"><span class="pre">Catalog</span> <span class="pre">your</span> <span class="pre">data</span> <span class="pre">locally</span></code></p>
-<ul>
-<li><p><strong>iceberg</strong> <code class="docutils literal notranslate"><span class="pre">Catalog</span> <span class="pre">your</span> <span class="pre">data</span> <span class="pre">in</span> <span class="pre">iceberg</span> <span class="pre">SQL</span> <span class="pre">lite</span> <span class="pre">db</span></code></p>
-<ul>
-<li><p>export.py  <code class="docutils literal notranslate"><span class="pre">Export</span> <span class="pre">your</span> <span class="pre">catalog</span> <span class="pre">data</span> <span class="pre">to</span> <span class="pre">csv</span></code></p></li>
+<li class="toctree-l1"><a class="reference internal" href="source/api/modules.html">local_data_platform</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="source/api/local_data_platform.html">local_data_platform package</a></li>
 </ul>
 </li>
 </ul>
-</li>
-</ul>
-</li>
-<li><p><strong>cloud</strong> <code class="docutils literal notranslate"><span class="pre">Interact</span> <span class="pre">with</span> <span class="pre">cloud</span> <span class="pre">service</span> <span class="pre">providers</span></code></p>
-<ul>
-<li><p><strong>gcp</strong> <code class="docutils literal notranslate"><span class="pre">Interact</span> <span class="pre">with</span> <span class="pre">Google</span> <span class="pre">Cloud</span> <span class="pre">Platform</span></code></p>
-<ul>
-<li><p><strong>login</strong> <code class="docutils literal notranslate"><span class="pre">Login</span> <span class="pre">to</span> <span class="pre">GCP</span> <span class="pre">to</span> <span class="pre">get</span> <span class="pre">API</span> <span class="pre">credentials</span></code></p></li>
-</ul>
-</li>
-</ul>
-</li>
-<li><p><strong>engine</strong> <code class="docutils literal notranslate"><span class="pre">Underlying</span> <span class="pre">processing</span> <span class="pre">Tech</span></code></p></li>
-<li><p><strong>format</strong> <code class="docutils literal notranslate"><span class="pre">Supported</span> <span class="pre">formats</span> <span class="pre">for</span> <span class="pre">storage</span></code></p>
-<ul>
-<li><p><strong>csv</strong> <code class="docutils literal notranslate"><span class="pre">Supports</span> <span class="pre">Google</span> <span class="pre">sheets</span> <span class="pre">and</span> <span class="pre">Excel</span> <span class="pre">sheets</span></code></p></li>
-<li><p><strong>iceberg</strong> <code class="docutils literal notranslate"><span class="pre">Supports</span> <span class="pre">Apache</span> <span class="pre">Iceberg</span></code></p></li>
-<li><p><strong>parquet</strong> <code class="docutils literal notranslate"><span class="pre">Supports</span> <span class="pre">Apache</span> <span class="pre">Parquet</span></code></p></li>
-</ul>
-</li>
-<li><p><strong>issue</strong> <code class="docutils literal notranslate"><span class="pre">Github</span> <span class="pre">Issues</span></code></p></li>
-<li><p><strong>pipeline</strong> <code class="docutils literal notranslate"><span class="pre">Data</span> <span class="pre">Pipeline</span></code></p>
-<ul>
-<li><p><strong>egression</strong> <code class="docutils literal notranslate"><span class="pre">Downstream</span> <span class="pre">pipelines</span></code></p>
-<ul>
-<li><p><strong>csv_to_iceberg</strong> <code class="docutils literal notranslate"><span class="pre">Raw</span> <span class="pre">to</span> <span class="pre">Silver</span> <span class="pre">Layer</span></code></p></li>
-<li><p><strong>iceberg_to_csv</strong> <code class="docutils literal notranslate"><span class="pre">Silver</span> <span class="pre">Layer</span> <span class="pre">to</span> <span class="pre">Gold</span> <span class="pre">Layer</span></code></p></li>
-</ul>
-</li>
-<li><p><strong>ingestion</strong> <code class="docutils literal notranslate"><span class="pre">Upstream</span> <span class="pre">pipelines</span></code></p>
-<ul>
-<li><p><strong>bigquery_to_csv</strong> <code class="docutils literal notranslate"><span class="pre">Source</span> <span class="pre">to</span> <span class="pre">Raw</span></code></p></li>
-<li><p><strong>csv_to_iceberg</strong> <code class="docutils literal notranslate"><span class="pre">Raw</span> <span class="pre">to</span> <span class="pre">Silver</span> <span class="pre">Layer</span></code></p></li>
-<li><p><strong>paraquet_to_iceberg</strong> <code class="docutils literal notranslate"><span class="pre">Raw</span> <span class="pre">to</span> <span class="pre">Silver</span> <span class="pre">Layer</span></code></p></li>
-</ul>
-</li>
-<li><p><strong>scraper</strong> <code class="docutils literal notranslate"><span class="pre">HTML</span> <span class="pre">to</span> <span class="pre">CSV</span></code></p></li>
-</ul>
-</li>
-<li><p><strong>store</strong> <code class="docutils literal notranslate"><span class="pre">Data</span> <span class="pre">store</span></code></p>
-<ul>
-<li><p><strong>source</strong> <code class="docutils literal notranslate"><span class="pre">Source</span> <span class="pre">data</span> <span class="pre">class</span></code></p>
-<ul>
-<li><p><strong>gcp</strong> <code class="docutils literal notranslate"><span class="pre">GCP</span> <span class="pre">Storage</span></code></p>
-<ul>
-<li><p><strong>bigquery</strong> <code class="docutils literal notranslate"><span class="pre">GCP</span> <span class="pre">service</span></code></p></li>
-</ul>
-</li>
-<li><p><strong>json</strong> <code class="docutils literal notranslate"><span class="pre">Local</span> <span class="pre">JSON</span> <span class="pre">file</span></code></p></li>
-<li><p><strong>near</strong> <code class="docutils literal notranslate"><span class="pre">NEAR</span> <span class="pre">Data</span> <span class="pre">Lake</span></code></p></li>
-<li><p><strong>parquet</strong> <code class="docutils literal notranslate"><span class="pre">Local</span> <span class="pre">Parquet</span> <span class="pre">file</span></code></p></li>
-<li><p><strong>target</strong> <code class="docutils literal notranslate"><span class="pre">Target</span> <span class="pre">data</span> <span class="pre">class</span></code></p>
-<ul>
-<li><p><strong>iceberg</strong> <code class="docutils literal notranslate"><span class="pre">Local</span> <span class="pre">Data</span> <span class="pre">Lake</span> <span class="pre">house</span></code></p></li>
-</ul>
-</li>
-</ul>
-</li>
-</ul>
-</li>
-<li><p>etl.py <code class="docutils literal notranslate"><span class="pre">Sample</span> <span class="pre">pipeline</span></code></p></li>
-<li><p>exceptions.py <code class="docutils literal notranslate"><span class="pre">Known</span> <span class="pre">limitations</span></code></p></li>
-<li><p>hello_world.py <code class="docutils literal notranslate"><span class="pre">Test</span> <span class="pre">Feature</span></code></p></li>
-<li><p>is_function.py <code class="docutils literal notranslate"><span class="pre">Query</span> <span class="pre">Library</span> <span class="pre">Functions</span></code></p></li>
-<li><p>logger.py <code class="docutils literal notranslate"><span class="pre">Library</span> <span class="pre">logger</span></code></p></li>
-</ul>
-</li>
-<li><p><strong>real_world_use_cases</strong> <code class="docutils literal notranslate"><span class="pre">User</span> <span class="pre">Test</span> <span class="pre">Cases</span></code></p>
-<ul>
-<li><p><strong>near_data_lake</strong> <code class="docutils literal notranslate"><span class="pre">NEAR</span> <span class="pre">Coin</span> <span class="pre">Transactions</span></code></p>
-<ul>
-<li><p><strong>config</strong> <code class="docutils literal notranslate"><span class="pre">Pipeline</span> <span class="pre">configurations</span></code></p>
-<ul>
-<li><p><strong>sample_queries</strong> <code class="docutils literal notranslate"><span class="pre">NEAR</span> <span class="pre">Data</span> <span class="pre">Lake</span> <span class="pre">Transaction</span> <span class="pre">Table</span></code></p>
-<ul>
-<li><p>near_transaction.json <code class="docutils literal notranslate"><span class="pre">Query</span> <span class="pre">List</span></code></p></li>
-</ul>
-</li>
-<li><p>egression.json <code class="docutils literal notranslate"><span class="pre">Loading</span> <span class="pre">data</span> <span class="pre">in</span> <span class="pre">local</span> <span class="pre">data</span> <span class="pre">lake</span> <span class="pre">house</span></code></p></li>
-<li><p>ingestion.json <code class="docutils literal notranslate"><span class="pre">Extracting</span> <span class="pre">data</span> <span class="pre">from</span> <span class="pre">NEAR</span> <span class="pre">data</span> <span class="pre">lake</span> <span class="pre">house</span></code></p></li>
-</ul>
-</li>
-<li><p><strong>data</strong> <code class="docutils literal notranslate"><span class="pre">target</span> <span class="pre">path</span></code></p>
-<ul>
-<li><p><strong>near_transactions.db</strong> <code class="docutils literal notranslate"><span class="pre">Local</span> <span class="pre">data</span> <span class="pre">lake</span> <span class="pre">house</span></code></p>
-<ul>
-<li><p><strong>transactions</strong> <code class="docutils literal notranslate"><span class="pre">iceberg</span> <span class="pre">table</span></code></p>
-<ul>
-<li><p><strong>data</strong> <code class="docutils literal notranslate"><span class="pre">table</span> <span class="pre">records</span></code></p></li>
-<li><p><strong>metadata</strong> <code class="docutils literal notranslate"><span class="pre">iceberg</span> <span class="pre">table</span> <span class="pre">metadata</span></code></p></li>
-</ul>
-</li>
-</ul>
-</li>
-<li><p>near_transactions_catalog.db <code class="docutils literal notranslate"><span class="pre">iceberg</span> <span class="pre">local</span> <span class="pre">data</span> <span class="pre">catalog</span></code></p></li>
-</ul>
-</li>
-<li><p><strong>reports</strong> <code class="docutils literal notranslate"><span class="pre">Production</span> <span class="pre">analysis</span></code></p>
-<ul>
-<li><p>get_data.py <code class="docutils literal notranslate"><span class="pre">Get</span> <span class="pre">insights</span></code></p></li>
-<li><p>put_data.py <code class="docutils literal notranslate"><span class="pre">Refresh</span> <span class="pre">Gold</span> <span class="pre">Layer</span></code></p></li>
-</ul>
-</li>
-<li><p>near_transactions.csv <code class="docutils literal notranslate"><span class="pre">Output</span></code></p></li>
-</ul>
-</li>
-<li><p><strong>nyc_yello_taxi_dataset</strong> <code class="docutils literal notranslate"><span class="pre">NYC</span> <span class="pre">Yello</span> <span class="pre">Taxis</span> <span class="pre">Rides</span></code></p>
-<ul>
-<li><p><strong>config</strong> <code class="docutils literal notranslate"><span class="pre">Pipeline</span> <span class="pre">configurations</span></code></p>
-<ul>
-<li><p>egression.json <code class="docutils literal notranslate"><span class="pre">Loading</span> <span class="pre">data</span> <span class="pre">in</span> <span class="pre">local</span> <span class="pre">data</span> <span class="pre">lake</span> <span class="pre">house</span></code></p></li>
-<li><p>egression_payments.json <code class="docutils literal notranslate"><span class="pre">Loading</span> <span class="pre">payments</span> <span class="pre">report</span> <span class="pre">in</span> <span class="pre">Gold</span> <span class="pre">Layer</span></code></p></li>
-<li><p>ingestion.json <code class="docutils literal notranslate"><span class="pre">Extracting</span> <span class="pre">data</span> <span class="pre">from</span> <span class="pre">local</span> <span class="pre">parquet</span> <span class="pre">file</span></code></p></li>
-</ul>
-</li>
-<li><p><strong>data</strong> <code class="docutils literal notranslate"><span class="pre">target</span> <span class="pre">path</span></code></p>
-<ul>
-<li><p><strong>nyc_yello_taxi_dataset.db</strong> <code class="docutils literal notranslate"><span class="pre">Local</span> <span class="pre">data</span> <span class="pre">lake</span> <span class="pre">house</span></code></p>
-<ul>
-<li><p><strong>rides</strong> <code class="docutils literal notranslate"><span class="pre">iceberg</span> <span class="pre">table</span></code></p>
-<ul>
-<li><p><strong>data</strong>  <code class="docutils literal notranslate"><span class="pre">table</span> <span class="pre">records</span></code></p></li>
-<li><p><strong>metadata</strong> <code class="docutils literal notranslate"><span class="pre">iceberg</span> <span class="pre">table</span> <span class="pre">metadata</span></code></p></li>
-</ul>
-</li>
-</ul>
-</li>
-<li><p>nyc_yellow_taxi_dataset_catalog.db <code class="docutils literal notranslate"><span class="pre">iceberg</span> <span class="pre">local</span> <span class="pre">data</span> <span class="pre">catalog</span></code></p></li>
-<li><p>nyc_yellow_taxi_rides.csv <code class="docutils literal notranslate"><span class="pre">Ouput</span></code></p></li>
-</ul>
-</li>
-<li><p><strong>reports</strong> <code class="docutils literal notranslate"><span class="pre">Production</span> <span class="pre">analysis</span></code></p>
-<ul>
-<li><p>export_catalog.py <code class="docutils literal notranslate"><span class="pre">Saves</span> <span class="pre">local</span> <span class="pre">iceberg</span> <span class="pre">catalog</span> <span class="pre">in</span> <span class="pre">CSV</span></code></p></li>
-<li><p>get_data.py <code class="docutils literal notranslate"><span class="pre">Create</span> <span class="pre">Gold</span> <span class="pre">Layer</span></code></p></li>
-<li><p>get_report.py <code class="docutils literal notranslate"><span class="pre">Updates</span> <span class="pre">Gold</span> <span class="pre">Layer</span></code></p></li>
-<li><p>put_data.py <code class="docutils literal notranslate"><span class="pre">Refreshes</span> <span class="pre">Gold</span> <span class="pre">Layer</span></code></p></li>
-</ul>
-</li>
-<li><p>monthly_reporting.md <code class="docutils literal notranslate"><span class="pre">Report</span> <span class="pre">in</span> <span class="pre">MD</span></code></p></li>
-</ul>
-</li>
-</ul>
-</li>
-<li><p><strong>tests</strong> <code class="docutils literal notranslate"><span class="pre">PyTest</span> <span class="pre">Unit</span> <span class="pre">testing</span></code></p>
-<ul>
-<li><p>test_gcp_connection.py <code class="docutils literal notranslate"><span class="pre">Testing</span> <span class="pre">GCP</span> <span class="pre">Login</span></code></p></li>
-</ul>
-</li>
-</ul>
-</li>
-</ul>
-</section>
-<section id="plan">
-<h2>Plan<a class="headerlink" href="#plan" title="Link to this heading"></a></h2>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>Milestone</p></th>
-<th class="head"><p>Epic</p></th>
-<th class="head"><p>Target Date</p></th>
-<th class="head"><p>Delivery Date</p></th>
-<th class="head"><p>Comment</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>0.1.0</p></td>
-<td><p>HelloWorld</p></td>
-<td><p>1st Oct 24</p></td>
-<td><p>1st Oct 24</p></td>
-<td><p>Good Start</p></td>
-</tr>
-<tr class="row-odd"><td><p>0.1.1</p></td>
-<td><p>Ingestion</p></td>
-<td><p>31st Oct 24</p></td>
-<td><p>5th Nov 24</p></td>
-<td><p>First Release: <em>Completed in 2 Sprints</em></p></td>
-</tr>
-<tr class="row-even"><td><p>0.1.2</p></td>
-<td><p>Warehousing</p></td>
-<td><p>15th Nov 24</p></td>
-<td><p>TBD</p></td>
-<td><p>Coming Soon</p></td>
-</tr>
-<tr class="row-odd"><td><p>0.1.3</p></td>
-<td><p>Orchestration</p></td>
-<td><p>29th Nov 24</p></td>
-<td><p>TBD</p></td>
-<td><p>Coming Soon</p></td>
-</tr>
-<tr class="row-even"><td><p>0.1.4</p></td>
-<td><p>Self Serving Gold Layer</p></td>
-<td><p>29th Nov 24</p></td>
-<td><p>TBD</p></td>
-<td><p>Coming Soon</p></td>
-</tr>
-<tr class="row-odd"><td><p>0.1.5</p></td>
-<td><p>Monitoring</p></td>
-<td><p>29th Nov 24</p></td>
-<td><p>TBD</p></td>
-<td><p>Coming Soon</p></td>
-</tr>
-<tr class="row-even"><td><p>0.1.6</p></td>
-<td><p>BI Reporting Dashboard</p></td>
-<td><p>31st Dec 24</p></td>
-<td><p>TBD</p></td>
-<td><p>Coming Soon</p></td>
-</tr>
-<tr class="row-odd"><td><p>0.1.7</p></td>
-<td><p>Data Science Insights</p></td>
-<td><p>31st Dec 24</p></td>
-<td><p>TBD</p></td>
-<td><p>Coming Soon</p></td>
-</tr>
-<tr class="row-even"><td><p>0.1.8</p></td>
-<td><p>LLM</p></td>
-<td><p>31st Dec 24</p></td>
-<td><p>TBD</p></td>
-<td><p>Coming Soon</p></td>
-</tr>
-<tr class="row-odd"><td><p>0.1.9</p></td>
-<td><p>Launch Documentation</p></td>
-<td><p>30th Nov 24</p></td>
-<td><p>TBD</p></td>
-<td><p>Coming Soon</p></td>
-</tr>
-<tr class="row-even"><td><p>1.0.0</p></td>
-<td><p>Ready for Production</p></td>
-<td><p>1st Nov 24</p></td>
-<td><p>TBD</p></td>
-<td><p>End Game</p></td>
-</tr>
-</tbody>
-</table>
-<section id="releases">
-<h3>Releases<a class="headerlink" href="#releases" title="Link to this heading"></a></h3>
-<ul class="simple">
-<li><p>[x] 0.1.0 : Done- Published Library on <a class="reference external" href="https://pypi.org/project/local-data-platform/">PyPI</a></p></li>
-<li><p>[ ] 0.1.1 : In Progress- <a class="reference external" href="https://github.com/tusharchou/local-data-platform/milestone/2">Demo BigQuery compatibility</a></p></li>
-<li><p>[x] 0.1.1 : Done- <a class="reference external" href="https://github.com/tusharchou/local-data-platform/issues/6">Documentation: Updated README to explain clearly problem and plan of excecution</a></p></li>
-<li><p>[ ] 0.1.2 : To-do- <a class="reference external" href="https://github.com/tusharchou/local-data-platform/milestone/5">Warehousing: DuckDB, Iceberg, DBT</a></p></li>
-<li><p>[ ] 0.1.3 : To-do- <a class="reference external" href="https://github.com/tusharchou/local-data-platform/milestone/6">Orchestration</a></p></li>
-<li><p>[ ] 0.1.4 : To-do- <a class="reference external" href="https://github.com/tusharchou/local-data-platform/milestone/11">Self Serving Gold Layer</a></p></li>
-<li><p>[ ] 0.1.5 : To-do- <a class="reference external" href="https://github.com/tusharchou/local-data-platform/milestone/10">Monitoring</a></p></li>
-<li><p>[ ] 0.1.6 : To-do- <a class="reference external" href="https://github.com/tusharchou/local-data-platform/milestone/9">Business Intelligence Reporting Dashboard</a></p></li>
-<li><p>[ ] 0.1.7 : To-do- <a class="reference external" href="https://github.com/tusharchou/local-data-platform/milestone/8">Data Science Insights</a></p></li>
-<li><p>[ ] 0.1.8 : To-do- <a class="reference external" href="https://github.com/tusharchou/local-data-platform/milestone/7">LLM</a></p></li>
-<li><p>[ ] 0.1.9 : To-do- <a class="reference external" href="https://github.com/tusharchou/local-data-platform/milestone/2">Launch Documentation</a></p></li>
-<li><p>[ ] 0.2.0 : To-do- <a class="reference external" href="https://github.com/tusharchou/local-data-platform/milestone/3">Cloud Integration</a></p></li>
-<li><p>[ ] 1.0.0 : To-do- Product</p></li>
-</ul>
-</section>
-<section id="references">
-<h3>References<a class="headerlink" href="#references" title="Link to this heading"></a></h3>
-<p><a class="reference external" href="https://py.iceberg.apache.org">iceberg-python</a></p>
-<p><a class="reference external" href="https://docs.near.org/concepts/advanced/near-lake-framework">near-data-lake</a></p>
-<p><a class="reference external" href="https://duckdb.org/docs/extensions/iceberg.html">duckdb</a></p>
-<section id="self-promotion">
-<h4>Self Promotion<a class="headerlink" href="#self-promotion" title="Link to this heading"></a></h4>
-<p><a class="reference external" href="https://medium.com/&#64;tushar.choudhary.de/reliable-cdc-apache-spark-ingestion-pipeline-using-iceberg-5d8f0fee6fd6">Reliable Change Data Capture using Iceberg</a></p>
-<p><a class="reference external" href="https://medium.com/&#64;tushar.choudhary.de/internals-of-apache-pyiceberg-10c2302a5c8b">Introduction to pyiceberg</a></p>
-</section>
-</section>
-</section>
+</div>
 </section>
 
 
            </div>
           </div>
-          <footer>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="recipes.html" class="btn btn-neutral float-right" title="Local Data Platform Recipes" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
 
   <hr/>
 

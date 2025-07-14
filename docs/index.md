@@ -1,30 +1,16 @@
 ---
-title: Local Data Platform
+title: Welcome to Local Data Platform
 ---
 
-```{include} ../README.md
-```
+# Hello, Local Data Platform!
 
-## Recipes
+Welcome to the documentation for **local-data-platform**, a Python library to build, test, and run a complete data platform on your local machine.
 
-See [Recipes for Local Data Platform](recipes.md) for practical usage examples, including reading JSON and building a JSON-to-Parquet pipeline.
+The core idea is to provide a "toy box for data"—a local environment where you can manage the entire data lifecycle, from ingestion to reporting, before needing to scale up to a cloud environment.
 
-## How to Read a JSON File
+## Getting Started
 
-You can read a JSON file using the `local-data-platform` library as follows:
+-   **[User Guide & Recipes](./recipes.md)**: Practical examples and step-by-step guides to help you use the library.
+-   **[API Reference](./api.md)**: Detailed information on the classes, functions, and modules.
 
-```python
-from local_data_platform.store.source.json import JsonSource
-
-# Initialize the JSON source with your file path
-json_source = JsonSource(path="path/to/your/file.json")
-
-# Read the data
-# (use .get() or .read() depending on your implementation)
-data = json_source.get()
-
-print(data)
-```
-
-> Replace `path/to/your/file.json` with the path to your JSON file.
-> The exact class/method may differ depending on your implementation.
+We hope you find this documentation helpful!

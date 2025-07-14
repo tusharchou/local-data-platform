@@ -4,7 +4,8 @@
 # You can set these variables from the command line, and also
 # from the environment for the first two.
 SPHINXOPTS    ?=
-SPHINXBUILD   ?= sphinx-build
+# Since this project uses Poetry, it's best to run sphinx-build in its environment.
+SPHINXBUILD   ?= poetry run sphinx-build
 SOURCEDIR     = .
 BUILDDIR      = _build
 
@@ -12,9 +13,16 @@ BUILDDIR      = _build
 help:
 	@$(SPHINXBUILD) -M help "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
 
-.PHONY: help Makefile
+.PHONY: help serve html clean
 
-# Catch-all target: route all unknown targets to Sphinx using the new
-# "make mode" option.  $(O) is meant as a shortcut for $(SPHINXOPTS).
-%: Makefile
-	@$(SPHINXBUILD) -M $@ "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
+html:
+	@$(SPHINXBUILD) -b html "$(SOURCEDIR)" "$(BUILDDIR)/html" $(SPHINXOPTS)
+
+# Target to build and host the documentation locally.
+serve:
+	@$(MAKE) html
+	@echo "Serving docs at http://localhost:8000/ (Ctrl-C to stop)"
+	@cd "$(BUILDDIR)/html" && python3 -m http.server 8000
+
+clean:
+	@rm -rf "$(BUILDDIR)"

@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>local_data_platform &mdash; My Personal Data Project  documentation</title>
+  <title>local_data_platform &mdash; local-data-platform  documentation</title>
       <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
   <!--[if lt IE 9]>
@@ -24,7 +24,7 @@
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search" >
-            <a href="../index.html" class="icon icon-home"> My Personal Data Project
+            <a href="../index.html" class="icon icon-home"> local-data-platform
           </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
@@ -34,21 +34,22 @@
   </form>
 </div>
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
-              <!-- Local TOC -->
-              <div class="local-toc"><ul>
-<li><a class="reference internal" href="#">local_data_platform</a><ul>
-<li><a class="reference internal" href="#id1">local_data_platform</a></li>
+              <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../recipes.html">Local Data Platform Recipes</a></li>
 </ul>
-</li>
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../source/api/modules.html">local_data_platform</a></li>
 </ul>
-</div>
+
         </div>
       </div>
     </nav>
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="../index.html">My Personal Data Project</a>
+          <a href="../index.html">local-data-platform</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -66,45 +67,8 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="module-local_data_platform">
-<span id="local-data-platform"></span><h1>local_data_platform<a class="headerlink" href="#module-local_data_platform" title="Link to this heading"></a></h1>
-<section id="id1">
-<h2>local_data_platform<a class="headerlink" href="#id1" title="Link to this heading"></a></h2>
-<p>This module provides core classes and enums for building a local data platform,
-including support for data formats, engines, tables, pipelines, and configuration.</p>
-</section>
-<p class="rubric">Classes</p>
-<table class="autosummary longtable docutils align-default">
-<tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="../api.html#local_data_platform.Base" title="local_data_platform.Base"><code class="xref py py-obj docutils literal notranslate"><span class="pre">Base</span></code></a>(*args, **kwargs)</p></td>
-<td><p>Abstract base class for all platform components.</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="../api.html#local_data_platform.Config" title="local_data_platform.Config"><code class="xref py py-obj docutils literal notranslate"><span class="pre">Config</span></code></a>(identifier, who, what, where, when, ...)</p></td>
-<td><p>Configuration for a data pipeline or resource.</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="../api.html#local_data_platform.Credentials" title="local_data_platform.Credentials"><code class="xref py py-obj docutils literal notranslate"><span class="pre">Credentials</span></code></a>(path, project_id)</p></td>
-<td><p>Credentials for accessing cloud or local resources.</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="../api.html#local_data_platform.Flow" title="local_data_platform.Flow"><code class="xref py py-obj docutils literal notranslate"><span class="pre">Flow</span></code></a>(*args, **kwargs)</p></td>
-<td><p>Represents a data pipeline (ETL flow) in the platform.</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="../api.html#local_data_platform.SupportedEngine" title="local_data_platform.SupportedEngine"><code class="xref py py-obj docutils literal notranslate"><span class="pre">SupportedEngine</span></code></a>(*values)</p></td>
-<td><p>Enum for supported data processing engines.</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="../api.html#local_data_platform.SupportedFormat" title="local_data_platform.SupportedFormat"><code class="xref py py-obj docutils literal notranslate"><span class="pre">SupportedFormat</span></code></a>(*values)</p></td>
-<td><p>Enum for supported data formats.</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="../api.html#local_data_platform.Table" title="local_data_platform.Table"><code class="xref py py-obj docutils literal notranslate"><span class="pre">Table</span></code></a>(name[, path])</p></td>
-<td><p>Represents a data table in the platform.</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="../api.html#local_data_platform.Transaction" title="local_data_platform.Transaction"><code class="xref py py-obj docutils literal notranslate"><span class="pre">Transaction</span></code></a>(query, desc)</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="../api.html#local_data_platform.Worker" title="local_data_platform.Worker"><code class="xref py py-obj docutils literal notranslate"><span class="pre">Worker</span></code></a>(name)</p></td>
-<td><p>Represents a compute engine or worker in the platform.</p></td>
-</tr>
-</tbody>
-</table>
+  <section id="local-data-platform">
+<h1>local_data_platform<a class="headerlink" href="#local-data-platform" title="Link to this heading"></a></h1>
 </section>
 
 

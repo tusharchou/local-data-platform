@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>API Reference &mdash; My Personal Data Project  documentation</title>
+  <title>API Reference &mdash; local-data-platform  documentation</title>
       <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
   <!--[if lt IE 9]>
@@ -24,7 +24,7 @@
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search" >
-            <a href="index.html" class="icon icon-home"> My Personal Data Project
+            <a href="index.html" class="icon icon-home"> local-data-platform
           </a>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -34,87 +34,22 @@
   </form>
 </div>
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
-              <!-- Local TOC -->
-              <div class="local-toc"><ul>
-<li><a class="reference internal" href="#">API Reference</a><ul>
-<li><a class="reference internal" href="#local-data-platform">local_data_platform</a></li>
-<li><a class="reference internal" href="#local_data_platform.Base"><code class="docutils literal notranslate"><span class="pre">Base</span></code></a><ul>
-<li><a class="reference internal" href="#local_data_platform.Base.get"><code class="docutils literal notranslate"><span class="pre">Base.get()</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Base.put"><code class="docutils literal notranslate"><span class="pre">Base.put()</span></code></a></li>
+              <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="recipes.html">Local Data Platform Recipes</a></li>
 </ul>
-</li>
-<li><a class="reference internal" href="#local_data_platform.Config"><code class="docutils literal notranslate"><span class="pre">Config</span></code></a><ul>
-<li><a class="reference internal" href="#local_data_platform.Config.get"><code class="docutils literal notranslate"><span class="pre">Config.get()</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Config.how"><code class="docutils literal notranslate"><span class="pre">Config.how</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Config.identifier"><code class="docutils literal notranslate"><span class="pre">Config.identifier</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Config.metadata"><code class="docutils literal notranslate"><span class="pre">Config.metadata</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Config.put"><code class="docutils literal notranslate"><span class="pre">Config.put()</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Config.what"><code class="docutils literal notranslate"><span class="pre">Config.what</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Config.when"><code class="docutils literal notranslate"><span class="pre">Config.when</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Config.where"><code class="docutils literal notranslate"><span class="pre">Config.where</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Config.who"><code class="docutils literal notranslate"><span class="pre">Config.who</span></code></a></li>
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="source/api/modules.html">local_data_platform</a></li>
 </ul>
-</li>
-<li><a class="reference internal" href="#local_data_platform.Credentials"><code class="docutils literal notranslate"><span class="pre">Credentials</span></code></a><ul>
-<li><a class="reference internal" href="#local_data_platform.Credentials.get"><code class="docutils literal notranslate"><span class="pre">Credentials.get()</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Credentials.path"><code class="docutils literal notranslate"><span class="pre">Credentials.path</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Credentials.project_id"><code class="docutils literal notranslate"><span class="pre">Credentials.project_id</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Credentials.put"><code class="docutils literal notranslate"><span class="pre">Credentials.put()</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#local_data_platform.Flow"><code class="docutils literal notranslate"><span class="pre">Flow</span></code></a><ul>
-<li><a class="reference internal" href="#local_data_platform.Flow.extract"><code class="docutils literal notranslate"><span class="pre">Flow.extract()</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Flow.get"><code class="docutils literal notranslate"><span class="pre">Flow.get()</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Flow.load"><code class="docutils literal notranslate"><span class="pre">Flow.load()</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Flow.name"><code class="docutils literal notranslate"><span class="pre">Flow.name</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Flow.put"><code class="docutils literal notranslate"><span class="pre">Flow.put()</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Flow.source"><code class="docutils literal notranslate"><span class="pre">Flow.source</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Flow.target"><code class="docutils literal notranslate"><span class="pre">Flow.target</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Flow.transform"><code class="docutils literal notranslate"><span class="pre">Flow.transform()</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#local_data_platform.SupportedEngine"><code class="docutils literal notranslate"><span class="pre">SupportedEngine</span></code></a><ul>
-<li><a class="reference internal" href="#local_data_platform.SupportedEngine.BIGQUERY"><code class="docutils literal notranslate"><span class="pre">SupportedEngine.BIGQUERY</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.SupportedEngine.DUCKDB"><code class="docutils literal notranslate"><span class="pre">SupportedEngine.DUCKDB</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.SupportedEngine.PYARROW"><code class="docutils literal notranslate"><span class="pre">SupportedEngine.PYARROW</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.SupportedEngine.PYSPARK"><code class="docutils literal notranslate"><span class="pre">SupportedEngine.PYSPARK</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#local_data_platform.SupportedFormat"><code class="docutils literal notranslate"><span class="pre">SupportedFormat</span></code></a><ul>
-<li><a class="reference internal" href="#local_data_platform.SupportedFormat.CSV"><code class="docutils literal notranslate"><span class="pre">SupportedFormat.CSV</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.SupportedFormat.ICEBERG"><code class="docutils literal notranslate"><span class="pre">SupportedFormat.ICEBERG</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.SupportedFormat.JSON"><code class="docutils literal notranslate"><span class="pre">SupportedFormat.JSON</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.SupportedFormat.PARQUET"><code class="docutils literal notranslate"><span class="pre">SupportedFormat.PARQUET</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#local_data_platform.Table"><code class="docutils literal notranslate"><span class="pre">Table</span></code></a><ul>
-<li><a class="reference internal" href="#local_data_platform.Table.get"><code class="docutils literal notranslate"><span class="pre">Table.get()</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Table.put"><code class="docutils literal notranslate"><span class="pre">Table.put()</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#local_data_platform.Transaction"><code class="docutils literal notranslate"><span class="pre">Transaction</span></code></a><ul>
-<li><a class="reference internal" href="#local_data_platform.Transaction.count"><code class="docutils literal notranslate"><span class="pre">Transaction.count()</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Transaction.desc"><code class="docutils literal notranslate"><span class="pre">Transaction.desc</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Transaction.index"><code class="docutils literal notranslate"><span class="pre">Transaction.index()</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Transaction.query"><code class="docutils literal notranslate"><span class="pre">Transaction.query</span></code></a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#local_data_platform.Worker"><code class="docutils literal notranslate"><span class="pre">Worker</span></code></a><ul>
-<li><a class="reference internal" href="#local_data_platform.Worker.get"><code class="docutils literal notranslate"><span class="pre">Worker.get()</span></code></a></li>
-<li><a class="reference internal" href="#local_data_platform.Worker.put"><code class="docutils literal notranslate"><span class="pre">Worker.put()</span></code></a></li>
-</ul>
-</li>
-</ul>
-</li>
-</ul>
-</div>
+
         </div>
       </div>
     </nav>
 
     <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
           <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
-          <a href="index.html">My Personal Data Project</a>
+          <a href="index.html">local-data-platform</a>
       </nav>
 
       <div class="wy-nav-content">
@@ -132,290 +67,8 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="module-local_data_platform">
-<span id="api-reference"></span><h1>API Reference<a class="headerlink" href="#module-local_data_platform" title="Link to this heading"></a></h1>
-<section id="local-data-platform">
-<h2>local_data_platform<a class="headerlink" href="#local-data-platform" title="Link to this heading"></a></h2>
-<p>This module provides core classes and enums for building a local data platform,
-including support for data formats, engines, tables, pipelines, and configuration.</p>
-</section>
-<dl class="py class">
-<dt class="sig sig-object py" id="local_data_platform.Base">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">local_data_platform.</span></span><span class="sig-name descname"><span class="pre">Base</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Base" title="Link to this definition"></a></dt>
-<dd><p>Bases: <a class="reference external" href="https://docs.python.org/3/library/abc.html#abc.ABC" title="(in Python v3.13)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ABC</span></code></a></p>
-<p>Abstract base class for all platform components.</p>
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Base.get">
-<span class="sig-name descname"><span class="pre">get</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Base.get" title="Link to this definition"></a></dt>
-<dd><p>Retrieve data or resource.</p>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Base.put">
-<span class="sig-name descname"><span class="pre">put</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Base.put" title="Link to this definition"></a></dt>
-<dd><p>Store data or resource.</p>
-</dd></dl>
-
-</dd></dl>
-
-<dl class="py class">
-<dt class="sig sig-object py" id="local_data_platform.Config">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">local_data_platform.</span></span><span class="sig-name descname"><span class="pre">Config</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">identifier</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">who</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">what</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">where</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">when</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">how</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#local_data_platform.Flow" title="local_data_platform.Flow"><span class="pre">Flow</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Config" title="Link to this definition"></a></dt>
-<dd><p>Bases: <a class="reference internal" href="#local_data_platform.Base" title="local_data_platform.Base"><code class="xref py py-class docutils literal notranslate"><span class="pre">Base</span></code></a></p>
-<p>Configuration for a data pipeline or resource.</p>
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Config.get">
-<span class="sig-name descname"><span class="pre">get</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Config.get" title="Link to this definition"></a></dt>
-<dd><p>Retrieve data or resource.</p>
-</dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.Config.how">
-<span class="sig-name descname"><span class="pre">how</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#local_data_platform.Config.how" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.Config.identifier">
-<span class="sig-name descname"><span class="pre">identifier</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#local_data_platform.Config.identifier" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.Config.metadata">
-<span class="sig-name descname"><span class="pre">metadata</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#local_data_platform.Flow" title="local_data_platform.Flow"><span class="pre">Flow</span></a></em><a class="headerlink" href="#local_data_platform.Config.metadata" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Config.put">
-<span class="sig-name descname"><span class="pre">put</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Config.put" title="Link to this definition"></a></dt>
-<dd><p>Store data or resource.</p>
-</dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.Config.what">
-<span class="sig-name descname"><span class="pre">what</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#local_data_platform.Config.what" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.Config.when">
-<span class="sig-name descname"><span class="pre">when</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#local_data_platform.Config.when" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.Config.where">
-<span class="sig-name descname"><span class="pre">where</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#local_data_platform.Config.where" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.Config.who">
-<span class="sig-name descname"><span class="pre">who</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#local_data_platform.Config.who" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-</dd></dl>
-
-<dl class="py class">
-<dt class="sig sig-object py" id="local_data_platform.Credentials">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">local_data_platform.</span></span><span class="sig-name descname"><span class="pre">Credentials</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/pathlib.html#pathlib.Path" title="(in Python v3.13)"><span class="pre">Path</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">project_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Credentials" title="Link to this definition"></a></dt>
-<dd><p>Bases: <a class="reference internal" href="#local_data_platform.Base" title="local_data_platform.Base"><code class="xref py py-class docutils literal notranslate"><span class="pre">Base</span></code></a></p>
-<p>Credentials for accessing cloud or local resources.</p>
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Credentials.get">
-<span class="sig-name descname"><span class="pre">get</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Credentials.get" title="Link to this definition"></a></dt>
-<dd><p>Retrieve data or resource.</p>
-</dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.Credentials.path">
-<span class="sig-name descname"><span class="pre">path</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/pathlib.html#pathlib.Path" title="(in Python v3.13)"><span class="pre">Path</span></a></em><a class="headerlink" href="#local_data_platform.Credentials.path" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.Credentials.project_id">
-<span class="sig-name descname"><span class="pre">project_id</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#local_data_platform.Credentials.project_id" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Credentials.put">
-<span class="sig-name descname"><span class="pre">put</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Credentials.put" title="Link to this definition"></a></dt>
-<dd><p>Store data or resource.</p>
-</dd></dl>
-
-</dd></dl>
-
-<dl class="py class">
-<dt class="sig sig-object py" id="local_data_platform.Flow">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">local_data_platform.</span></span><span class="sig-name descname"><span class="pre">Flow</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Flow" title="Link to this definition"></a></dt>
-<dd><p>Bases: <a class="reference internal" href="#local_data_platform.Base" title="local_data_platform.Base"><code class="xref py py-class docutils literal notranslate"><span class="pre">Base</span></code></a></p>
-<p>Represents a data pipeline (ETL flow) in the platform.</p>
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Flow.extract">
-<span class="sig-name descname"><span class="pre">extract</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Flow.extract" title="Link to this definition"></a></dt>
-<dd><p>Raise PipelineNotFound if extraction fails.</p>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Flow.get">
-<span class="sig-name descname"><span class="pre">get</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Flow.get" title="Link to this definition"></a></dt>
-<dd><p>Retrieve data or resource.</p>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Flow.load">
-<span class="sig-name descname"><span class="pre">load</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Flow.load" title="Link to this definition"></a></dt>
-<dd><p>Raise PipelineNotFound if loading fails.</p>
-</dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.Flow.name">
-<span class="sig-name descname"><span class="pre">name</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#local_data_platform.Flow.name" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Flow.put">
-<span class="sig-name descname"><span class="pre">put</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Flow.put" title="Link to this definition"></a></dt>
-<dd><p>Store data or resource.</p>
-</dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.Flow.source">
-<span class="sig-name descname"><span class="pre">source</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#local_data_platform.Table" title="local_data_platform.Table"><span class="pre">Table</span></a></em><a class="headerlink" href="#local_data_platform.Flow.source" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.Flow.target">
-<span class="sig-name descname"><span class="pre">target</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#local_data_platform.Table" title="local_data_platform.Table"><span class="pre">Table</span></a></em><a class="headerlink" href="#local_data_platform.Flow.target" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Flow.transform">
-<span class="sig-name descname"><span class="pre">transform</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Flow.transform" title="Link to this definition"></a></dt>
-<dd><p>Raise PipelineNotFound if transformation fails.</p>
-</dd></dl>
-
-</dd></dl>
-
-<dl class="py class">
-<dt class="sig sig-object py" id="local_data_platform.SupportedEngine">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">local_data_platform.</span></span><span class="sig-name descname"><span class="pre">SupportedEngine</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">values</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.SupportedEngine" title="Link to this definition"></a></dt>
-<dd><p>Bases: <a class="reference external" href="https://docs.python.org/3/library/enum.html#enum.Enum" title="(in Python v3.13)"><code class="xref py py-class docutils literal notranslate"><span class="pre">Enum</span></code></a></p>
-<p>Enum for supported data processing engines.</p>
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.SupportedEngine.BIGQUERY">
-<span class="sig-name descname"><span class="pre">BIGQUERY</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'BIGQUERY'</span></em><a class="headerlink" href="#local_data_platform.SupportedEngine.BIGQUERY" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.SupportedEngine.DUCKDB">
-<span class="sig-name descname"><span class="pre">DUCKDB</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'DUCKDB'</span></em><a class="headerlink" href="#local_data_platform.SupportedEngine.DUCKDB" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.SupportedEngine.PYARROW">
-<span class="sig-name descname"><span class="pre">PYARROW</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'PYARROW'</span></em><a class="headerlink" href="#local_data_platform.SupportedEngine.PYARROW" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.SupportedEngine.PYSPARK">
-<span class="sig-name descname"><span class="pre">PYSPARK</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'PYSPARK'</span></em><a class="headerlink" href="#local_data_platform.SupportedEngine.PYSPARK" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-</dd></dl>
-
-<dl class="py class">
-<dt class="sig sig-object py" id="local_data_platform.SupportedFormat">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">local_data_platform.</span></span><span class="sig-name descname"><span class="pre">SupportedFormat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">values</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.SupportedFormat" title="Link to this definition"></a></dt>
-<dd><p>Bases: <a class="reference external" href="https://docs.python.org/3/library/enum.html#enum.Enum" title="(in Python v3.13)"><code class="xref py py-class docutils literal notranslate"><span class="pre">Enum</span></code></a></p>
-<p>Enum for supported data formats.</p>
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.SupportedFormat.CSV">
-<span class="sig-name descname"><span class="pre">CSV</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'CSV'</span></em><a class="headerlink" href="#local_data_platform.SupportedFormat.CSV" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.SupportedFormat.ICEBERG">
-<span class="sig-name descname"><span class="pre">ICEBERG</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'ICEBERG'</span></em><a class="headerlink" href="#local_data_platform.SupportedFormat.ICEBERG" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.SupportedFormat.JSON">
-<span class="sig-name descname"><span class="pre">JSON</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'JSON'</span></em><a class="headerlink" href="#local_data_platform.SupportedFormat.JSON" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.SupportedFormat.PARQUET">
-<span class="sig-name descname"><span class="pre">PARQUET</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'PARQUET'</span></em><a class="headerlink" href="#local_data_platform.SupportedFormat.PARQUET" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-</dd></dl>
-
-<dl class="py class">
-<dt class="sig sig-object py" id="local_data_platform.Table">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">local_data_platform.</span></span><span class="sig-name descname"><span class="pre">Table</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/pathlib.html#pathlib.Path" title="(in Python v3.13)"><span class="pre">Path</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'/Users/tushar/data-eng/local-data-platform'</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Table" title="Link to this definition"></a></dt>
-<dd><p>Bases: <a class="reference internal" href="#local_data_platform.Base" title="local_data_platform.Base"><code class="xref py py-class docutils literal notranslate"><span class="pre">Base</span></code></a></p>
-<p>Represents a data table in the platform.</p>
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Table.get">
-<span class="sig-name descname"><span class="pre">get</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Table.get" title="Link to this definition"></a></dt>
-<dd><p>Raise TableNotFound if table cannot be accessed.</p>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Table.put">
-<span class="sig-name descname"><span class="pre">put</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Table.put" title="Link to this definition"></a></dt>
-<dd><p>Raise TableNotFound if table cannot be accessed.</p>
-</dd></dl>
-
-</dd></dl>
-
-<dl class="py class">
-<dt class="sig sig-object py" id="local_data_platform.Transaction">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">local_data_platform.</span></span><span class="sig-name descname"><span class="pre">Transaction</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">query</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">desc</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Transaction" title="Link to this definition"></a></dt>
-<dd><p>Bases: <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.13)"><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code></a></p>
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Transaction.count">
-<span class="sig-name descname"><span class="pre">count</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="positional-only-separator o"><abbr title="Positional-only parameter separator (PEP 570)"><span class="pre">/</span></abbr></span></em><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Transaction.count" title="Link to this definition"></a></dt>
-<dd><p>Return number of occurrences of value.</p>
-</dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.Transaction.desc">
-<span class="sig-name descname"><span class="pre">desc</span></span><a class="headerlink" href="#local_data_platform.Transaction.desc" title="Link to this definition"></a></dt>
-<dd><p>Alias for field number 1</p>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Transaction.index">
-<span class="sig-name descname"><span class="pre">index</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stop</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">9223372036854775807</span></span></em>, <em class="sig-param"><span class="positional-only-separator o"><abbr title="Positional-only parameter separator (PEP 570)"><span class="pre">/</span></abbr></span></em><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Transaction.index" title="Link to this definition"></a></dt>
-<dd><p>Return first index of value.</p>
-<p>Raises ValueError if the value is not present.</p>
-</dd></dl>
-
-<dl class="py attribute">
-<dt class="sig sig-object py" id="local_data_platform.Transaction.query">
-<span class="sig-name descname"><span class="pre">query</span></span><a class="headerlink" href="#local_data_platform.Transaction.query" title="Link to this definition"></a></dt>
-<dd><p>Alias for field number 0</p>
-</dd></dl>
-
-</dd></dl>
-
-<dl class="py class">
-<dt class="sig sig-object py" id="local_data_platform.Worker">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">local_data_platform.</span></span><span class="sig-name descname"><span class="pre">Worker</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Worker" title="Link to this definition"></a></dt>
-<dd><p>Bases: <a class="reference internal" href="#local_data_platform.Base" title="local_data_platform.Base"><code class="xref py py-class docutils literal notranslate"><span class="pre">Base</span></code></a></p>
-<p>Represents a compute engine or worker in the platform.</p>
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Worker.get">
-<span class="sig-name descname"><span class="pre">get</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Worker.get" title="Link to this definition"></a></dt>
-<dd><p>Raise EngineNotFound if engine is not supported.</p>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="local_data_platform.Worker.put">
-<span class="sig-name descname"><span class="pre">put</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#local_data_platform.Worker.put" title="Link to this definition"></a></dt>
-<dd><p>Raise EngineNotFound if engine is not supported.</p>
-</dd></dl>
-
-</dd></dl>
-
+  <section id="api-reference">
+<h1>API Reference<a class="headerlink" href="#api-reference" title="Link to this heading"></a></h1>
 </section>
 
 
