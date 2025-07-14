@@ -1,6 +1,14 @@
-.idea/local-data-platform.iml
-.idea/misc.xml
-.idea/modules.xml
-.idea/vcs.xml
-.idea/workspace.xml
-**/__pycache__/
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# MkDocs
+site/
+docs/_build/
+
+# Virtual environment
+.venv/
+
+# Databases
+*.db
