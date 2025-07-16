@@ -2,6 +2,9 @@ version: 2
 
 build:
   os: ubuntu-22.04
+  jobs:
+    pre_build:
+      - "python docs/scripts/generate_issue_list.py"
   tools:
     python: "3.12"
 
@@ -10,7 +13,6 @@ mkdocs:
 
 python:
   install:
+    - requirements: docs/requirements.txt
     - method: pip
       path: .
-      extra_requirements:
-        - docs

@@ -12,7 +12,6 @@ nav:
   - API Reference: api.md
   - Contributing: 
       - User Issues: user_issues.md
-      - User Issues List: user_issues_list.md
       - Feature Requests: developer_feature_requests.md
 
 theme:
