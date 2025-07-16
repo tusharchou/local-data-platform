@@ -2,7 +2,7 @@ site_name: local-data-platform
 site_author: Local Data Platform core team
 copyright: 2024, Local Data Platform core team
 
-repo_url: https://github.com/your-org/local-data-platform # Please update this
+repo_url: https://github.com/tusharchou/local-data-platform
 repo_name: local-data-platform
 
 nav:
@@ -47,6 +47,7 @@ markdown_extensions:
   - pymdownx.snippets
   - toc:
       permalink: true
+      toc_depth: 3
 
 plugins:
   - search
@@ -55,6 +56,9 @@ plugins:
       handlers:
         python:
           options:
+            paths: [src]
             docstring_style: google
             members_order: source
             show_source: true
+            filters:
+              - "!^local_data_platform\\.real_world_use_cases"
