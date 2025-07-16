@@ -1,18 +1,21 @@
+# .readthedocs.yml
 version: 2
 
 build:
   os: ubuntu-22.04
-  jobs:
-    pre_build:
-      - "python docs/scripts/generate_issue_list.py"
   tools:
     python: "3.12"
+  jobs:
+    pre_build:
+      - python scripts/generate_github_docs.py
 
+# Configuration for MkDocs
 mkdocs:
   configuration: mkdocs.yml
 
+# Python dependencies
 python:
   install:
-    - requirements: docs/requirements.txt
+    - requirements: requirements.txt
     - method: pip
       path: .
