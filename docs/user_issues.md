@@ -1,6 +1,28 @@
-# Reporting User Issues
+# Open Issues
 
-{% include "includes/issue_list.md" %}
-
-The script needs a token to work. To work, you need to supply `GITHUB_TOKEN`.
-Make sure to create a new issue with the right category.
+-   [#91 Docs sidebar recipes](https://github.com/tusharchou/local-data-platform/pull/91)
+-   [#90 Fix readthedocs](https://github.com/tusharchou/local-data-platform/pull/90)
+-   [#89 Event driven User behaviour Analysis](https://github.com/tusharchou/local-data-platform/issues/89)
+-   [#88 Optimistic Concurrency Iceberg](https://github.com/tusharchou/local-data-platform/issues/88)
+-   [#87 Bump jinja2 from 3.1.4 to 3.1.5 in /docs in the pip group across 1 directory](https://github.com/tusharchou/local-data-platform/pull/87)
+-   [#83 V0.1.1 : pytest for BigQueryToCSV.extract()](https://github.com/tusharchou/local-data-platform/pull/83)
+-   [#82 V0.1.1 Adding pytest for bigquery](https://github.com/tusharchou/local-data-platform/pull/82)
+-   [#75 A python function to pull data from Snowflake](https://github.com/tusharchou/local-data-platform/issues/75)
+-   [#59 0.1.8 Query this catalog through prompt ](https://github.com/tusharchou/local-data-platform/issues/59)
+-   [#57 0.1.2 Warehousing: add duckdb, dbt and iceberg packages ](https://github.com/tusharchou/local-data-platform/issues/57)
+-   [#55 0.1.2 warehousing using dbt, duckdb and iceberg](https://github.com/tusharchou/local-data-platform/pull/55)
+-   [#50 0.1.3 Orchestration: cron and airflow](https://github.com/tusharchou/local-data-platform/pull/50)
+-   [#48 0.1.2 Warehousing: Excel to csv support](https://github.com/tusharchou/local-data-platform/issues/48)
+-   [#47 0.1.2 Reoccurring Customer Churn Analysis](https://github.com/tusharchou/local-data-platform/issues/47)
+-   [#45 0.1.4 DBT Transformation layer ](https://github.com/tusharchou/local-data-platform/issues/45)
+-   [#44 0.1.3 Orchestration using cron](https://github.com/tusharchou/local-data-platform/issues/44)
+-   [#42 0.1.3 Orchestration: using airflow](https://github.com/tusharchou/local-data-platform/issues/42)
+-   [#38 0.1.1 Demo: Questions by end user](https://github.com/tusharchou/local-data-platform/issues/38)
+-   [#33 0.1.1 Documentation: Read The Docs](https://github.com/tusharchou/local-data-platform/issues/33)
+-   [#29 0.1.1 Align on Product Framework](https://github.com/tusharchou/local-data-platform/issues/29)
+-   [#28 0.2.0 Product Requirements](https://github.com/tusharchou/local-data-platform/pull/28)
+-   [#27 0.1.9 Blog the class diagram](https://github.com/tusharchou/local-data-platform/issues/27)
+-   [#23 0.1.2 Implement Partitioning and Version Control](https://github.com/tusharchou/local-data-platform/issues/23)
+-   [#19 0.1.1 Create a Google BigQuery Client ](https://github.com/tusharchou/local-data-platform/issues/19)
+-   [#13 0.2.0 DosuBot : Github maintainer ](https://github.com/tusharchou/local-data-platform/issues/13)
+-   [#5 0.1.1 Setup Wiki](https://github.com/tusharchou/local-data-platform/issues/5)
