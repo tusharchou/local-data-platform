@@ -19,32 +19,22 @@ class CSV(Format):
         if not os.path.isfile(self.path):
             logger.error(f"This path {self.path} is invalid")
             raise FileNotFoundError
+        
+        logger.info(f"Reading CSV from {self.path}")
+        try:
+            df = csv.read_csv(self.path)
+        except Exception as e:
+            logger.error(f"Failed to read or parse CSV file at {self.path}: {e}")
+            raise IOError(f"Could not read CSV file at {self.path}") from e
 
-        logger.info(
-            f"""
-            reading CSV from {self.path}
-            """
-        )
-        df = csv.read_csv(self.path)
-        logger.info(
-            f"""
-            df type {type(df)} len {len(df)}
-            """
-        )
-        if df is not None:
-            return df
-        else:
-            raise FileNotFoundError(f"CSV file not found on path {self.path}")
+        logger.info(f"Successfully read {len(df)} records from {self.path}")
+        return df
 
     def put(self, df: Table):
-        logger.info(
-            f"""
-            Writing data from PyArrow Table of size {len(df)} records
-            """
-        )
-        if df is not None or len(df) > 0:
-            with open(self.path, "wb") as f:
-                csv.write_csv(df, f)
-        else:
-            logger.error("No data to write to CSV as the data is empty")
-            raise ValueError("No data to write")
+        if not df or len(df) == 0:
+            logger.error("No data to write to CSV as the DataFrame is empty or None.")
+            raise ValueError("Cannot write an empty or None DataFrame to CSV.")
+
+        logger.info(f"Writing {len(df)} records to CSV at {self.path}")
+        with open(self.path, "wb") as f:
+            csv.write_csv(df, f)

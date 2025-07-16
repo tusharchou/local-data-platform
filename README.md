@@ -28,7 +28,7 @@ This will help you understand how to read the repository. \
 
 The project follows a standard `src` layout for Python packages. Key directories include:
 - **src/local_data_platform/**: The main source code for the library.
-- **docs/**: Sphinx documentation sources.
+- **docs/**: MkDocs documentation sources.
 - **tests/**: The Pytest test suite.
 
 ## How to test Pre-release as a User

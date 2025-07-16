@@ -10,7 +10,7 @@ mkdocs:
 
 python:
   install:
-    - method: poetry
+    - method: pip
       path: .
-      with:
+      extra_requirements:
         - docs

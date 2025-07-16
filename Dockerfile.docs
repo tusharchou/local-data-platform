@@ -1,0 +1,35 @@
+# Dockerfile for building and hosting the documentation
+# This is a multi-stage build to create a small, optimized final image.
+
+# --- Stage 1: Builder ---
+# This stage installs all dependencies, copies the source code,
+# and builds the static documentation site.
+FROM python:3.12-slim AS builder
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/root/.local/bin:${PATH}"
+
+# Install Poetry
+RUN pip install --no-cache-dir pipx 
+RUN pipx install poetry
+
+# Set working directory
+WORKDIR /app 
+
+# First, copy all project files into the image.
+# This ensures README.md and src/ are available for the installation.
+COPY . .
+
+# Now that all files are present, install the dependencies.
+RUN poetry install --with docs
+
+RUN poetry run mkdocs build --strict
+
+# --- Stage 2: Server ---
+# This stage uses a lightweight Nginx server to host the static files.
+FROM nginx:1.25-alpine
+
+# Copy the built site from the builder stage to the Nginx server directory
+COPY --from=builder /app/site /usr/share/nginx/html
