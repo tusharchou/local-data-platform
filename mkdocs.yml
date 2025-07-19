@@ -18,9 +18,8 @@ nav:
       - Contributing: wiki/CONTRIBUTING
       - Branches: wiki/BRANCHES
       - Active Docs URLs: wiki/ACTIVE_DOCS_URLS
-  - User Guide:
-      - Recipes: recipes.md
-  - API Reference: api.md
+  - Recipes: recipes.md
+  - API Docs: api.md
   - Contributing: 
       - User Issues: user_issues.md
       - Feature Requests: developer_feature_requests.md
