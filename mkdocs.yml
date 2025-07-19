@@ -7,6 +7,16 @@ repo_name: local-data-platform
 
 nav:
   - Home: index.md
+  - Wiki:
+      - Contents: wiki/CONTENTS
+      - Project Overview: wiki/PROJECT_OVERVIEW
+      - Problem Statement: wiki/PROBLEM_STATEMENT
+      - Technical Specifications: wiki/TECHNICAL_SPECIFICATIONS
+      - Development & Documentation: wiki/DEVELOPMENT
+      - Project Structure: wiki/PROJECT_STRUCTURE
+      - Recipes & Examples: wiki/RECIPES
+      - Contributing: wiki/CONTRIBUTING
+      - Branches: wiki/BRANCHES
   - User Guide:
       - Recipes: recipes.md
   - API Reference: api.md
