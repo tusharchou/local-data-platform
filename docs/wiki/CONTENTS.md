@@ -2,13 +2,14 @@
 
 ## Contents
 
-- [Project Overview](./PROJECT_OVERVIEW.md)
-- [Problem Statement](./PROBLEM_STATEMENT.md)
-- [Technical Specifications](./TECHNICAL_SPECIFICATIONS.md)
-- [Development & Documentation](./DEVELOPMENT.md)
-- [Project Structure](./PROJECT_STRUCTURE.md)
-- [Recipes & Examples](./RECIPES.md)
-- [Contributing](./CONTRIBUTING.md)
+- [Project Overview](/wiki/PROJECT_OVERVIEW)
+- [Problem Statement](/wiki/PROBLEM_STATEMENT)
+- [Technical Specifications](/wiki/TECHNICAL_SPECIFICATIONS)
+- [Development & Documentation](/wiki/DEVELOPMENT)
+- [Project Structure](/wiki/PROJECT_STRUCTURE)
+- [Recipes & Examples](/wiki/RECIPES)
+- [Contributing](/wiki/CONTRIBUTING)
+- [Active Docs URLs](/wiki/ACTIVE_DOCS_URLS)
 - [License](../LICENSE)
 
 ---
