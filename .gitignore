@@ -5,3 +5,4 @@
 .idea/workspace.xml
 **/__pycache__/
 docs/_build/
+site/
