@@ -1,25 +1,20 @@
 # Makefile for the local-data-platform project
 
-.PHONY: help all install reinstall lint test docs serve-docs clean generate-docs verify-pymdownx
+.PHONY: help install lint test docs serve-docs clean
 
 # Default target to show help.
 help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all           Run all quality checks (lint and test)."
 	@echo "  help          Show this help message."
 	@echo "  install       Install project dependencies using Poetry."
 	@echo "  reinstall     Force a clean re-installation of all dependencies."
 	@echo "  lint          Run flake8 linter on the project."
 	@echo "  test          Run pytest tests."
-	@echo "  generate-docs Generate dynamic documentation content (e.g., issue lists)."
 	@echo "  docs          Build the MkDocs documentation."
 	@echo "  serve-docs    Build and serve the documentation locally on http://localhost:8000."
 	@echo "  clean         Remove temporary build files and caches."
-	@echo "  verify-pymdownx  Verify a specific documentation dependency."
-
-POETRY_RUN := poetry run
 
 # ==============================================================================
 # Development Setup
@@ -29,44 +24,46 @@ install:
 	@echo "--> Installing dependencies with Poetry..."
 	poetry install --with dev,docs
 
+
+POETRY_RUN := poetry run
+
 reinstall:
 	@echo "--> Removing existing virtual environment to ensure a clean state..."
-	@poetry env remove $$(poetry env info --path) || echo "No virtualenv found to remove, continuing..."
+	@poetry env remove $$(poetry env list --full-path | grep 'Activated' | cut -d' ' -f1) || echo "Could not remove the active virtualenv.  It may not exist, or you may have a permissions issue.  Please check permissions for /Users/tushar/Library/Caches/pypoetry/virtualenvs/"
 	@echo "--> Reinstalling all dependencies from scratch..."
 	@$(MAKE) install
 
 # ==============================================================================
 # Quality & Testing
+
+
+
+# ==============================================================================
+# Quality & Testing
 # ==============================================================================
 
-all: lint test
-	@echo "--> All quality checks passed successfully."
-
 lint:
+	@echo "Generating User issues tab"
+	$(POETRY_RUN) python3 docs/scripts/generate_issue_list.py
 	@echo "--> Linting with flake8..."
-	$(POETRY_RUN) flake8 src/ tests/
+	poetry run flake8 src/ tests/
 
 test:
+	@echo "Generating User issues tab"
+	$(POETRY_RUN) python3 docs/scripts/generate_issue_list.py
 	@echo "--> Running tests with pytest..."
-	$(POETRY_RUN) pytest tests/
+	poetry run pytest tests/
 
 # ==============================================================================
 # Documentation
-# ==============================================================================
-
-generate-docs:
-	@echo "--> Generating dynamic documentation content..."
-	$(POETRY_RUN) python3 docs/scripts/generate_issue_list.py
 
 docs:
-	@$(MAKE) generate-docs
 	@echo "--> Building documentation..."
-	$(POETRY_RUN) mkdocs build --strict
+	poetry run mkdocs build --strict
  
 serve-docs:
-	@$(MAKE) generate-docs
 	@echo "--> Serving documentation..."
-	$(POETRY_RUN) mkdocs serve
+	poetry run mkdocs serve
 
 # ==============================================================================
 # Cleaning
