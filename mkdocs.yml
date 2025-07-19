@@ -7,12 +7,21 @@ repo_name: local-data-platform
 
 nav:
   - Home: index.md
-  - User Guide:
-      - Recipes: recipes.md
+  - Recipes: recipes.md
   - API Reference: api.md
   - Contributing: 
+      - "How to Contribute": contributing.md
       - User Issues: user_issues.md
       - Feature Requests: developer_feature_requests.md
+      - PR Reviews: pr_reviews.md
+      - PR History: PR_HISTORY.md
+      - Dev Tooling Update: developer_tooling_update.md
+  - Project Wiki:
+      - Overview: wiki/PROJECT_OVERVIEW.md
+      - Problem Statement: wiki/PROBLEM_STATEMENT.md
+      - Technical Specs: wiki/TECHNICAL_SPECIFICATIONS.md
+      - Project Structure: wiki/PROJECT_STRUCTURE.md
+      - Development Process: wiki/DEVELOPMENT.md
 
 theme:
   name: material
