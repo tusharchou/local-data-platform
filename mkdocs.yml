@@ -7,23 +7,21 @@ repo_name: local-data-platform
 
 nav:
   - Home: index.md
-  - Wiki:
-      - Contents: wiki/CONTENTS
-      - Project Overview: wiki/PROJECT_OVERVIEW
-      - Problem Statement: wiki/PROBLEM_STATEMENT
-      - Technical Specifications: wiki/TECHNICAL_SPECIFICATIONS
-      - Development & Documentation: wiki/DEVELOPMENT
-      - Project Structure: wiki/PROJECT_STRUCTURE
-      - Recipes & Examples: wiki/RECIPES
-      - Contributing: wiki/CONTRIBUTING
-      - Branches: wiki/BRANCHES
-      - Active Docs URLs: wiki/ACTIVE_DOCS_URLS
   - Recipes: recipes.md
-  - API Docs: api.md
+  - API Reference: api.md
   - Contributing: 
+      - "How to Contribute": contributing.md
       - User Issues: user_issues.md
       - Feature Requests: developer_feature_requests.md
       - PR Reviews: pr_reviews.md
+      - PR History: PR_HISTORY.md
+      - Dev Tooling Update: developer_tooling_update.md
+  - Project Wiki:
+      - Overview: wiki/PROJECT_OVERVIEW.md
+      - Problem Statement: wiki/PROBLEM_STATEMENT.md
+      - Technical Specs: wiki/TECHNICAL_SPECIFICATIONS.md
+      - Project Structure: wiki/PROJECT_STRUCTURE.md
+      - Development Process: wiki/DEVELOPMENT.md
 
 theme:
   name: material
