@@ -30,4 +30,12 @@ A modern, modular, and developer-friendly platform for local data engineering, a
 
 ---
 
+## 📋 Top PRs to Review
+
+For project managers and senior contributors, this section highlights key pull requests that are ready for review.
+
+[Review Open Pull Requests](pr_reviews.md)
+
+---
+
 > Want to contribute? Check out the [Contributing Guide](/wiki/CONTRIBUTING)!

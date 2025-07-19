@@ -23,6 +23,7 @@ nav:
   - Contributing: 
       - User Issues: user_issues.md
       - Feature Requests: developer_feature_requests.md
+      - PR Reviews: pr_reviews.md
 
 theme:
   name: material
