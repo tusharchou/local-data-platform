@@ -5,10 +5,7 @@ description = "A Python library to build, test, and run a complete data platform
 authors = ["Local Data Platform core team <author@example.com>"]
 license = "Apache-2.0"
 readme = "README.md"
-packages = [
-    {include = "local_data_platform"},
-    {include = "scripts"}
-]
+packages = [{include = "local_data_platform", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.12"
