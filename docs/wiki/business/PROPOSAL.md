@@ -1,16 +1,17 @@
 # Smarter Tools for Local Businesses, Designed to Save Costs
 
 *From pricing analytics to AI automation, we craft data-first solutions that actually work.*
+> [**Talk to Us →**](#)
 
 ---
 
-## Our Services
+## Our Solutions
 
 Explore our plug-and-play solutions designed for businesses in tourism, retail, food, and more.
 
-| Service | Description | Call to Action |
+| Solutions | Description | Call to Action |
 | :--- | :--- | :--- |
-| **Product Analytics** | Understand user behavior and improve your product. | [View Details](#) |
+| **Agentic Marketing Analyser** | Understand user behavior and improve your product. | [View Details](#) |
 | **Photo Management & Easy Sharing** | Organize and share your visual assets effortlessly. | [Explore](#) |
 | **Fraud Detection** (Coming Soon) | Protect your business with our upcoming fraud detection tools. | [See Use Case](#) |
 

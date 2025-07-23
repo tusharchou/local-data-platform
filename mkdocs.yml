@@ -10,7 +10,7 @@ nav:
   - "About LDP": wiki/VISION.md
   - Business Solution: 
       - Business Problem: wiki/business/PROPOSAL.md
-      - Marketing Data Analysis: wiki/business/MARKETING_DATA_ANALYSIS.md
+      - Agentic Marketing Analyser: wiki/business/MARKETING_DATA_ANALYSIS.md
       - "Photo Management": wiki/usecases/PHOTO_MANAGEMENT.md
   - "Conceptual Workflow":
       - "Photo Management": wiki/workflow/PHOTO_MANAGEMENT.md
