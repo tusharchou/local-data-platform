@@ -12,7 +12,6 @@ A modern, modular, and developer-friendly platform for local data engineering, a
 
 ## 🏆 Top Issues to Contribute On
 
-**Sort by:** [Trending](#) | [Top](#) | [New](#)
 
 <!-- This section will be auto-populated by a script in the future. For now, add issues manually or with a placeholder. -->
 

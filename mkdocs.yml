@@ -6,6 +6,7 @@ repo_url: https://github.com/tusharchou/local-data-platform
 repo_name: local-data-platform
 
 nav:
+  - Home: index.md
   - "About LDP": wiki/VISION.md
   - "Use Case":
       - "Photo Management": wiki/usecases/PHOTO_MANAGEMENT.md
@@ -21,16 +22,6 @@ nav:
 
   - Contribute Now: 
       - "How To Contribute": wiki/plan/ISSUES.md
-      - Directory Structure: wiki/PROJECT_STRUCTURE.md
-      - Recipes: recipes.md
-      - API Docs: api.md
-      - "How to Contribute": contributing.md
-      - "Open Issues": user_issues.md
-      - "Feature Requests": developer_feature_requests.md
-      - Progress So far:
-          - "Review Open PRs": pr_reviews.md
-          - "Merged PRs": PR_HISTORY.md
-          - "Recently Closed": closed_items.md
   - Project Wiki:
       - Overview: wiki/PROJECT_OVERVIEW.md
       - Problem Statement: wiki/PROBLEM_STATEMENT.md
