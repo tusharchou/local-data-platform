@@ -6,6 +6,7 @@ repo_url: https://github.com/tusharchou/local-data-platform
 repo_name: local-data-platform
 
 nav:
+  - Business Solution: wiki/business/PROPOSAL.md
   - Home: index.md
   - "About LDP": wiki/VISION.md
   - "Use Case":
