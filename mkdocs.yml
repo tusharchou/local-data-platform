@@ -6,22 +6,37 @@ repo_url: https://github.com/tusharchou/local-data-platform
 repo_name: local-data-platform
 
 nav:
-  - Home: index.md
-  - Recipes: recipes.md
-  - API Reference: api.md
-  - Contributing: 
+  - Home: wiki/VISION.md
+  - "Use Case":
+      - "Photo Management": wiki/usecases/PHOTO_MANAGEMENT.md
+  - "Conceptual Workflow":
+      - "Photo Management": wiki/workflow/PHOTO_MANAGEMENT.md
+  - Features:
+      - Library:
+          - "Base": wiki/library/BASE.md
+          - "Exceptions": wiki/library/EXCEPTION.md
+          - "Test": wiki/library/TEST.md
+      - Development:
+          - "Github": wiki/GITHUB.md
+
+  - Contribute Now:
+      - Directory Structure: wiki/PROJECT_STRUCTURE.md
+      - Recipes: recipes.md
+      - API Docs: api.md
       - "How to Contribute": contributing.md
-      - User Issues: user_issues.md
-      - Feature Requests: developer_feature_requests.md
-      - PR Reviews: pr_reviews.md
-      - PR History: PR_HISTORY.md
-      - Dev Tooling Update: developer_tooling_update.md
+      - "Open Issues": user_issues.md
+      - "Feature Requests": developer_feature_requests.md
+      - Progress So far:
+          - "Review Open PRs": pr_reviews.md
+          - "Merged PRs": PR_HISTORY.md
+          - "Recently Closed": closed_items.md
   - Project Wiki:
       - Overview: wiki/PROJECT_OVERVIEW.md
       - Problem Statement: wiki/PROBLEM_STATEMENT.md
       - Technical Specs: wiki/TECHNICAL_SPECIFICATIONS.md
       - Project Structure: wiki/PROJECT_STRUCTURE.md
       - Development Process: wiki/DEVELOPMENT.md
+
 
 theme:
   name: material
@@ -65,6 +80,7 @@ markdown_extensions:
 plugins:
   - search
   - autorefs
+  - tags
   - mkdocstrings:
       handlers:
         python:
