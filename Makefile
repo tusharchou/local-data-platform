@@ -54,13 +54,17 @@ test:
 # Documentation
 # ==============================================================================
 
+generate-docs:
+	@echo "--> Generating dynamic documentation content..."
+	$(POETRY_RUN) python3 docs/scripts/generate_issue_list.py
+
 docs:
-	@$(MAKE) clean
+	@$(MAKE) generate-docs
 	@echo "--> Building documentation..."
 	$(POETRY_RUN) mkdocs build --strict
  
 serve-docs:
-	@$(MAKE) clean
+	@$(MAKE) generate-docs
 	@echo "--> Serving documentation..."
 	$(POETRY_RUN) mkdocs serve
 

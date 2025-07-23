@@ -7,12 +7,30 @@ repo_name: local-data-platform
 
 nav:
   - Home: index.md
-  - User Guide:
-      - Recipes: recipes.md
-  - API Reference: api.md
-  - Contributing: 
-      - User Issues: user_issues.md
-      - Feature Requests: developer_feature_requests.md
+  - "About LDP": wiki/VISION.md
+  - Business Solution: 
+      - Business Problem: wiki/business/PROPOSAL.md
+      - Agentic Marketing Analyser: wiki/business/MARKETING_DATA_ANALYSIS.md
+      - "Photo Management": wiki/usecases/PHOTO_MANAGEMENT.md
+  - "Conceptual Workflow":
+      - "Photo Management": wiki/workflow/PHOTO_MANAGEMENT.md
+  - Features:
+      - Library:
+          - "Base": wiki/library/BASE.md
+          - "Exceptions": wiki/library/EXCEPTION.md
+          - "Test": wiki/library/TEST.md
+      - Development:
+          - "Github": wiki/GITHUB.md
+
+  - Contribute Now: 
+      - "How To Contribute": wiki/plan/ISSUES.md
+  - Project Wiki:
+      - Overview: wiki/PROJECT_OVERVIEW.md
+      - Problem Statement: wiki/PROBLEM_STATEMENT.md
+      - Technical Specs: wiki/TECHNICAL_SPECIFICATIONS.md
+      - Project Structure: wiki/PROJECT_STRUCTURE.md
+      - Development Process: wiki/DEVELOPMENT.md
+
 
 theme:
   name: material
@@ -56,6 +74,7 @@ markdown_extensions:
 plugins:
   - search
   - autorefs
+  - tags
   - mkdocstrings:
       handlers:
         python:

@@ -1,0 +1,43 @@
+# This GitHub Actions workflow appends PR history to docs/PR_HISTORY.md after a PR is merged into main or a release branch.
+
+name: Append PR History
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+      - 'release/**'
+
+jobs:
+  append-pr-history:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required to push a commit
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Ensure full git history for diff
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Append PR history
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_MERGER: ${{ github.event.pull_request.merged_by.login }}
+          PR_DESCRIPTION: ${{ github.event.pull_request.body }}
+        run: python scripts/append_pr_history.py
+
+      - name: Commit and push PR_HISTORY.md
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/PR_HISTORY.md
+          git commit -m "docs: update PR history for PR #${{ github.event.pull_request.number }}" || echo "No changes to commit"
+          git push
