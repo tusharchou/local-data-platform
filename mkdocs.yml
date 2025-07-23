@@ -19,7 +19,8 @@ nav:
       - Development:
           - "Github": wiki/GITHUB.md
 
-  - Contribute Now: wiki/project/ISSUE_LIST.md
+  - Contribute Now: 
+      - "How To Contribute": wiki/plan/ISSUES.md
       - Directory Structure: wiki/PROJECT_STRUCTURE.md
       - Recipes: recipes.md
       - API Docs: api.md
