@@ -6,7 +6,7 @@ repo_url: https://github.com/tusharchou/local-data-platform
 repo_name: local-data-platform
 
 nav:
-  - Home: wiki/VISION.md
+  - "About LDP": wiki/VISION.md
   - "Use Case":
       - "Photo Management": wiki/usecases/PHOTO_MANAGEMENT.md
   - "Conceptual Workflow":
@@ -19,7 +19,7 @@ nav:
       - Development:
           - "Github": wiki/GITHUB.md
 
-  - Contribute Now:
+  - Contribute Now: wiki/project/ISSUE_LIST.md
       - Directory Structure: wiki/PROJECT_STRUCTURE.md
       - Recipes: recipes.md
       - API Docs: api.md
