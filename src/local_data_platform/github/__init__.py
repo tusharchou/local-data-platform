@@ -72,18 +72,30 @@ def get_items(repo_owner: str, repo_name: str, state: str = "all") -> List[Item]
     except GitHubAPIError as e:
         print(e)
         return []
-
-    return [
-        Item(
+ 
+    items = []
+    for raw_item in raw_items:
+        # Safely parse datetime strings
+        created_at = datetime.fromisoformat(
+            raw_item['created_at'].replace('Z', '+00:00')
+        )
+        closed_at = None
+        if raw_item.get('closed_at'):
+            closed_at = datetime.fromisoformat(
+                raw_item['closed_at'].replace('Z', '+00:00')
+            )
+ 
+        item = Item(
             number=raw_item['number'],
             title=raw_item['title'],
             author=raw_item['user']['login'],
             description=raw_item.get('body'),
-            created_at=datetime.fromisoformat(raw_item['created_at'].replace('Z', '+00:00')),
-            closed_at=datetime.fromisoformat(raw_item['closed_at'].replace('Z', '+00:00')) if raw_item.get('closed_at') else None,
+            created_at=created_at,
+            closed_at=closed_at,
             url=raw_item['html_url'],
             is_pr='pull_request' in raw_item,
             labels=[label['name'] for label in raw_item.get('labels', [])]
         )
-        for raw_item in raw_items
-    ]
+        items.append(item)
+ 
+    return items

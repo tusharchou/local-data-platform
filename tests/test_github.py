@@ -1,9 +1,6 @@
-import pytest
 import requests
 from unittest.mock import patch, Mock
-from datetime import datetime
 from local_data_platform.github import get_items, Item
-from local_data_platform.exceptions import GitHubAPIError
 
 # Mock data representing a GitHub API response for one issue and one PR
 MOCK_API_RESPONSE = [

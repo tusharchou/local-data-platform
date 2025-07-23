@@ -6,12 +6,11 @@ repo_url: https://github.com/tusharchou/local-data-platform
 repo_name: local-data-platform
 
 nav:
+  - Home: index.md
+  - "About LDP": wiki/VISION.md
   - Business Solution: 
       - Business Problem: wiki/business/PROPOSAL.md
       - Marketing Data Analysis: wiki/business/MARKETING_DATA_ANALYSIS.md
-  - Home: index.md
-  - "About LDP": wiki/VISION.md
-  - "Use Case":
       - "Photo Management": wiki/usecases/PHOTO_MANAGEMENT.md
   - "Conceptual Workflow":
       - "Photo Management": wiki/workflow/PHOTO_MANAGEMENT.md

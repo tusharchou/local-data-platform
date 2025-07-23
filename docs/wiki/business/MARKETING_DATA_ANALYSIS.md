@@ -1,65 +1,69 @@
-# AI Agent for Marketing Data Analysis
+# Agentic Marketing Analyser
 
 ## Summary
 
-This feature proposes the integration of an AI-powered agent that delivers location-specific marketing insights to help tour and activity operators understand what's working — and what needs attention — across their local digital channels. Powered by a Local Data Platform (LDP), the agent transforms raw marketing data into clear, actionable recommendations.
+This feature proposes the integration of an AI-powered agent that delivers location-specific marketing insights to help tour and activity operators understand what’s working and what needs attention across their local digital channels. Powered by a Local Data Platform (LDP), the agent transforms raw marketing data into clear, actionable recommendations that drive bookings, visibility, and revenue.
 
 ## Problem It Solves
 
-Most small to mid-sized operators struggle to answer key questions:
+Most small to mid-sized tourism operators struggle with marketing decisions. Common pain points include:
 
 - "Which campaigns are working in which locations?"
 - "What should I post next to drive more bookings?"
 - "Why are bookings slow this week despite good reviews?"
-- "Where should I spend my marketing effort or ad budget?"
+- "Where should I focus marketing budget or effort?"
 
-They don’t have marketing teams — they need a smart guide that understands local nuances and acts like a digital marketing brain.
+They lack in-house marketing teams. What they need is a smart, always-on guide that understands local trends and acts like a data-driven marketing assistant.
 
 ## Feature Summary
 
 The AI agent will:
 - Aggregate social media, OTA, review, and campaign data.
-- Analyze performance by product, region, and timing.
-- Generate digestible insights with GPT-like natural language.
-- Recommend practical actions to improve visibility and bookings.
+- Analyze performance by product, region, season, and timing.
+- Generate insights in natural GPT-style language.
+- Recommend next best actions to improve visibility, conversions, and bookings.
 
-## 📍 Plan: 6-Month Rollout
+## Rollout Plan: 6-Month Delivery
 
 | Phase | Duration | Milestones |
 | :--- | :--- | :--- |
 | **Discovery & Planning** | 2 weeks | Source mapping, data schemas, risk planning |
-| **Core Infra Build** | 6 weeks | Pipelines, LDP engine setup |
-| **AI Layer + Prompt Engineering** | 6 weeks | Smart recommendation engine, tests |
-| **UI + Chatbot Integration** | 4 weeks | Dashboard surfaces + user interface |
-| **Pilot & Feedback Loop** | 3 weeks | Testing with real data from 3–5 cities |
-| **Launch & Handoff** | 2 weeks | Training, documentation, monitoring handover |
+| **Core Infrastructure Build** | 6 weeks | Pipeline development, LDP engine setup |
+| **AI Layer + Prompt Engineering** | 6 weeks | Smart recommendation engine, insight model tests |
+| **UI + Chatbot Integration** | 4 weeks | Marketing dashboard surfaces, chatbot responses |
+| **Pilot & Feedback Loop** | 3 weeks | Testing in 3–5 cities with live operator data |
+| **Launch & Handoff** | 2 weeks | Final training, documentation, and monitoring setup |
 
-## 💰 Cloud Cost (Client Side)
+## Cloud & Infra Cost (Client-Side Estimate)
 
 | Item | Estimated Allocation |
 | :--- | :--- |
-| Infra & Cloud Services (GPT-4 API, server infra, data storage) | ₹1.5–2 Cr |
+| Infra & Cloud Services (GPT-4 API, server infra, storage) | ₹1.5–2 Cr |
 | Security, DevOps, Monitoring | ₹0.75 Cr |
-| Contingency + Project Risk Buffer | ₹1.5 Cr |
+| Contingency + Risk Buffer | ₹1.5 Cr |
 
 ## Team Structure (10 Members)
 
-| Role | Count | Responsibility |
+| Role | Count | Responsibilities |
 | :--- | :--- | :--- |
-| Data Engineers | 2 | API integration, pipeline design, ETL, enrichment |
-| Backend Engineers | 2 | Core infrastructure, LDP services, performance |
-| AI/ML Engineers | 2 | GPT prompt engineering, insight models, feedback loop |
-| Product Manager | 1 | Timeline, coordination, delivery |
-| Product Designer | 1 | UX for insight surfaces, dashboards, chatbot flow |
-| Frontend Engineers | 2 | Insight UI, integration with dashboard + chatbot |
+| Data Engineers | 2 | API integration, pipeline design, enrichment |
+| Backend Engineers | 2 | Core infra, LDP performance, uptime |
+| AI/ML Engineers | 2 | GPT prompt design, training, insight generation |
+| Product Manager | 1 | Roadmap, delivery, stakeholder alignment |
+| Product Designer | 1 | UX/UI for dashboards, insight cards, chatbot flow |
+| Frontend Engineers | 2 | Dashboard & chatbot UI integration |
 
 ## Why This Will Work for You
 
-- **Unlock Your Data's Value:** You're sitting on a goldmine of booking and demand data — we’ll help unlock its value.
-- **Simple Pricing Tools:** Our system makes pricing as easy as editing a Google Doc, not learning complex Excel models.
-- **Data-Driven Decisions:** You’ll never guess the right price again — local demand, competition, and conversion trends will do it for you.
-- **Scalable Growth:** Designed to scale with your growth across cities, seasons, and customer types.
+- You're sitting on a goldmine of marketing and booking data — this platform unlocks its value.
+- AI makes local marketing insights human-readable and intuitive, not spreadsheet-heavy.
+- You’ll never have to guess the right channel, time, or campaign again.
+- Built to scale across cities, seasons, tours, and customer types.
+- Seamlessly integrates with your existing product ecosystem.
 
-## ✅ Next Step
+## Next Step
 
-> Let’s schedule a free 30-minute demo with your team.
+> Let’s schedule a free 30-minute discovery session with your team to:
+> - Walk through the use cases.
+> - Review how it can be embedded in your product.
+> - Map early adopters and go-to-market timeline.
