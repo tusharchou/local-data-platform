@@ -1,7 +1,3 @@
-[build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
-
 [tool.poetry]
 name = "local-data-platform"
 version = "0.1.1"
@@ -14,16 +10,22 @@ packages = [{include = "local_data_platform", from = "src"}]
 [tool.poetry.dependencies]
 python = "^3.12"
 pyiceberg = ">=0.5.0"
+requests = "*"
+beautifulsoup4 = "*"
 
-[tool.poetry.group.docs]
-optional = true
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0.0"
+flake8 = ">=5.0.0"
+
 [tool.poetry.group.docs.dependencies]
 mkdocs = "^1.6.0"
 mkdocs-material = "9.5.21"
 mkdocstrings = {extras = ["python"], version = "^0.25.0"}
 pymdown-extensions = "^10.8.1"
-[tool.poetry.group.dev]
-optional = true
-[tool.poetry.group.dev.dependencies]
-pytest = ">=7.0.0"
-flake8 = ">=5.0.0"
+
+[tool.poetry.scripts]
+fetch-rtd-urls = "scripts.fetch_rtd_urls:main"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

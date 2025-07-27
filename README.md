@@ -1,28 +1,13 @@
-Dear User
 # Local Data Platform
-### Explain this to me like I am five 
-Imagine you have a toy box where you keep all your favorite toys. 
-A local data platform is like that toy box, but for storing and 
-organizing important information instead of toys.
-Just like how your toy box, 
-**a local data platform keeps all your data** 
-(like pictures, documents, and other info) **in one place 
-so you can easily find, use and manage it.**
 
-It's really handy for keeping everything organized and in one spot! 🌟📦
+**local-data-platform** is a Python library to build, test, and run a complete data platform on your local machine. The core idea is to provide a "toy box for data"—a local environment where you can manage the entire data lifecycle, from ingestion to reporting, before needing to scale up to a cloud environment.
 
-Got it? What else are you curious about?
+This approach allows developers and businesses to save on cloud infrastructure costs during the initial development and testing phases, with a clear path for future scaling.
 
 > **Vision:** Local Data Platform is used as a python library to learn 
 > and operate data lake house locally. <br/>
 > **Mission:** Develop a python package which provides solutions for all stages
-> of data organisation, ranging from ingestion to reporting. 
-> The goal is that one can build data pipeline locally, test and 
-> easily scale up to cloud.  <br/>
-> <br/>
-> **By 2025,** local-data-platform is a python package that uses open source 
-> tools to orchestrate a data platform operation, locally, for development 
-> and testing. <br/>
+> of data organisation, ranging from ingestion to reporting. The goal is that one can build data pipelines locally, test them, and easily scale up to the cloud.
 
 ## Problem Statement
 
@@ -41,127 +26,38 @@ This will help you understand how to read the repository. \
 
 ## Directory Structure
 
-### local-data-platform/ `repository`
-- **.github/** `hidden folder`
-  - ISSUE-TEMPLATE/ `samples`
-    - bug_report.md `Report bugs here`
-    - custom.md `Report ad hoc issues here`
-    - feature_request.md `Request a new feature here`
-  - pull_request_template.md `Raise a pull request on the repo`
-
-- **docs/** `Documentation for Read the Docs`
-
-- **local-data-platform** `package`
-  - local_data_platform `library`
-    - hello_world.py `module`
-      - hello_world `function`
-        - prints 'Hello, world!' `output`
-
-- **samples/** `tutorials`
-    - bigQueryTutorial.py `Demo bigQuery compatibility here`
-- .gitignore `Mention files to ignore in your PR`
-- .readthedocs.yaml `Configuration for Read the Docs`
-- LICENSE `for legal purposes`
-- lumache.py `Template used in Sphinx projects for Read the Docs`
-- pyproject.toml `template configuration`
-- README.md `How to understand the repo`
-- README.rst `Configuration for Read the Docs`
+The project follows a standard `src` layout for Python packages. Key directories include:
+- **src/local_data_platform/**: The main source code for the library.
+- **docs/**: MkDocs documentation sources.
+- **tests/**: The Pytest test suite.
 
 ## How to test Pre-release as a User
 
-1. Check the directory structure \
-`ls`
-2. Change directory to local-data-platform   
-`cd local-data-platform`
-2. Install the dependencies listed in your pyproject.toml file \
-`$poetry install` 
-2. Execute your test suite to ensure everything is working as expected \
-`poetry run pytest`
-3. Run hello world command \
-`poetry run python hello_world.py`
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/tusharchou/local-data-platform.git
+    cd local-data-platform
+    ```
+2.  **Install dependencies:**
+    This project uses Poetry for dependency management. Use the Makefile for convenience.
+    ```bash
+    make install
+    ```
+3.  **Run the tests:**
+    ```bash
+    make test
+    ```
 
 
 
-## Package structure
-- **local-data-platform** `package`
-  - **dist** `Package distribution files`
-  - **docs** `Documentation`
-  - **local_data_platform** `library`
-    - **catalog** `Catalog your data`
-      - **local** `Catalog your data locally`
-        - **iceberg** `Catalog your data in iceberg SQL lite db`
-          - export.py  `Export your catalog data to csv`
-    - **cloud** `Interact with cloud service providers`
-      - **gcp** `Interact with Google Cloud Platform`
-        - **login** `Login to GCP to get API credentials`
-    - **engine** `Underlying processing Tech`
-    - **format** `Supported formats for storage`
-      - **csv** `Supports Google sheets and Excel sheets`
-      - **iceberg** `Supports Apache Iceberg`
-      - **parquet** `Supports Apache Parquet`
-    - **issue** `Github Issues`
-    - **pipeline** `Data Pipeline`
-      - **egression** `Downstream pipelines`
-        - **csv_to_iceberg** `Raw to Silver Layer`
-        - **iceberg_to_csv** `Silver Layer to Gold Layer`
-      - **ingestion** `Upstream pipelines`
-        - **bigquery_to_csv** `Source to Raw`
-        - **csv_to_iceberg** `Raw to Silver Layer`
-        - **paraquet_to_iceberg** `Raw to Silver Layer`
-      - **scraper** `HTML to CSV`
-    - **store** `Data store`
-      - **source** `Source data class`
-        - **gcp** `GCP Storage`
-          - **bigquery** `GCP service`
-        - **json** `Local JSON file`
-        - **near** `NEAR Data Lake`
-        - **parquet** `Local Parquet file`
-        - **target** `Target data class`
-          - **iceberg** `Local Data Lake house`
-    - etl.py `Sample pipeline`
-    - exceptions.py `Known limitations`
-    - hello_world.py `Test Feature`
-    - is_function.py `Query Library Functions`
-    - logger.py `Library logger`
-  - **real_world_use_cases** `User Test Cases`
-    - **near_data_lake** `NEAR Coin Transactions`
-      - **config** `Pipeline configurations`
-        - **sample_queries** `NEAR Data Lake Transaction Table`
-          - near_transaction.json `Query List`
-        - egression.json `Loading data in local data lake house`
-        - ingestion.json `Extracting data from NEAR data lake house`
-      - **data** `target path`
-        - **near_transactions.db** `Local data lake house`
-          - **transactions** `iceberg table`
-            - **data** `table records`
-            - **metadata** `iceberg table metadata`
-        - near_transactions_catalog.db `iceberg local data catalog`
-      - **reports** `Production analysis`
-        - get_data.py `Get insights`
-        - put_data.py `Refresh Gold Layer`
-      - near_transactions.csv `Output`
-    - **nyc_yello_taxi_dataset** `NYC Yello Taxis Rides`
-      - **config** `Pipeline configurations`
-        - egression.json `Loading data in local data lake house`
-        - egression_payments.json `Loading payments report in Gold Layer`
-        - ingestion.json `Extracting data from local parquet file`
-      - **data** `target path`
-        - **nyc_yello_taxi_dataset.db** `Local data lake house`
-          - **rides** `iceberg table`
-            - **data**  `table records`
-            - **metadata** `iceberg table metadata`
-        - nyc_yellow_taxi_dataset_catalog.db `iceberg local data catalog`
-        - nyc_yellow_taxi_rides.csv `Ouput`
-      - **reports** `Production analysis`
-        - export_catalog.py `Saves local iceberg catalog in CSV`
-        - get_data.py `Create Gold Layer`
-        - get_report.py `Updates Gold Layer`
-        - put_data.py `Refreshes Gold Layer`
-      - monthly_reporting.md `Report in MD`
-  - **tests** `PyTest Unit testing`
-    - test_gcp_connection.py `Testing GCP Login`
+## Package Modules
 
+The library's main modules are located in `src/local_data_platform`. Key modules include:
 
+*   **`store`**: Handles data storage and interaction with sources.
+*   **`pipeline`**: Provides tools for building ETL pipelines.
+*   **`catalog`**: Manages data cataloging with Apache Iceberg.
+*   **`cloud`**: Contains components for interacting with cloud services.
 ## Plan
 
 | Milestone | Epic                    | Target Date | Delivery Date | Comment                                 |
@@ -182,22 +78,17 @@ This will help you understand how to read the repository. \
 
 ### Releases
 
-- [x] 0.1.0 : Done- Published Library on [PyPI](https://pypi.org/project/local-data-platform/)
+#### Completed
+- **v0.1.0**: Initial release on [PyPI](https://pypi.org/project/local-data-platform/).
+- **v0.1.1**: Implemented data ingestion and improved documentation.
 
-- [ ] 0.1.1 : In Progress- [Demo BigQuery compatibility](https://github.com/tusharchou/local-data-platform/milestone/2)
+#### Upcoming
 
-- [x] 0.1.1 : Done- [Documentation: Updated README to explain clearly problem and plan of excecution](https://github.com/tusharchou/local-data-platform/issues/6)
-
-- [ ] 0.1.2 : To-do- [Warehousing: DuckDB, Iceberg, DBT](https://github.com/tusharchou/local-data-platform/milestone/5)
-- [ ] 0.1.3 : To-do- [Orchestration](https://github.com/tusharchou/local-data-platform/milestone/6)
-- [ ] 0.1.4 : To-do- [Self Serving Gold Layer](https://github.com/tusharchou/local-data-platform/milestone/11)
-- [ ] 0.1.5 : To-do- [Monitoring](https://github.com/tusharchou/local-data-platform/milestone/10)
-- [ ] 0.1.6 : To-do- [Business Intelligence Reporting Dashboard](https://github.com/tusharchou/local-data-platform/milestone/9)
-- [ ] 0.1.7 : To-do- [Data Science Insights](https://github.com/tusharchou/local-data-platform/milestone/8)
-- [ ] 0.1.8 : To-do- [LLM](https://github.com/tusharchou/local-data-platform/milestone/7)
-- [ ] 0.1.9 : To-do- [Launch Documentation](https://github.com/tusharchou/local-data-platform/milestone/2)
-- [ ] 0.2.0 : To-do- [Cloud Integration](https://github.com/tusharchou/local-data-platform/milestone/3)
-- [ ] 1.0.0 : To-do- Product
+- **v0.1.2**: Warehousing with DuckDB, Iceberg, and dbt.
+- **v0.1.3**: Pipeline orchestration.
+- **v0.1.9**: Full documentation launch.
+- **v0.2.0**: Cloud integration features.
+- **v1.0.0**: Production-ready release.
 
 
 ### References
