@@ -1,3 +1,6 @@
+Hi Gang
+
+
 # Local Data Platform
 
 **local-data-platform** is a Python library to build, test, and run a complete data platform on your local machine. The core idea is to provide a "toy box for data"—a local environment where you can manage the entire data lifecycle, from ingestion to reporting, before needing to scale up to a cloud environment.
