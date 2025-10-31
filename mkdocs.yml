@@ -7,6 +7,8 @@ repo_name: local-data-platform
 
 nav:
   - Home: index.md
+  - Recipes: recipes.md
+  - "API Docs": api.md
   - "About LDP": wiki/VISION.md
   - Business Solution: 
       - Business Problem: wiki/business/PROPOSAL.md
