@@ -1,0 +1,5 @@
+# scala-cli build output and IDE files
+.scala-build/
+.bsp/
+.metals/
+.vscode/
