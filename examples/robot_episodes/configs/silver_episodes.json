@@ -1,0 +1,94 @@
+{
+  "identifier": "silver_episodes",
+  "who": "robot learning data team",
+  "what": "validated episodes",
+  "where": "lakehouse",
+  "when": "after each upload batch",
+  "how": "quality-gated promotion from bronze (run.py)",
+  "metadata": {
+    "source": {
+      "name": "bronze_episodes",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "robots",
+        "warehouse_path": "warehouse"
+      }
+    },
+    "target": {
+      "name": "silver_episodes",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "robots",
+        "warehouse_path": "warehouse"
+      },
+      "write_mode": "append",
+      "partition_by": [
+        {
+          "column": "start_ts",
+          "transform": "day"
+        },
+        {
+          "column": "robot_id",
+          "transform": "bucket[8]"
+        }
+      ]
+    },
+    "quality": {
+      "on_failure": "fail",
+      "checks": [
+        {
+          "check": "unique",
+          "columns": [
+            "episode_id"
+          ]
+        },
+        {
+          "check": "not_null",
+          "columns": [
+            "task",
+            "operator",
+            "success",
+            "end_ts"
+          ]
+        },
+        {
+          "check": "accepted_values",
+          "column": "task",
+          "values": [
+            "pick_place",
+            "open_door",
+            "fold_towel",
+            "pour_water",
+            "stack_blocks",
+            "wipe_table"
+          ]
+        },
+        {
+          "check": "accepted_values",
+          "column": "robot_id",
+          "values": [
+            "h01",
+            "h02",
+            "h03",
+            "h04",
+            "h05",
+            "h06",
+            "h07",
+            "h08"
+          ]
+        },
+        {
+          "check": "range",
+          "column": "frame_count",
+          "min": 1
+        },
+        {
+          "check": "range",
+          "column": "duration_s",
+          "min": 0.5,
+          "max": 600
+        }
+      ]
+    }
+  }
+}
