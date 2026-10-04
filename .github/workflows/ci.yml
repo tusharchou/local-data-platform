@@ -1,56 +1,96 @@
-name: CI - Lint, Test, and Docs
+name: CI
 
 on:
-  pull_request:
-    branches: [ main, fix-readthedocs, docs-sidebar-recipes-from-fix-readthedocs ]
   push:
-    branches: [ main, fix-readthedocs, docs-sidebar-recipes-from-fix-readthedocs ]
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install poetry
-          poetry install --with dev,docs
-      - name: Lint with flake8
-        run: poetry run flake8 src/ tests/
+          python-version: "3.12"
+      - name: Install flake8
+        run: python -m pip install "flake8>=7"
+      - name: Lint
+        run: make lint PY=python
 
   test:
+    name: test (python ${{ matrix.python-version }}, pyiceberg ${{ matrix.pyiceberg }})
     runs-on: ubuntu-latest
-    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+        # 0.10.0 is the oldest pyiceberg that pyproject.toml allows (the staged commit protocol needs branch writes);
+        # "latest" is the newest release below 0.13.
+        pyiceberg: ["0.10.0", "latest"]
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - name: Install dependencies
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      # dev brings moto[server] (the S3 and Glue tests) and the MCP SDK; s3 and glue bring boto3.
+      - name: Install the package with the dev, bigquery, s3 and glue extras
+        env:
+          PYICEBERG_VERSION: ${{ matrix.pyiceberg }}
         run: |
           python -m pip install --upgrade pip
-          pip install poetry
-          poetry install --with dev,docs
-      - name: Run tests
-        run: poetry run pytest tests/
+          pin=""
+          if [ "$PYICEBERG_VERSION" != "latest" ]; then
+            pin="pyiceberg[pyarrow,sql-sqlite,pyiceberg-core]==$PYICEBERG_VERSION"
+          fi
+          python -m pip install -e ".[dev,bigquery,s3,glue]" $pin
+      - name: Show resolved versions
+        run: |
+          python -c "import duckdb, pyarrow, pyiceberg; print('pyiceberg', pyiceberg.__version__, '| pyarrow', pyarrow.__version__, '| duckdb', duckdb.__version__)"
+          python -m pip show mcp moto | grep -E "^(Name|Version)"
+      # Offline: the Spark and REST integration tests skip here. They run in jvm.yml, which is opt-in.
+      - name: Test
+        run: make test PY=python
+
+  build:
+    name: build and smoke-test the wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build
+        run: python -m pip install build
+      - name: Build the sdist and wheel
+        run: make build PY=python
+      - name: List the wheel's contents
+        run: python -m zipfile -l dist/*.whl
+      - name: Install the wheel in a fresh venv and run ldp
+        run: make smoke PYTHON=python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
 
   docs:
     runs-on: ubuntu-latest
-    needs: test
     steps:
       - uses: actions/checkout@v4
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install poetry
-          poetry install --with docs
-      - name: Build documentation
-        run: poetry run mkdocs build --strict
-
-# Only allow merge if all jobs succeed (enforced by branch protection rules in GitHub settings)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the docs requirements (the same file Read the Docs uses)
+        run: python -m pip install -r requirements.txt
+      - name: Build the docs
+        run: make docs PY=python

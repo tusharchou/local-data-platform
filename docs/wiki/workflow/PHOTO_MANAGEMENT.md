@@ -1,5 +1,10 @@
 ## Example
 
+!!! warning "A concept, not working code"
+    None of the modules this sketch imports (`storage_base`, `in_memory_storage`,
+    `photo_processing`, `local_server`) exist in local-data-platform. It shows how the photo use
+    case could look; there is no photo support today.
+
 Imagine a typical scenario where you have thousands of vacation photos. Here's how LDP helps:
 
 ```python

@@ -1,5 +1,10 @@
 # Smarter Tools for Local Businesses, Designed to Save Costs
 
+!!! note "A proposal"
+    This page describes a possible offering built on local-data-platform. None of it is a product
+    or a feature of the library today.
+
+
 *From pricing analytics to AI automation, we craft data-first solutions that actually work.*
 > [**Talk to Us →**](#)
 

@@ -1,47 +1,57 @@
-name: Upload Python Package to PyPI when a Release is Created
+name: Publish to PyPI
+
+# Runs when a GitHub release is published. PyPI trusted publishing authenticates the upload,
+# so the repo holds no PyPI token: the PyPI project must list this workflow and environment
+# as a trusted publisher.
 
 on:
   release:
-    types: [created]
-  workflow_dispatch:
+    types: [published]
+
+permissions:
+  contents: read
 
 jobs:
-  pypi-publish:
-    name: Publish release to PyPI
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check that the release tag matches the package version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          tag_version="${TAG##*v}"
+          if [ "$tag_version" != "$version" ]; then
+            echo "Release tag $TAG does not match version $version in pyproject.toml" >&2
+            exit 1
+          fi
+      - name: Build the sdist and wheel from the repo root
+        run: |
+          python -m pip install build
+          python -m build
+      - name: Smoke-test the wheel
+        run: make smoke PYTHON=python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
     runs-on: ubuntu-latest
     environment:
       name: production
       url: https://pypi.org/p/local-data-platform
     permissions:
       id-token: write
-
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/download-artifact@v4
         with:
-          python-version: "3.x"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install setuptools wheel poetry==1.8
-          cd local-data-platform
-          poetry install
-
-      - name: Clean up dist directory
-        run: |
-          cd local-data-platform
-          rm -rf dist/*
-
-      - name: Build package
-        run: |
-          cd local-data-platform
-          poetry build
-
-      - name: Publish package to PyPI
-        uses: pypa/gh-action-pypi-publish@v1.11.0
-        with: 
-          packages-dir: local-data-platform/dist/
-          
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

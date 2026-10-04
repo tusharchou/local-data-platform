@@ -16,14 +16,23 @@ _The full problem statement is detailed on the [Problem Statement](./PROBLEM_STA
 
 In an era where data privacy is paramount, LDP champions a local-first approach. Your data stays on your machine, under your control. This eliminates the need to upload sensitive information to third-party cloud services, giving you peace of mind while still enabling powerful analysis.
 
-## Key Features (Coming Soon!)
+## Key Features
 
-* **Offline Capability:** Work with your data anywhere, anytime, without an internet connection.
-* **Privacy by Design:** Your personal data never leaves your device unless you explicitly choose to share it.
-* **Scalable Personal Analytics:** Leverage libraries like Pandas, Dask, Polars, and more for efficient processing of large datasets.
-* **Community-Driven Solutions:** Collaborate with others to develop and share solutions for common personal data challenges.
-* **Extensible Architecture:** Easily integrate new data sources, processing modules, and visualization tools.
+What works today:
+
+* **Offline capability:** The default setup (a SQLite catalog and a local warehouse folder) needs no
+  server, no cloud account and no network.
+* **Privacy by design:** Your data stays in folders you choose unless you point a config at a remote
+  catalog or bucket.
+* **Extensible architecture:** New sources, targets and catalog types plug in through registries
+  (`register_pipeline`, `register_catalog_type`).
+
+What is planned, not built:
+
+* **More processing libraries:** Pandas, Dask or Polars engines. Today tables move as Apache Arrow
+  and SQL runs on DuckDB (Spark is experimental).
+* **Community-driven solutions:** Shared templates for common personal data problems.
 
 ## Get Started
 
-Ready to take control of your personal data? Head over to our [Installation](installation.md) guide to set up LDP on your machine.
+Ready to take control of your personal data? Head over to our [Quickstart](../quickstart.md) guide to set up LDP on your machine.
