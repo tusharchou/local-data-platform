@@ -6,3 +6,28 @@
 **/__pycache__/
 docs/_build/
 site/
+# Local build, test and demo artefacts
+.venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.DS_Store
+tmp/
+warehouse/
+ldp_demo/
+*.db
+# Run state LDP writes next to a config or under a warehouse (event and audit JSONL, locks, manifests)
+.ldp/
+# scala-cli, Bloop and Metals build output, at any depth (spark/, tools/rest_fixture/, examples/*/spark/).
+# They hold absolute local paths and the build machine's PATH.
+.scala-build/
+.bsp/
+.bloop/
+.metals/
+# Editor folders, coverage output and local env files
+.idea/
+.vscode/
+.coverage
+htmlcov/
+.env

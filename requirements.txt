@@ -1,6 +1,7 @@
+# Docs build requirements, used by Read the Docs (.readthedocs.yaml) and the CI docs job.
+# Keep in sync with [project.optional-dependencies] docs in pyproject.toml;
+# tests/test_packaging.py checks that they match.
 mkdocs>=1.6.0
 mkdocs-material==9.5.21
 mkdocstrings[python]>=0.25.0
 pymdown-extensions>=10.8.1
-pyyaml>=6.0
-requests
