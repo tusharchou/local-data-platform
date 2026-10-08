@@ -47,13 +47,16 @@ wrong copyright holder, and the package metadata said Apache-2.0.
   filter pushdown), falling back to the in-memory scan when the extension can't load. Also
   `attach_rest`, `snapshots` and `files`.
 - `engine.router`: `estimate_scan_bytes` and `choose_engine`. Nothing calls them yet.
-  `engine.spark` gains `spark_catalog_conf_for` for the `local`, `sql` and `rest` catalog types.
+  `engine.spark` gains `spark_catalog_conf_for` for the `local`, `sql` and `rest` catalog types. It reads
+  `password_env` and `properties_env` as `create_catalog` does, and every value read from
+  `properties_env` is masked wherever Spark settings are shown.
 - A read-only MCP server for agents, `local_data_platform.mcp_server`, run with `ldp mcp` (or
   `python -m local_data_platform.mcp_server`). It has `list_tables`, `describe_table`, `query`,
   `sample_rows`, `table_history` and `get_dataset` tools, single-statement `SELECT` guardrails, a
   locked-down DuckDB, row and time caps, a table allowlist, and an audit log written to JSONL and to
   the `_ldp.audit` Iceberg table (`IcebergSink.emit_audit`; `--no-iceberg-audit` turns the table
-  off). `examples/agent_client.py` drives it as a scripted agent.
+  off). The table refresh before a query stops at the time cap, and `stale_tables` lists the tables
+  it skipped or couldn't load. `examples/agent_client.py` drives it as a scripted agent.
 - Reproducible datasets: `datasets.pin`, `load`, `list_versions`, `list_datasets`, `get_version` and
   `export`, with JSON manifests under `<warehouse>/.ldp/datasets/` and a tag on each pinned
   snapshot.
@@ -124,6 +127,8 @@ wrong copyright holder, and the package metadata said Apache-2.0.
 - `how_to_setup.md`, a Poetry-based setup guide that no longer matched the build, and the unused
   root `poetry.lock`. `make install` and the README cover setup.
 - The empty `scripts/github_api.py`, which nothing imported.
+- `scripts/fetch_rtd_urls.py`, an unused Read the Docs crawler that still imported `beautifulsoup4`
+  after that dependency was dropped.
 
 ### Not done yet
 

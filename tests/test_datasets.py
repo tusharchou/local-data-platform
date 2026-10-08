@@ -254,6 +254,15 @@ def test_tag_protects_the_pinned_snapshot_from_expiry(table):
     assert load(untagged).num_rows == 30
 
 
+def test_a_pyiceberg_table_is_tagged_too(table, warehouse):
+    version = pin(table.table(), "raw", warehouse=warehouse)
+    assert version.tag == "ldp_ds_raw_v1"
+    current = table.table()
+    assert current.metadata.refs[version.tag].snapshot_id == version.snapshot_id
+    assert version.metadata_location == current.metadata_location
+    assert json.loads(open(version.manifest_path).read())["tag"] == version.tag
+
+
 def test_untagged_snapshot_can_expire_and_load_says_so(table):
     table.put(episodes(30, 5))
     old = table.table().snapshots()[0].snapshot_id

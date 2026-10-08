@@ -542,6 +542,34 @@ def test_a_fenced_attempt_can_neither_publish_nor_stage_again(seeded):
     assert seeded.table().current_snapshot().snapshot_id == head and ldp_snapshots(seeded, "F") == []
 
 
+@pytest.mark.parametrize("landed", [True, False], ids=["fence-landed", "fence-lost"])
+def test_a_fence_with_an_unknown_outcome_is_reconciled_and_the_write_goes_on(seeded, monkeypatch, landed):
+    run = commit.new_run_id()
+    zombie = stage(seeded.table(), rows([7], tag="zombie"), "append", ctx("G", attempt=1, run_id=run))
+    real = seeded.catalog.commit_table
+    fences = []
+
+    def first_fence_times_out(pyiceberg_table, requirements, updates):
+        if any(str(getattr(update, "ref_name", "")).endswith("_fenced") for update in updates):
+            fences.append(updates)
+            if len(fences) == 1:
+                if landed:
+                    real(pyiceberg_table, requirements, updates)
+                raise CommitStateUnknownException("gateway timeout")
+        return real(pyiceberg_table, requirements, updates)
+
+    monkeypatch.setattr(seeded.catalog, "commit_table", first_fence_times_out)
+
+    successor = seeded.put(rows([7], tag="succ"), mode="append", commit=ctx("G", attempt=2, run_id=run), policy=FAST)
+
+    assert len(fences) == (1 if landed else 2)  # a fence that landed is not committed again
+    refs = seeded.table().metadata.refs
+    assert zombie.branch not in refs and fence_marker(run, 1) in refs
+    assert not successor.skipped_duplicate and state(seeded)[7] == "succ7"
+    with pytest.raises(CommitFailedException):
+        publish(seeded.catalog, seeded.table(), zombie)
+
+
 def test_fence_is_idempotent_covers_unstaged_attempts_and_never_removes_main(seeded):
     run = commit.new_run_id()
     targets = [attempt_prefix(run, 1), branch_name(run, 2, 0), "not_an_ldp_branch"]

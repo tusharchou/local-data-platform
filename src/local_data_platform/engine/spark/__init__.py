@@ -35,7 +35,7 @@ import shlex
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -167,9 +167,13 @@ def spark_catalog_conf(catalog_name: str, catalog_db: str | os.PathLike,
     }
 
 
-def redact_conf(conf: Mapping[str, str]) -> dict[str, str]:
-    """A copy of ``conf`` with the values of secret settings (tokens, passwords, credentials) replaced by ``***``."""
-    return {key: REDACTED if _is_secret(key) else value for key, value in conf.items()}
+def redact_conf(conf: Mapping[str, str], secret_keys: Collection[str] = ()) -> dict[str, str]:
+    """A copy of ``conf`` with the values of secret settings replaced by ``***``.
+
+    Secret settings are those named like tokens, passwords and credentials, and the ``secret_keys``,
+    such as :attr:`ScalaSparkJob.secret_keys` (settings read from ``properties_env``, whatever their names).
+    """
+    return {key: REDACTED if _is_secret(key) or key in secret_keys else value for key, value in conf.items()}
 
 
 def _is_secret(key: str) -> bool:
@@ -177,12 +181,15 @@ def _is_secret(key: str) -> bool:
     return any(word in lowered for word in SECRET_WORDS)
 
 
-def _redact_command(command: Sequence[str]) -> list[str]:
-    """``command`` with the values of secret ``--conf key=value`` arguments replaced by ``***``."""
+def _redact_command(command: Sequence[str], secret_keys: Collection[str] = ()) -> list[str]:
+    """``command`` with the values of secret ``--conf key=value`` arguments replaced by ``***``.
+
+    Secret means what it means for :func:`redact_conf`.
+    """
     redacted = []
     for part in command:
         key, sep, _ = part.partition("=")
-        redacted.append(f"{key}={REDACTED}" if sep and _is_secret(key) else part)
+        redacted.append(f"{key}={REDACTED}" if sep and (_is_secret(key) or key in secret_keys) else part)
     return redacted
 
 
@@ -210,11 +217,19 @@ def _warehouse_location(value: str | os.PathLike, base_dir: str | os.PathLike | 
 
 
 def _catalog_properties(spec: Mapping[str, Any], prefix: str) -> dict[str, str]:
-    """The spec's ``properties``, as catalog settings. pyiceberg-only ``py-*`` keys are left out."""
-    properties = spec.get("properties") or {}
-    if not isinstance(properties, Mapping):
-        raise ConfigError(f"catalog spec 'properties' must be an object, got {type(properties).__name__}")
-    return {f"{prefix}.{key}": str(value) for key, value in properties.items() if not str(key).startswith("py-")}
+    """The spec's ``properties`` and ``properties_env``, as catalog settings, read as ``create_catalog`` reads them.
+
+    pyiceberg-only ``py-*`` keys are left out.
+    """
+    from local_data_platform.catalog.provider import _properties
+
+    return {f"{prefix}.{key}": str(value) for key, value in _properties(spec).items() if not key.startswith("py-")}
+
+
+def _env_property_keys(spec: Mapping[str, Any], prefix: str) -> frozenset[str]:
+    """The settings :func:`_catalog_properties` reads from ``properties_env``: secrets, whatever their names."""
+    names = spec.get("properties_env") or {}
+    return frozenset(f"{prefix}.{key}" for key in names if not str(key).startswith("py-"))
 
 
 def _session_conf(name: str) -> dict[str, str]:
@@ -277,20 +292,23 @@ def spark_catalog_conf_for(spec: Mapping[str, Any], base_dir: str | os.PathLike 
 
     * ``local`` (the default): ``{"identifier", "warehouse_path"}``, exactly :func:`spark_catalog_conf`
       for ``<warehouse>/<identifier>_catalog.db``.
-    * ``sql``: ``{"name", "uri", "warehouse"}``. ``uri`` is the SQLAlchemy URI pyiceberg's
+    * ``sql``: ``{"name", "uri", "warehouse", "password_env"}``. ``uri`` is the SQLAlchemy URI pyiceberg's
       ``SqlCatalog`` uses; Spark gets the matching JDBC URL (:func:`jdbc_url`) and
-      ``jdbc.schema-version=V1``. ``name`` is required, because ``JdbcCatalog`` only sees the rows
+      ``jdbc.schema-version=V1``. The password is read from the ``password_env`` environment variable
+      into ``jdbc.password``. ``name`` is required, because ``JdbcCatalog`` only sees the rows
       whose ``catalog_name`` equals it. PostgreSQL and MySQL need their JDBC driver on Spark's
       classpath (``org.postgresql:postgresql``, ``com.mysql:mysql-connector-j``).
     * ``rest``: ``{"uri", "warehouse", "name", "token_env", "credential_env"}``. The token and the
       OAuth2 credential are read from the named environment variables. ``name`` defaults to ``rest``.
 
-    For ``sql`` and ``rest``, ``properties`` are passed through as catalog settings (``s3.endpoint``,
-    ``io-impl``, ``header.*``, ...), except pyiceberg-only ``py-*`` keys. An ``s3://`` warehouse also
+    For ``sql`` and ``rest``, ``properties`` and ``properties_env`` (read from the environment) are
+    passed through as catalog settings (``s3.endpoint``, ``io-impl``, ``header.*``, ...), as
+    ``create_catalog`` reads them, except pyiceberg-only ``py-*`` keys. An ``s3://`` warehouse also
     needs ``org.apache.iceberg:iceberg-aws-bundle`` on Spark's classpath.
 
-    The result can hold secrets (a database password, a token): pass it to Spark, and log it only
-    through :func:`redact_conf`.
+    The result can hold secrets (a database password, a token, every ``properties_env`` value): pass it
+    to Spark, and log it only through :func:`redact_conf`, naming the ``properties_env`` settings in
+    ``secret_keys`` (as :class:`ScalaSparkJob` does).
 
     Args:
         spec: The catalog spec.
@@ -300,8 +318,8 @@ def spark_catalog_conf_for(spec: Mapping[str, Any], base_dir: str | os.PathLike 
         The settings, as strings.
 
     Raises:
-        ConfigError: If the spec is incomplete, names an unset environment variable, or has an
-            unsupported type.
+        ConfigError: If the spec is incomplete, names an unset environment variable, holds a
+            literal secret property, or has an unsupported type.
     """
     if not isinstance(spec, Mapping):
         raise ConfigError(f"catalog spec must be an object, got {type(spec).__name__}")
@@ -309,9 +327,14 @@ def spark_catalog_conf_for(spec: Mapping[str, Any], base_dir: str | os.PathLike 
     if kind == "local":
         return CatalogLocation.from_config(spec, base_dir=base_dir).conf()
     if kind == "sql":
+        from local_data_platform.catalog.provider import _secret
+
         name = _check_catalog_name(_spec_value(spec, "name", "sql"))
         prefix = f"spark.sql.catalog.{name}"
         url, driver_properties = jdbc_url(_spec_value(spec, "uri", "sql"), base_dir)
+        password = _secret(spec, "password_env")
+        if password is not None:
+            driver_properties["password"] = password
         conf = {
             **_session_conf(name),
             prefix: "org.apache.iceberg.spark.SparkCatalog",
@@ -522,7 +545,7 @@ class ScalaSparkJob:
         project_dir: The scala-cli project. Defaults to :data:`SPARK_PROJECT_DIR`.
         scala_cli: Path of ``scala-cli``. Found with :func:`find_scala_cli` when omitted.
         conf: Extra Spark settings, passed to the job as ``--conf key=value``. A ``sql`` spec's
-            ``properties`` are passed the same way, before these.
+            ``properties`` and ``properties_env`` are passed the same way, before these.
         show_rows: Rows the job prints for each result.
         timeout: Seconds to wait for the job. The first run downloads a JDK, Spark and Iceberg.
 
@@ -538,9 +561,13 @@ class ScalaSparkJob:
         self.namespace = _spec_namespace(config)
         self.project_dir = Path(project_dir) if project_dir is not None else SPARK_PROJECT_DIR
         extra: dict[str, str] = {}
+        #: Settings to mask wherever they are shown, besides the secret-looking names: the ones read from
+        #: ``properties_env``.
+        self.secret_keys: frozenset[str] = frozenset()
         if catalog_spec_type(config) != "local":
             prefix = f"spark.sql.catalog.{self.catalog.name}"
             extra = _catalog_properties(config, prefix)
+            self.secret_keys = _env_property_keys(config, prefix)
         self.conf = {**extra, **dict(conf or {})}
         if not isinstance(show_rows, int) or show_rows < 1:
             raise ValueError(f"show_rows must be a positive integer, got {show_rows!r}")
@@ -599,7 +626,7 @@ class ScalaSparkJob:
         if not (self.project_dir / "IcebergJob.scala").is_file():
             raise EngineNotFound(f"Scala Spark project not found at {self.project_dir}. It ships in the "
                                  "spark/ folder of a local-data-platform source checkout; pass project_dir=.")
-        logger.info("Running Scala Spark job: %s", shlex.join(_redact_command(command)))
+        logger.info("Running Scala Spark job: %s", shlex.join(_redact_command(command, self.secret_keys)))
         result = subprocess.run(list(command), capture_output=True, text=True, timeout=self.timeout, check=False)
         if result.returncode != 0 and check:
             detail = (result.stderr.strip() or result.stdout.strip())[-2000:]
@@ -887,13 +914,13 @@ def _cmd_spark(args: argparse.Namespace) -> int:
                         conf=_conf_pairs(args.conf), show_rows=args.show_rows, timeout=args.timeout)
     table = str(block["name"])
     if args.dry_run:
-        sys.stdout.write(shlex.join(_redact_command(job.command(table, args.output_table))) + "\n")
+        sys.stdout.write(shlex.join(_redact_command(job.command(table, args.output_table), job.secret_keys)) + "\n")
         return 0
     if not job.catalog.catalog_db.is_file():
         raise TableNotFound(f"Iceberg table {job.namespace}.{table} does not exist: there is no catalog at "
                             f"{job.catalog.catalog_db}. Run 'ldp run CONFIG' first, or check the catalog config.")
     if args.print_conf:
-        for key, value in sorted(redact_conf(job.print_conf(table)).items()):
+        for key, value in sorted(redact_conf(job.print_conf(table), job.secret_keys).items()):
             sys.stdout.write(f"{key}={value}\n")
         return 0
     result = job.run(table, output_table=args.output_table)

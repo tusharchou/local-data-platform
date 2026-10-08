@@ -665,17 +665,17 @@ class LakeTools:
     def query(self, sql: str, max_rows: int | None = None) -> dict[str, Any]:
         """Run one guarded read-only query."""
         cap = min(max_rows if max_rows is not None else DEFAULT_QUERY_ROWS, self.max_rows)
-        self.sandbox.refresh()
+        stale = self.sandbox.refresh(timeout_s=self.timeout_s)
         result = self.sandbox.query(sql, max_rows=cap, timeout_s=self.timeout_s)
-        return result_payload(result, cap)
+        return {**result_payload(result, cap), "stale_tables": stale}
 
     def sample_rows(self, table: str, n: int | None = None) -> dict[str, Any]:
         """The first ``n`` rows of a table."""
         exposed = self._resolve(table)
         cap = min(n if n is not None else DEFAULT_SAMPLE_ROWS, self.max_rows)
-        self.sandbox.refresh()
+        stale = self.sandbox.refresh(timeout_s=self.timeout_s)
         payload = result_payload(self.sandbox.sample(exposed.identifier, cap, timeout_s=self.timeout_s), cap)
-        return {"table": exposed.identifier, **payload}
+        return {"table": exposed.identifier, **payload, "stale_tables": stale}
 
     def table_history(self, table: str, limit: int | None = None) -> dict[str, Any]:
         """Snapshots newest first, and the table's branches and tags."""

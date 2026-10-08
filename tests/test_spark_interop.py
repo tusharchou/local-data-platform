@@ -539,6 +539,7 @@ def test_spark_catalog_conf_for_a_postgres_sql_spec_keeps_the_password_out_of_th
     ({"type": "glue", "name": "g", "warehouse": "s3://b"}, "supports catalog types local, sql, rest"),
     ({"type": "sql", "name": "a.b", "uri": "sqlite:///x.db", "warehouse": "wh"}, "catalog name"),
     ({"type": "rest", "uri": "http://x", "properties": ["a"]}, "'properties' must be an object"),
+    ({"type": "rest", "uri": "http://x", "properties": {"s3.secret-access-key": "k"}}, "properties_env"),
     ("nyc", "must be an object"),
 ])
 def test_spark_catalog_conf_for_rejects_bad_specs(spec, message):
@@ -572,6 +573,36 @@ def test_spark_catalog_conf_for_a_rest_spec_reads_secrets_from_the_environment(m
     with pytest.raises(ConfigError, match="LDP_TEST_REST_TOKEN, which is not set") as error:
         spark_catalog_conf_for(spec)
     assert "client:secret" not in str(error.value)
+
+
+def test_spark_catalog_conf_for_reads_password_env_and_properties_env_as_create_catalog_does(monkeypatch):
+    monkeypatch.setenv("LDP_TEST_PG_PASSWORD", "pg-s3cr3t")
+    monkeypatch.setenv("LDP_TEST_S3_SECRET", "s3-s3cr3t")
+    spec = {"type": "sql", "name": "lake", "uri": "postgresql+psycopg://ldp@db.internal:5432/iceberg",
+            "password_env": "LDP_TEST_PG_PASSWORD", "warehouse": "s3://bucket/wh",
+            "properties": {"s3.region": "eu-west-1"},
+            "properties_env": {"s3.secret-access-key": "LDP_TEST_S3_SECRET", "py-io-impl": "LDP_TEST_S3_SECRET"}}
+    conf = spark_catalog_conf_for(spec)
+    assert conf["spark.sql.catalog.lake.uri"] == "jdbc:postgresql://db.internal:5432/iceberg"
+    assert conf["spark.sql.catalog.lake.jdbc.user"] == "ldp"
+    assert conf["spark.sql.catalog.lake.jdbc.password"] == "pg-s3cr3t"
+    assert conf["spark.sql.catalog.lake.s3.region"] == "eu-west-1"
+    assert conf["spark.sql.catalog.lake.s3.secret-access-key"] == "s3-s3cr3t"
+    assert "spark.sql.catalog.lake.py-io-impl" not in conf
+    redacted = json.dumps(redact_conf(conf))
+    assert "pg-s3cr3t" not in redacted and "s3-s3cr3t" not in redacted
+
+    rest = {"type": "rest", "uri": "http://localhost:8181",
+            "properties_env": {"s3.secret-access-key": "LDP_TEST_S3_SECRET"}}
+    assert spark_catalog_conf_for(rest)["spark.sql.catalog.rest.s3.secret-access-key"] == "s3-s3cr3t"
+
+    monkeypatch.delenv("LDP_TEST_S3_SECRET")
+    with pytest.raises(ConfigError, match="'LDP_TEST_S3_SECRET', which is not set") as error:
+        spark_catalog_conf_for(spec)
+    assert "pg-s3cr3t" not in str(error.value)
+    monkeypatch.delenv("LDP_TEST_PG_PASSWORD")
+    with pytest.raises(ConfigError, match="'LDP_TEST_PG_PASSWORD', which is not set"):
+        spark_catalog_conf_for({**spec, "properties_env": {}})
 
 
 def test_scala_job_runs_on_a_sqlite_sql_spec(tmp_path):
@@ -608,6 +639,27 @@ def test_scala_job_never_logs_secret_settings(tmp_path, caplog):
     assert "spark.driver.memory=1g" in caplog.text
     assert "spark.sql.catalog.nyc.token=***" in caplog.text
     assert "s3cr3t" not in caplog.text and "k3y" not in caplog.text
+
+
+@posix_only
+def test_scala_job_passes_properties_env_and_never_logs_it(tmp_path, caplog, monkeypatch):
+    monkeypatch.setenv("LDP_TEST_S3_SECRET", "s3-s3cr3t")
+    monkeypatch.setenv("LDP_TEST_ADLS_KEY", "adls-k3y")
+    # adls.account-key isn't named like a secret; it is masked because it came from properties_env.
+    spec = {"type": "sql", "name": "lake", "uri": "sqlite:///cat.db", "warehouse": "wh", "namespace": "sales",
+            "properties_env": {"s3.secret-access-key": "LDP_TEST_S3_SECRET", "adls.account-key": "LDP_TEST_ADLS_KEY"}}
+    job = ScalaSparkJob(spec, base_dir=tmp_path, project_dir=_fake_project(tmp_path),
+                        scala_cli=_fake_scala_cli(tmp_path, "exit 0"))
+    assert job.job_args("orders")[-4:] == ["--conf", "spark.sql.catalog.lake.s3.secret-access-key=s3-s3cr3t",
+                                           "--conf", "spark.sql.catalog.lake.adls.account-key=adls-k3y"]
+    assert job.secret_keys == {"spark.sql.catalog.lake.s3.secret-access-key", "spark.sql.catalog.lake.adls.account-key"}
+    with caplog.at_level(logging.INFO, logger="local_data_platform.engine.spark"):
+        job.run("orders")
+    assert "spark.sql.catalog.lake.s3.secret-access-key=***" in caplog.text
+    assert "spark.sql.catalog.lake.adls.account-key=***" in caplog.text
+    assert "s3cr3t" not in caplog.text + repr(job) and "adls-k3y" not in caplog.text + repr(job)
+    assert redact_conf(dict(job.conf), job.secret_keys)["spark.sql.catalog.lake.adls.account-key"] == "***"
+    assert redact_conf({"a.b": "visible"}, job.secret_keys) == {"a.b": "visible"}
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -682,6 +734,26 @@ def test_ldp_spark_print_conf_redacts_secrets(tmp_path, capsys):
     args = _spark_parser().parse_args(["spark", str(config), "--scala-cli", str(scala_cli), "--print-conf"])
     assert args.handler(args) == 0
     assert capsys.readouterr().out.splitlines() == ["spark.sql.catalog.nyc.token=***", "spark.sql.defaultCatalog=nyc"]
+
+
+@posix_only
+def test_ldp_spark_redacts_secrets_read_from_properties_env(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("LDP_TEST_S3_SECRET", "s3-s3cr3t")
+    monkeypatch.setenv("LDP_TEST_AUTH", "Bearer h3ader")
+    config = _write_config(tmp_path, target={
+        "name": "orders", "format": "ICEBERG",
+        "catalog": {"type": "sql", "name": "lake", "uri": "sqlite:///cat.db", "warehouse": "wh", "namespace": "sales",
+                    "properties_env": {"s3.secret-access-key": "LDP_TEST_S3_SECRET",
+                                       "header.Authorization": "LDP_TEST_AUTH"}}})
+    (tmp_path / "cat.db").touch()
+    # Like the Scala job's --print-conf: print each --conf setting it was given.
+    scala_cli = _fake_scala_cli(tmp_path, 'while [ $# -gt 0 ]; do [ "$1" = --conf ] && echo "$2"; shift; done')
+    for flag in ("--dry-run", "--print-conf"):
+        args = _spark_parser().parse_args(["spark", str(config), "--scala-cli", str(scala_cli), flag])
+        assert args.handler(args) == 0
+        printed = capsys.readouterr().out
+        assert "spark.sql.catalog.lake.s3.secret-access-key=***" in printed and "s3-s3cr3t" not in printed
+        assert "spark.sql.catalog.lake.header.Authorization=***" in printed and "h3ader" not in printed
 
 
 def test_ldp_spark_reports_a_missing_catalog_and_bad_configs(tmp_path):

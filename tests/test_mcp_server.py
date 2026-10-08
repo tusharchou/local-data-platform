@@ -17,6 +17,7 @@ import json
 import logging
 import subprocess
 import sys
+import time
 import types
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,7 +40,7 @@ from local_data_platform.mcp_server import (  # noqa: E402
 from local_data_platform.mcp_server.audit import AuditLog, iceberg_audit_sink  # noqa: E402
 from local_data_platform.mcp_server.cli import main as mcp_main  # noqa: E402
 from local_data_platform.mcp_server.cli import run_command  # noqa: E402
-from local_data_platform.mcp_server.discovery import is_allowed, parse_allowlist, redact  # noqa: E402
+from local_data_platform.mcp_server.discovery import ExposedTable, is_allowed, parse_allowlist, redact  # noqa: E402
 from local_data_platform.mcp_server.guard import first_keyword  # noqa: E402
 from local_data_platform.mcp_server.sandbox import local_path  # noqa: E402
 
@@ -393,6 +394,44 @@ def test_views_refresh_after_a_new_commit(tools, lake, make_table):
     lake.rides.put(make_table(n=3, start_id=100))
     assert _ok(tools, "query", sql="SELECT count(*) FROM demo.rides")["rows"] == [[9]]
     assert _ok(tools, "sample_rows", table="demo.rides", n=50)["row_count"] == 9
+
+
+def test_a_slow_refresh_stops_at_the_timeout(lake, tmp_path, monkeypatch):
+    with LakeTools.from_sources([lake.configs], audit_path=tmp_path / "a.jsonl", timeout_s=0.5) as lake_tools:
+        assert lake_tools.tables == ["demo.rides", "demo.secret"]
+        loads = []
+        load = ExposedTable.load
+
+        def slow_load(table):  # a catalog that answers slower than the timeout
+            loads.append(table.identifier)
+            time.sleep(0.6)
+            return load(table)
+
+        monkeypatch.setattr(ExposedTable, "load", slow_load)
+        lake.secret.put(pa.table({"id": [3], "password": ["new"]}))
+        # The refresh stops after the first table; the second keeps serving its last snapshot.
+        data = _ok(lake_tools, "query", sql="SELECT count(*) FROM demo.secret")
+        assert loads == ["demo.rides"]
+        assert data["rows"] == [[2]] and data["stale_tables"] == ["demo.secret"]
+        # The next call checks the table it skipped first.
+        data = _ok(lake_tools, "sample_rows", table="demo.secret")
+        assert loads == ["demo.rides", "demo.secret"]
+        assert data["row_count"] == 3 and data["stale_tables"] == ["demo.rides"]
+        monkeypatch.undo()
+        assert _ok(lake_tools, "query", sql="SELECT 1")["stale_tables"] == []
+
+
+def test_a_failed_refresh_is_reported_stale(tools, lake, make_table, monkeypatch):
+    def failing_load(table):  # a catalog that cannot load the table
+        raise OSError("catalog unreachable")
+
+    monkeypatch.setattr(ExposedTable, "load", failing_load)
+    lake.rides.put(make_table(n=3, start_id=100))
+    data = _ok(tools, "query", sql="SELECT count(*) FROM demo.rides")
+    assert data["rows"] == [[6]] and data["stale_tables"] == ["demo.rides"]
+    monkeypatch.undo()
+    data = _ok(tools, "query", sql="SELECT count(*) FROM demo.rides")
+    assert data["rows"] == [[9]] and data["stale_tables"] == []
 
 
 # ---------------------------------------------------------------------- discovery and allowlist

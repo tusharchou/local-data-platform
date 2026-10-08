@@ -84,7 +84,7 @@ ldp mcp --config DIR_OR_FILE [--config ...] [--catalog SPEC.json ...]
 | `--catalog` | A catalog spec file, either a `target.catalog`-style object or `{"catalog": {...}}`. Every table in the catalog's top-level namespaces is served. Repeatable. |
 | `--allow` | A comma-separated allowlist of identifiers or `fnmatch` patterns, such as `sales.orders,sales.*`. A pattern without a dot also matches the bare table name. By default every table found is served, except the `_ldp` system tables, which need a pattern that starts with `_ldp`. |
 | `--max-rows` | The row cap for every result. The default is 500. A tool's own `max_rows` or `n` is clamped to it. |
-| `--timeout` | Interrupt a query after this many seconds. The default is 30. |
+| `--timeout` | Interrupt a query after this many seconds. The view refresh that runs before it stops loading tables after the same time (see [Known limits](#known-limits)). The default is 30. |
 | `--audit` | The JSONL audit file. The default is `<first local warehouse>/.ldp/audit/mcp_audit.jsonl`. |
 | `--no-iceberg-audit` | Audit to the JSONL file only, without the `_ldp.audit` Iceberg table. |
 | `--no-native` | Always serve the Arrow copy, never `iceberg_scan`. |
@@ -106,7 +106,7 @@ back with `isError: true` and `{"error": {"type", "message"}}`.
 |---|---|---|
 | `list_tables` | none | Each table's `table` identifier, `sql_name` (for example `"demo"."rides"`), `aliases` (its bare name when that is unique), `access` (`native` or `arrow`), `row_count`, `last_updated` and `source`. Also returns the `unavailable` tables and the `limits`. |
 | `describe_table` | `table` | The schema, partition spec, sort order, `row_count` (from snapshot metadata), the 10 most recent snapshots, table properties (keys that look secret are redacted), `location` and `metadata_location`. Also `freshness` (the last commit time and its age in seconds, plus the last run's time and status), `latest_run` and `quality` from `_ldp`. |
-| `query` | `sql`, optional `max_rows` | `columns` (name and Arrow type), `rows` (lists in column order), `row_count`, `truncated`, `max_rows` and `duration_ms`. The default is 100 rows. |
+| `query` | `sql`, optional `max_rows` | `columns` (name and Arrow type), `rows` (lists in column order), `row_count`, `truncated`, `max_rows`, `duration_ms` and `stale_tables` (tables the refresh didn't reach in time or couldn't load). The default is 100 rows. |
 | `sample_rows` | `table`, optional `n` (default 10) | The first `n` rows in scan order, in the same shape as `query`. |
 | `table_history` | `table`, optional `limit` (default 50) | Snapshots newest first, each with `committed_at`, `operation`, the added, deleted and total records, `is_current`, `on_main` (on the current snapshot's lineage) and the `ldp.*` snapshot properties such as `ldp.run-id` and `ldp.idempotency-key`. Also the branch and tag `refs`. |
 | `get_dataset` | `name`, or `name@vN` | The latest (or Nth) pinned `DatasetVersion`: its table, snapshot, row filter, selected fields, row count and schema fingerprint. When the table is served natively, it also returns `sql` that re-reads exactly the pinned rows (see below). It returns `{"available": false, "reason"}` when the install has no `local_data_platform.datasets`. |
@@ -210,7 +210,12 @@ What the tests check (`tests/test_mcp_server.py`):
   of a table. For memory, pass `memory_limit=` to `LakeTools`/`DuckDBSandbox`. Arrow-served tables
   are held in memory.
 - Views are refreshed before every `query` and `sample_rows` call, so new commits show up at
-  once. The refresh loads each table's metadata from the catalog, one call per table.
+  once. The refresh loads each table's metadata from the catalog, one call per table. Once the
+  timeout has passed it loads no more tables: the ones it didn't reach keep serving their last
+  snapshot, are listed in `stale_tables`, and are checked first on the next call. A table whose
+  load fails is listed there too. A catalog call or Arrow copy already under way isn't
+  interrupted, so a slow catalog can hold a call for about twice the timeout plus that one
+  table's load.
 
 ## Audit log
 

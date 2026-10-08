@@ -451,7 +451,8 @@ def fence(catalog, table, branches: Iterable[str]) -> None:
     matching branches and, for every LDP attempt named, adds the tag :func:`fence_marker`, which
     :func:`stage` and :func:`publish` assert is absent. So once the fence commits, the fenced
     attempt can neither publish what it staged nor stage again (invariant I3). Branches that are
-    already gone need nothing, so a repeated fence is a no-op.
+    already gone need nothing, so a repeated fence is a no-op, and a fence commit whose outcome is
+    unknown is reconciled by reloading and fencing what is still missing.
 
     Args:
         catalog: The table's catalog.
@@ -460,7 +461,8 @@ def fence(catalog, table, branches: Iterable[str]) -> None:
 
     Raises:
         ConfigError: If ``main`` is listed.
-        CommitConflict: If the fence could not commit under contention (retriable).
+        CommitConflict: If the fence could not commit under contention, or its outcome stayed
+            unknown, within the tries (retriable).
     """
     targets = list(dict.fromkeys(str(branch) for branch in branches))
     if not targets:
@@ -504,8 +506,9 @@ def fence(catalog, table, branches: Iterable[str]) -> None:
         ]
         try:
             catalog.commit_table(current, tuple(requirements), tuple(updates))
-        except CommitFailedException as exc:
-            logger.debug("Fence of %s on %s lost a race (%s); retrying", targets, _name(current), exc)
+        except (CommitFailedException, CommitStateUnknownException) as exc:
+            # The next try reloads: a fence that landed leaves nothing to do, one that did not is redone.
+            logger.debug("Fence of %s on %s failed (%s); reloading", targets, _name(current), exc)
             time.sleep(random.uniform(0.0, min(1.0, 0.02 * 2 ** attempt)))
             continue
         logger.info("Fenced %s on %s: removed branches %s, markers %s",

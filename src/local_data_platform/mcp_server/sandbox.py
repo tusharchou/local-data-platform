@@ -107,6 +107,7 @@ class _Registration:
     location: str | None = None
     arrow_name: str | None = None
     aliases: list[str] = field(default_factory=list)
+    checked_at: float = 0.0
 
 
 class DuckDBSandbox:
@@ -297,11 +298,25 @@ class DuckDBSandbox:
 
     # ------------------------------------------------------------------ run
 
-    def refresh(self) -> None:
-        """Re-point every view whose table has a new metadata file (new commits since the last call)."""
+    def refresh(self, *, timeout_s: float | None = None) -> list[str]:
+        """Re-point every view whose table has a new metadata file (new commits since the last call).
+
+        Tables are checked least recently checked first. With ``timeout_s``, no further table is
+        loaded once that many seconds have passed; a load already under way is not interrupted.
+
+        Returns:
+            The identifiers of the tables left unchecked or whose refresh failed. Their views keep
+            serving the last snapshot.
+        """
+        deadline = None if timeout_s is None else time.monotonic() + timeout_s
+        stale: list[str] = []
         with self._lock:
             self._check_open()
-            for registration in self._registrations.values():
+            pending = sorted(self._registrations.values(), key=lambda item: item.checked_at)
+            for index, registration in enumerate(pending):
+                if deadline is not None and time.monotonic() >= deadline:
+                    return stale + [item.table.identifier for item in pending[index:]]
+                registration.checked_at = time.monotonic()
                 try:
                     iceberg_table = registration.table.load()
                     if iceberg_table.metadata_location != registration.metadata_location:
@@ -309,6 +324,8 @@ class DuckDBSandbox:
                         logger.debug("Refreshed %s (%s)", registration.table.identifier, registration.access)
                 except Exception as error:  # noqa: BLE001 - keep serving the last good snapshot
                     logger.warning("Could not refresh %s: %s", registration.table.identifier, error)
+                    stale.append(registration.table.identifier)
+        return stale
 
     def query(self, sql: str, *, max_rows: int, timeout_s: float) -> QueryResult:
         """Guard, run and fetch one query.
