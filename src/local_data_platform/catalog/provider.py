@@ -1,12 +1,12 @@
 """Catalog provider: build a pyiceberg catalog from a config's ``target.catalog`` block.
 
-Contract: ``docs/design/v0_2_0.md`` section C1. Built-in catalog types:
+Contract: ``docs/design/v0_1_1_platform.md`` section C1. Built-in catalog types:
 
 ========================  =========================================================  ==========================
 ``type``                  Spec keys                                                  Returns
 ========================  =========================================================  ==========================
 ``local`` (the default;   ``identifier``, ``warehouse_path``                         ``LocalIcebergCatalog``,
-alias ``LocalIceberg``)                                                              exactly as in 0.1.1
+alias ``LocalIceberg``)                                                              the original catalog
 ``sql`` (alias            ``uri`` (a SQLAlchemy URI), ``warehouse``, ``name``,       ``SqlCatalog``
 ``sqlite``)               ``password_env``, ``properties``, ``properties_env``       (JdbcCatalog-compatible)
 ``rest``                  ``uri``, ``warehouse``, ``name``, ``token_env``,           ``RestCatalog``
@@ -110,7 +110,7 @@ def catalog_type(spec: Mapping[str, Any]) -> str:
 def catalog_namespace(spec: Mapping[str, Any]) -> str:
     """Return the namespace a spec's tables live in.
 
-    For ``local`` this is ``identifier`` (the 0.1.1 rule), falling back to ``namespace``. For every
+    For ``local`` this is ``identifier`` (the original rule), falling back to ``namespace``. For every
     other type it is ``namespace``, falling back to ``identifier``.
 
     Raises:
@@ -126,7 +126,7 @@ def catalog_namespace(spec: Mapping[str, Any]) -> str:
 def catalog_name(spec: Mapping[str, Any]) -> str:
     """Return the name the built catalog gets.
 
-    * ``local``: ``identifier`` (it also names the SQLite file), as in 0.1.1.
+    * ``local``: ``identifier`` (it also names the SQLite file), as in the hardening contract.
     * ``sql``: ``name``, else the namespace, else ``"sql"``. The name is the ``catalog_name`` column
       of the ``iceberg_tables`` table, which a Spark ``JdbcCatalog`` on the same database must match;
       defaulting to the namespace lets a ``local`` catalog's SQLite file be opened as ``sql``.
@@ -174,7 +174,7 @@ def create_catalog(spec: Mapping[str, Any], *, base_dir: str | os.PathLike | Non
 def catalog_database_file(spec: Mapping[str, Any], base_dir: str | os.PathLike | None = None) -> Path | None:
     """Return the SQLite file :func:`create_catalog` would open for ``spec``, creating it if missing.
 
-    * ``local`` (and a ``sql`` block in the 0.1.1 shape, with ``warehouse_path`` and no ``uri``):
+    * ``local`` (and a ``sql`` block in the original local shape, with ``warehouse_path`` and no ``uri``):
       ``<warehouse_path>/<identifier>_catalog.db``.
     * ``sql`` on a ``sqlite:///`` file URI: that file, resolved as :func:`create_catalog` resolves it.
     * Anything else (in-memory SQLite, Postgres, ``rest``, ``glue``, plugin types) and incomplete
@@ -350,7 +350,7 @@ def _sql_uri(spec: Mapping[str, Any], base_dir: Path | None) -> str:
 
 @register_catalog_type("local")
 def _local(spec: Mapping[str, Any], base_dir: Path | None) -> "PyIcebergCatalog":
-    """``LocalIcebergCatalog(identifier, path=warehouse_path)``, exactly as in 0.1.1."""
+    """``LocalIcebergCatalog(identifier, path=warehouse_path)``, as in the hardening contract."""
     from .local.iceberg import LocalIcebergCatalog
 
     for key in ("identifier", "warehouse_path"):
@@ -368,7 +368,7 @@ def _sql(spec: Mapping[str, Any], base_dir: Path | None) -> "PyIcebergCatalog":
     so Spark can share it when both sides use the same catalog name.
     """
     if not spec.get("uri") and spec.get("warehouse_path"):
-        # 0.1.1 accepted "type": "sql" / "sqlite" on a local {identifier, warehouse_path} block.
+        # The original local catalog accepted "type": "sql" / "sqlite" on an {identifier, warehouse_path} block.
         return _local(spec, base_dir)
     from pyiceberg.catalog.sql import SqlCatalog
 

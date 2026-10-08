@@ -7,14 +7,15 @@ read-only MCP server that talks over stdio. It runs every SQL statement inside a
 DuckDB, serves only the tables you allow, caps and times out every result, and writes every call
 to an audit log.
 
-It is contract C6 of the 0.2.0 design (`docs/design/v0_2_0.md`). The package has that name so it
-never shadows the `mcp` SDK. Run it as `ldp mcp`; `python -m local_data_platform.mcp_server` runs
-the same server with the same options, for clients that would rather start Python.
+It is contract C6 of the 0.1.1 platform contract (`docs/design/v0_1_1_platform.md`). The package
+has that name so it never shadows the `mcp` SDK. Run it as `ldp mcp`.
+`python -m local_data_platform.mcp_server` runs the same server with the same options, for clients
+that would rather start Python.
 
 ## Install
 
 ```bash
-pip install "local-data-platform[mcp,duckdb]"
+pip install "local-data-platform[mcp,duckdb]>=0.1.1"
 ```
 
 For streaming scans, the server uses DuckDB's `iceberg` extension. It never downloads anything

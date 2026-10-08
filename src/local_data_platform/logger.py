@@ -6,6 +6,7 @@ Applications (and the ``ldp`` CLI) decide handlers and levels themselves.
 """
 
 import logging
+import warnings
 
 PACKAGE_LOGGER = "local_data_platform"
 
@@ -22,7 +23,9 @@ def get_logger(name: str | None = None) -> logging.Logger:
 
 
 def log() -> logging.Logger:
-    """Backward-compatible alias for :func:`get_logger` (kept for pre-0.1.1 imports)."""
+    """Deprecated alias for :func:`get_logger`, kept for pre-0.1.1 imports. It will be removed in 0.2.0."""
+    warnings.warn("local_data_platform.logger.log() is deprecated and will be removed in 0.2.0. Use get_logger()",
+                  DeprecationWarning, stacklevel=2)
     return get_logger()
 
 

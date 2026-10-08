@@ -710,7 +710,7 @@ class LakeTools:
         except ImportError:
             return {"available": False, "name": name,
                     "reason": "pinned datasets are not available: this install has no local_data_platform.datasets "
-                              "module (added in local-data-platform 0.2.0)"}
+                              "module (added in local-data-platform 0.1.1)"}
         base, _, ref = name.partition("@")
         wanted = None
         if ref:

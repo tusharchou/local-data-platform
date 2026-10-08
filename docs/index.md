@@ -14,15 +14,17 @@ A modern, modular, and developer-friendly platform for local data engineering, a
 
 - [Quickstart](quickstart.md): install, run `ldp demo`, and load your own data.
 - [Recipes](recipes.md): short, runnable examples of the Python API.
-- [v0.1.1 design contract](design/v0_1_1.md): what each module does.
+- [v0.1.1 hardening contract](design/v0_1_1.md): what each module does.
+- [Roadmap](roadmap.md): the milestones from 0.1.2 to 0.2.0 and what each one adds.
 
-## New in 0.2.0 (unreleased)
+## New in 0.1.1
 
-0.2.0 is "multi-writer, any catalog, object storage, agent-ready". Its contract is the
-[v0.2.0 design](design/v0_2_0.md), which is Phase 1 of the [SaaS architecture](design/saas_architecture.md)
-proposal. The features below work from Python and from new `ldp` subcommands (`ldp catalog test`,
-`ldp schema`, `ldp plan`, `ldp runs`, `ldp commits`, `ldp datasets`, `ldp maintain`, `ldp mcp`
-and `ldp spark`); each guide shows both.
+0.1.1 is the first release since 0.1.0. On top of the hardening work it adds the platform work,
+"multi-writer, any catalog, object storage, agent-ready". Its contract is the
+[v0.1.1 platform contract](design/v0_1_1_platform.md), which is Phase 1 of the
+[SaaS architecture](design/saas_architecture.md) proposal. The features below work from Python and
+from new `ldp` subcommands (`ldp catalog test`, `ldp schema`, `ldp plan`, `ldp runs`,
+`ldp commits`, `ldp datasets`, `ldp maintain`, `ldp mcp` and `ldp spark`). Each guide shows both.
 
 | Guide | What it covers |
 |---|---|

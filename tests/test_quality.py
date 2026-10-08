@@ -754,7 +754,7 @@ class TestChecksFromConfig:
             SchemaHas({"ride_id": "int64", "fare": "double"}),
         ]
         assert set(CHECKS) == {"row_count", "not_null", "unique", "accepted_values", "range", "freshness", "schema",
-                               # 0.2.0 (C7): the temporal checks in quality/temporal.py
+                               # Platform contract C7: the temporal checks in quality/temporal.py
                                "monotonic", "max_skew", "rate_below", "max_gap"}
 
     def test_design_doc_example_runs_green_on_clean_data(self):

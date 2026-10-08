@@ -458,7 +458,7 @@ def test_pyspark_engine_queries_and_writes_the_pyiceberg_catalog(rides_catalog):
 
 
 # ---------------------------------------------------------------------------------------------------
-# 0.2.0: spark_catalog_conf_for, SQLite sql catalogs in the Scala job, and `ldp spark` (design C5)
+# spark_catalog_conf_for, SQLite sql catalogs in the Scala job, and `ldp spark` (platform contract C5)
 # ---------------------------------------------------------------------------------------------------
 
 import argparse  # noqa: E402

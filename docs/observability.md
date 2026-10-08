@@ -19,7 +19,7 @@ run.started ─► run.extracted ─► quality.evaluated ─┬─► run.publi
 - `run.skipped_duplicate` happens only in staged mode, when the run's idempotency key is already
   on `main` (see [Exactly-once runs](#exactly-once-runs-and-idempotency-keys)).
 - `run.blocked_quality` means a check failed with `on_failure: "fail"`. The pipeline still raises
-  `DataQualityError`, exactly as in 0.1.1, and writes nothing.
+  `DataQualityError`, as it does without run events, and writes nothing.
 - `run.finished` always comes last and carries the final `status`: `published`,
   `skipped_duplicate`, `blocked_quality` or `failed`.
 
@@ -99,8 +99,8 @@ named after the type; options in the list item win.
 | `openlineage` | `path` or `url`, `namespace`, `api_key_env`, `timeout` | `.ldp/openlineage.jsonl`, job namespace `ldp`, 10 s |
 | `null` (or `none`) | — | Drops everything |
 
-With no `observability` block a run emits nothing, so 0.1.1 behaviour is unchanged. Secrets are
-never written into a config: `api_key_env` names an environment variable that holds the token.
+With no `observability` block a run emits nothing. Secrets are never written into a config:
+`api_key_env` names an environment variable that holds the token.
 
 ### In Python
 

@@ -214,11 +214,11 @@ def _row_count(table: PyIcebergTable) -> int:
 
 
 def _is_local_spec(spec: dict[str, Any]) -> bool:
-    """Whether a catalog spec means the ``local`` catalog (0.1.1's ``{identifier, warehouse_path}``)."""
+    """Whether a catalog spec means the ``local`` catalog (the original ``{identifier, warehouse_path}``)."""
     kind = str(spec.get("type") or "local").strip().lower().replace("_", "").replace("-", "")
     if kind in _LOCAL_TYPES:
         return True
-    # 0.1.1 also accepted "sql" / "sqlite" on a local block; the provider keeps that alias.
+    # The original local catalog also accepted "sql" / "sqlite" on a local block; the provider keeps that alias.
     return kind in ("sql", "sqlite") and not spec.get("uri") and bool(spec.get("warehouse_path"))
 
 
@@ -256,7 +256,7 @@ class Iceberg(Format):
 
     Args:
         name: Table name. The table identifier is ``"<namespace>.<name>"``.
-        config: Catalog spec, the config's ``target.catalog`` block. The 0.1.1 form
+        config: Catalog spec, the config's ``target.catalog`` block. The original form
             ``{"identifier": <namespace>, "warehouse_path": <folder>}`` is the ``local`` type;
             ``warehouse_path`` resolves against ``base_dir`` when relative. Other types
             (``sql``, ``rest``, ``glue`` or a registered plugin) are built by

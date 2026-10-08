@@ -1,16 +1,18 @@
-# Design: v0.2.0, "multi-writer, any catalog, object storage, agent-ready"
+# Design: v0.1.1 platform contract, "multi-writer, any catalog, object storage, agent-ready"
 
-Status: in progress on branch `feat/v0.1.1-hardening`, which builds on the green 0.1.1 contract
-(`docs/design/v0_1_1.md`). This document is the build contract for Phase 1 of
+!!! note "Drafted as the 0.2.0 contract, shipped in 0.1.1"
+    This contract was drafted as the 0.2.0 contract and ships in 0.1.1, together with the
+    [v0.1.1 hardening contract](v0_1_1.md). In the [roadmap](../roadmap.md), 0.2.0 is now Cloud
+    Integration. Where this document says the hardening contract or the 0.1.1 hardening work, it means
+    the code this work builds on, described in the hardening contract.
+
+Status: built and tested, and it ships in 0.1.1 from PR #117. It builds on the green hardening
+contract (`docs/design/v0_1_1.md`). This document is the build contract for Phase 1 of
 `docs/design/saas_architecture.md` (§13). Where this file and the SaaS doc disagree, this file wins
-for 0.2.0. C1 to C9 are built and tested; see [Implementation status](#implementation-status) for
-what is still untested.
+for the 0.1.1 release. [Implementation status](#implementation-status) says what is still
+untested.
 
-Version: the package stays at `0.1.1` in `pyproject.toml` until the owner decides the release
-number. The old tag `release-v0.1.1` already points at the 2024 BigQuery release, so the likely
-number is 0.2.0.
-
-## What 0.2.0 adds
+## What the platform contract adds
 
 | # | Capability | Module(s) | SaaS doc |
 |---|---|---|---|

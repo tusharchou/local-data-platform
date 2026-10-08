@@ -5,15 +5,21 @@ own data. You need Python 3.12 or newer and nothing else: no server, no cloud ac
 
 ## 1. Install
 
-Only 0.1.0 is on PyPI, and it has a different module layout. Until 0.1.1 is released, install from
-a clone of the repo:
+Install `local-data-platform` from PyPI, preferably in a virtual environment:
+
+```bash
+pip install "local-data-platform[duckdb]>=0.1.1"
+ldp --version
+```
+
+To work on the library itself, install it from a clone of the repo. `make install` creates `.venv`
+and installs the package in editable mode with the `dev` and `docs` extras:
 
 ```bash
 git clone https://github.com/tusharchou/local-data-platform.git
 cd local-data-platform
-python3 -m venv .venv
+make install
 source .venv/bin/activate
-pip install -e ".[duckdb]"
 ldp --version
 ```
 
@@ -146,7 +152,7 @@ write goes ahead.
 | `schema` | `columns` (a list of names, or names mapped to pyarrow types) | The columns exist, with those types |
 
 A check on a missing column fails; it doesn't raise an exception. The full schema is in the
-[v0.1.1 design contract](design/v0_1_1.md#config-schema).
+[v0.1.1 hardening contract](design/v0_1_1.md#config-schema).
 
 ## 4. Use the Python API
 
@@ -197,9 +203,9 @@ The built-in routes are:
 ## 5. Beyond the laptop
 
 The same config runs against other catalogs and storage by changing only its `catalog` block and
-paths. These are the 0.2.0 additions, each with its own guide. They are not released yet, but they
-work from Python, through `ldp run`, `ldp snapshots` and `ldp query`, and through their own `ldp`
-subcommands (`ldp --help` lists them).
+paths. These come from the [v0.1.1 platform contract](design/v0_1_1_platform.md), each with its
+own guide. They work from Python, through `ldp run`, `ldp snapshots` and `ldp query`, and through
+their own `ldp` subcommands (`ldp --help` lists them).
 
 - **Another catalog.** Set `"type"` in the catalog block to `sql` (any SQLAlchemy URI), `rest` (any
   Iceberg REST catalog) or `glue`. Tokens come from environment variables that the config names,
@@ -226,11 +232,11 @@ subcommands (`ldp --help` lists them).
 
 ## 6. Next steps
 
-- Try the other demos: `make demo-robotics`, `make demo-agent`, and, with
+- From a clone of the repo, try the other demos: `make demo-robotics`, `make demo-agent`, and, with
   [scala-cli](https://scala-cli.virtuslab.org) installed, `make demo-spark` and `make demo-rest`.
 - Run the real-world examples in
   [`examples/`](https://github.com/tusharchou/local-data-platform/tree/main/examples): NEAR
   blockchain transactions and NYC yellow-taxi trips.
 - Read the [changelog](https://github.com/tusharchou/local-data-platform/blob/main/CHANGELOG.md)
-  for what changed in 0.1.1 and what 0.2.0 adds.
+  for what changed in 0.1.1, and the [roadmap](roadmap.md) for what each later version adds.
 - Browse the [API docs](api.md).

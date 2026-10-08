@@ -1,12 +1,14 @@
 # Catalogs and object storage
 
 An Iceberg table lives in a **catalog**, which records where the table's current metadata file is,
-and a **warehouse**, the folder or bucket that holds the data and metadata files. In 0.1.1 the
-catalog was always a SQLite file next to a local warehouse. From 0.2.0 the `catalog` block of a
-dataset config picks one of four catalog types, and CSV, Parquet and JSON paths can point at S3 or
-Google Cloud Storage.
+and a **warehouse**, the folder or bucket that holds the data and metadata files. In the
+[hardening contract](design/v0_1_1.md) the catalog was always a SQLite file next to a local
+warehouse. In 0.1.1, with the [platform contract](design/v0_1_1_platform.md), the `catalog` block
+of a dataset config picks one of four catalog types, and CSV, Parquet and JSON paths can point at
+S3 or Google Cloud Storage.
 
-Every 0.1.1 config keeps working unchanged: a catalog block without `type` is a `local` catalog.
+Every config written for the local catalog keeps working unchanged: a catalog block without `type`
+is a `local` catalog.
 
 ## Catalog types
 
@@ -22,7 +24,7 @@ The catalog block is the `catalog` object of an Iceberg `target` (or `source`):
 
 | `type` | Keys | What it builds |
 |---|---|---|
-| `local` (the default; alias `LocalIceberg`) | `identifier`, `warehouse_path` | A `LocalIcebergCatalog`, exactly as in 0.1.1: `<warehouse_path>/<identifier>_catalog.db`, with `identifier` as both the catalog name and the namespace |
+| `local` (the default, alias `LocalIceberg`) | `identifier`, `warehouse_path` | A `LocalIcebergCatalog`, as in the hardening contract: `<warehouse_path>/<identifier>_catalog.db`, with `identifier` as both the catalog name and the namespace |
 | `sql` (alias `sqlite`) | `uri`, `warehouse`, `name`, `password_env` | A pyiceberg `SqlCatalog` on any SQLAlchemy URI, such as `sqlite:///catalog.db` or `postgresql+psycopg://ldp@db:5432/lake` |
 | `rest` | `uri`, `warehouse`, `name`, `token_env`, `credential_env` | A pyiceberg `RestCatalog`: Apache Polaris, Lakekeeper, Nessie, Unity Catalog, S3 Tables, R2 Data Catalog, BigLake, ... |
 | `glue` | `name`, `warehouse` | A pyiceberg `GlueCatalog` (AWS Glue Data Catalog). Needs boto3: `pip install "local-data-platform[glue]"` |

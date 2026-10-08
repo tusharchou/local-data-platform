@@ -11,7 +11,7 @@ Iceberg tables are registered one of two ways:
   read when the table is registered; each query streams the data files, and DuckDB pushes
   filters and projections into the scan. The extension is loaded from DuckDB's extension
   folder (``~/.duckdb``) and is never downloaded unless ``install_extensions=True``.
-* **In memory** (the 0.1.1 path): pyiceberg scans the table into a ``pyarrow.Table`` that the
+* **In memory** (the original path): pyiceberg scans the table into a ``pyarrow.Table`` that the
   view reads. Used when the extension can't load, when a row filter can't be rendered as
   DuckDB SQL, or when ``native=False``. The auto path logs a warning when it falls back.
 

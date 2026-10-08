@@ -1,6 +1,6 @@
 """Tests for the staged, exactly-once publish protocol (``format/iceberg/commit.py``).
 
-Contract: ``docs/design/v0_2_0.md`` C3 and SaaS design §7.1-§7.8. All tests run offline on the
+Contract: ``docs/design/v0_1_1_platform.md`` C3 and SaaS design §7.1-§7.8. All tests run offline on the
 local SQLite catalog. Concurrency across processes is in ``test_upsert_race.py``; here a
 "concurrent writer" is injected deterministically through the ``audit`` hook, which
 ``write_once`` calls after staging and before publishing.

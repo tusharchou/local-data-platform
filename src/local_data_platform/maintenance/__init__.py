@@ -1,6 +1,6 @@
 """Table maintenance: snapshot expiry that keeps the idempotency floor, and an orphan-file finder.
 
-Contract: ``docs/design/v0_2_0.md`` section C8.
+Contract: ``docs/design/v0_1_1_platform.md`` section C8.
 
 * :func:`expire_snapshots` removes old snapshots from table metadata, but never the current snapshot, a
   branch or tag head, ``main``'s last ``retain_last`` snapshots, or a snapshot carrying

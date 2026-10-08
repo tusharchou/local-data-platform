@@ -3,15 +3,24 @@ import-time side effects."""
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
+from packaging.version import Version
+
 import local_data_platform
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+# Any bracketed heading, so "## [v0.2.0]" or "## [0.2.0rc1]" is checked too. Text that is not a
+# version fails with InvalidVersion, which is also worth a failure.
+CHANGELOG_HEADING = re.compile(r"^## \[v?([^\]]+)\]", re.MULTILINE)
+# "removed in 0.2.0", "removed in v0.2.0", "removed in version 0.2.0" or "removed in 0.2", also when the words are
+# split across adjacent string literals.
+REMOVAL_NOTICE = re.compile(r"removed[\s\"']+in[\s\"']+(?:version[\s\"']+)?v?(\d+\.\d+(?:\.\d+)?)", re.IGNORECASE)
 
 # Imports the package (and optionally every submodule) in a fresh interpreter and reports
 # what changed. A fresh process matters: the test session has already imported the package.
@@ -62,6 +71,24 @@ def test_version_matches_pyproject():
 def test_changelog_has_an_entry_for_the_current_version():
     changelog = (REPO_ROOT / "CHANGELOG.md").read_text()
     assert f"## [{local_data_platform.__version__}]" in changelog
+
+
+def test_changelog_names_no_version_newer_than_the_package():
+    current = Version(local_data_platform.__version__)
+    headings = CHANGELOG_HEADING.findall((REPO_ROOT / "CHANGELOG.md").read_text())
+    newer = [version for version in headings if version.lower() != "unreleased" and Version(version) > current]
+    assert newer == [], f"CHANGELOG.md has a section for a version newer than {current}: {newer}"
+
+
+def test_removal_notices_name_a_later_version():
+    # A deprecation that says "removed in X.Y.Z" must still be in the future: once the package
+    # reaches X.Y.Z, either the code goes or the notice moves.
+    current = Version(local_data_platform.__version__)
+    due = [f"{path.relative_to(REPO_ROOT)}: removed in {version}"
+           for path in sorted((REPO_ROOT / "src").rglob("*.py"))
+           for version in REMOVAL_NOTICE.findall(path.read_text())
+           if Version(version) <= current]
+    assert due == [], f"removal notices for {current} or earlier: {due}"
 
 
 def test_importing_the_package_has_no_side_effects():

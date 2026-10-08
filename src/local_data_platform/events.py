@@ -14,7 +14,7 @@ ignore fields they don't know.
 
 Sinks:
 
-* :class:`NullSink` drops everything. It is the default, so 0.1.1 behaviour is unchanged.
+* :class:`NullSink` drops everything. It is the default, so a run emits no events unless you choose a sink.
 * :class:`MemorySink` keeps the events in a list, for tests and notebooks.
 * :class:`JsonlSink` appends one JSON object per line to a local file.
 * :class:`OpenLineageSink` turns each run into OpenLineage 1.x ``START`` and
@@ -444,7 +444,7 @@ class EventSink(Protocol):
 
 
 class NullSink:
-    """Drops every event. The default sink, so runs behave exactly as in 0.1.1."""
+    """Drops every event. The default sink, so a run emits no events unless you choose a sink."""
 
     def emit(self, event: RunEvent) -> None:
         """Drop the event."""

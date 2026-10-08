@@ -281,7 +281,7 @@ def test_python_dash_m_runs_the_cli():
     assert completed.stdout.strip() == f"ldp {__version__}"
 
 
-# ---------------------------------------------------------------------- 0.2.0 module commands (C9)
+# ---------------------------------------------------------------------- module commands (platform contract C9)
 
 MODULE_COMMAND_NAMES = ("catalog", "schema", "plan", "runs", "commits", "datasets", "maintain", "spark", "mcp")
 

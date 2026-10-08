@@ -106,7 +106,7 @@ def test_unknown_snapshot_id_raises(rides):
 
 
 def test_row_filter_is_pushed_into_the_iceberg_scan(rides, monkeypatch):
-    # The in-memory path (0.1.1 behaviour, forced with native=False): pyiceberg applies the filter
+    # The in-memory path (the original one, forced with native=False): pyiceberg applies the filter
     # while scanning. The native path is covered by test_native_row_filter_is_pushed_into_iceberg_scan.
     scans = []
     original_scan = rides.scan
@@ -252,7 +252,7 @@ def test_duckdb_engine_get_and_put_follow_base_interface():
 
 
 # ---------------------------------------------------------------------------------------------------
-# 0.2.0: native iceberg_scan views (design v0_2_0.md, C5)
+# Native iceberg_scan views (the 0.1.1 platform contract, C5)
 # ---------------------------------------------------------------------------------------------------
 
 import datetime as dt  # noqa: E402

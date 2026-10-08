@@ -16,9 +16,9 @@ a second, offline).
 
 ## Temporal quality checks
 
-Four checks in `local_data_platform.quality.temporal` join the 0.1.1 checks. Like them, they run on a
-`pyarrow.Table`, never raise because of the data, are vectorised with `pyarrow.compute`, and are
-available in configs by name.
+Four checks in `local_data_platform.quality.temporal` join the checks from the hardening contract.
+Like them, they run on a `pyarrow.Table`, never raise because of the data, are vectorised with
+`pyarrow.compute`, and are available in configs by name.
 
 | Check | Config | Fails when |
 |---|---|---|

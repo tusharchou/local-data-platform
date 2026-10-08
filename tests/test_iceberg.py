@@ -114,8 +114,8 @@ def test_same_config_and_catalog_is_accepted(catalog_config):
         ({"config": "warehouse"}, "must be an object"),
         ({"config": {"warehouse_path": "x"}}, "identifier"),
         ({"config": {"identifier": "ns"}}, "warehouse_path"),
-        # 0.2.0 (C1): REST is a supported type, so a REST block without its 'uri' is the error now;
-        # 0.1.1 rejected every non-local type with "not supported".
+        # Platform contract C1: REST is a supported type, so a REST block without its 'uri' is the error now;
+        # the hardening contract rejected every non-local type with "not supported".
         ({"config": {"identifier": "ns", "warehouse_path": "x", "type": "REST"}}, "uri"),
         ({"config": {"identifier": "ns", "warehouse_path": "x", "type": "hive"}}, "catalog type"),
     ],
@@ -185,8 +185,8 @@ def test_legacy_leading_slash_warehouse_path_warns(tmp_path):
 
 
 def test_write_result_fields_match_contract():
-    # 0.2.0 (C3) adds branch, idempotency_key, attempts and skipped_duplicate, all defaulted, so
-    # WriteResult(...) with the six 0.1.1 fields still builds the same value.
+    # The platform contract (C3) adds branch, idempotency_key, attempts and skipped_duplicate, all
+    # defaulted, so WriteResult(...) with the six hardening-contract fields still builds the same value.
     assert [f.name for f in dataclasses.fields(WriteResult)] == [
         "table_identifier", "mode", "rows_written", "rows_before", "rows_after", "snapshot_id",
         "branch", "idempotency_key", "attempts", "skipped_duplicate",
@@ -793,7 +793,7 @@ def test_row_count_falls_back_to_scanning_without_summary(catalog_config, sample
     assert _row_count(TableWithoutSummary()) == 6
 
 
-# --------------------------------------------------------------------------- 0.2.0 (C3): catalogs and direct-mode fixes
+# --------------------------------------------------------------------------- platform C3: catalogs, direct-mode fixes
 
 
 def test_catalog_is_built_by_the_provider(catalog_config, monkeypatch):

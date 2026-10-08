@@ -1,4 +1,4 @@
-"""Tests for local_data_platform.engine.router: scan-size estimates and engine choice (design v0_2_0.md, C5)."""
+"""Tests for local_data_platform.engine.router: scan-size estimates and engine choice (v0_1_1_platform.md, C5)."""
 
 import logging
 import os

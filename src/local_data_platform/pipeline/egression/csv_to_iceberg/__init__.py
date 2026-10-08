@@ -1,7 +1,7 @@
 """Deprecated import path for :class:`~local_data_platform.pipeline.ingestion.csv_to_iceberg.CSVToIceberg`.
 
 Loading a CSV file into Iceberg brings data *into* the lakehouse, so the class
-lives under ``pipeline.ingestion``. This alias will be removed in 0.3.0.
+lives under ``pipeline.ingestion``. This alias will be removed in 0.2.0.
 """
 
 import warnings
@@ -19,8 +19,8 @@ class CSVToIceberg(_CSVToIceberg):
 
     def __init__(self, config=None, **kwargs):
         warnings.warn(
-            "local_data_platform.pipeline.egression.csv_to_iceberg.CSVToIceberg is deprecated and will be removed "
-            "in 0.3.0; use create_pipeline(config) or local_data_platform.pipeline.ingestion.csv_to_iceberg."
+            "local_data_platform.pipeline.egression.csv_to_iceberg.CSVToIceberg is deprecated and will be "
+            "removed in 0.2.0; use create_pipeline(config) or local_data_platform.pipeline.ingestion.csv_to_iceberg."
             "CSVToIceberg",
             DeprecationWarning,
             stacklevel=2,

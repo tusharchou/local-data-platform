@@ -1,6 +1,6 @@
 """N processes upserting the same keys into one table on the local SQLite catalog.
 
-Contract: ``docs/design/v0_2_0.md`` C3 and SaaS design §7.15. Three runs of the same workload:
+Contract: ``docs/design/v0_1_1_platform.md`` C3 and SaaS design §7.15. Three runs of the same workload:
 
 * **raw pyiceberg** ``Table.upsert``, with no lock and no protocol. Every writer reads the same
   base, finds the round's keys missing and inserts them. The catalog CAS lets one commit win;

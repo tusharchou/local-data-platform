@@ -10,21 +10,32 @@ It's for learning how a lakehouse works, for building and testing pipelines loca
 for cloud infrastructure, and for giving agents and notebooks safe, reproducible access to the
 tables you build.
 
-> **Status.** This is version 0.2.0, not yet on PyPI. It carries the 0.1.1 hardening work and
-> the 0.2.0 features ("multi-writer, any catalog, object storage, agent-ready", contract in
-> [`docs/design/v0_2_0.md`](docs/design/v0_2_0.md)), which work from Python and through the
-> [0.2.0 `ldp` commands](#020-commands). Only 0.1.0 is on PyPI, and it has a different module
-> layout, so install from source as shown below.
+> **Status.** This is version 0.1.1, released from PR #117, the first release on PyPI since
+> 0.1.0. It carries the hardening work (contract in
+> [`docs/design/v0_1_1.md`](docs/design/v0_1_1.md)) and the platform work ("multi-writer, any
+> catalog, object storage, agent-ready", contract in
+> [`docs/design/v0_1_1_platform.md`](docs/design/v0_1_1_platform.md)), which works from Python and
+> through the [platform `ldp` commands](#platform-commands). From now on the version number follows
+> the milestones in the [roadmap](docs/roadmap.md).
 
 ## Quickstart
 
-`ldp` needs Python 3.12 or newer. Install it from a clone of this repo:
+`ldp` needs Python 3.12 or newer. Install it from PyPI, preferably in a virtual environment:
+
+```bash
+pip install "local-data-platform[duckdb]>=0.1.1"
+
+ldp demo --workdir ldp_demo
+```
+
+To work on the library itself, install it from a clone of this repo. `make install` creates
+`.venv` and installs the package in editable mode with the `dev` and `docs` extras:
 
 ```bash
 git clone https://github.com/tusharchou/local-data-platform.git
 cd local-data-platform
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[duckdb]"
+make install
+source .venv/bin/activate
 
 ldp demo --workdir ldp_demo
 ```
@@ -163,7 +174,7 @@ without creating anything when the config's catalog is a SQLite file that doesn'
 other [catalog types](#catalogs-and-object-storage); they have been run against `sql` (SQLite) and
 `rest` catalogs.
 
-### 0.2.0 commands
+### Platform commands
 
 `ldp --help` lists them, and `ldp <command> --help` shows each one's options. Each is also a Python
 call:
@@ -197,18 +208,18 @@ Partition transforms are `identity`, `year`, `month`, `day`, `hour`, `bucket[N]`
 `truncate[W]`. On pyiceberg 0.10 and later, writing with any transform except `identity` needs the
 `pyiceberg-core` package, which `ldp` depends on, so a normal install has it. If it's missing, the
 demo's step 4 says so and partitions by `identity(pickup_date)` instead. The full schema, with an
-example of every check, is in the [v0.1.1 design contract](docs/design/v0_1_1.md#config-schema);
+example of every check, is in the [v0.1.1 hardening contract](docs/design/v0_1_1.md#config-schema).
 `local_data_platform.spec.json_schema()` returns it as JSON Schema, and `ldp schema` prints it. The configs in
 [`examples/`](examples/README.md) are real ones you can run.
 
 ## Catalogs and object storage
 
-The catalog block's `type` picks the catalog. It defaults to `local`, so every 0.1.1 config keeps
-working unchanged.
+The catalog block's `type` picks the catalog. It defaults to `local`, so a catalog block without
+`type` keeps working unchanged.
 
 | `type` | Keys | What you get |
 |---|---|---|
-| `local` (alias `LocalIceberg`) | `identifier`, `warehouse_path` | A SQLite catalog file and a warehouse folder, as in 0.1.1 |
+| `local` (alias `LocalIceberg`) | `identifier`, `warehouse_path` | A SQLite catalog file and a warehouse folder |
 | `sql` (alias `sqlite`) | `uri` (a SQLAlchemy URI such as `sqlite:///…` or `postgresql+psycopg://…`), `warehouse`, `name`, `password_env` | pyiceberg's `SqlCatalog`. Its tables are the ones Iceberg's Java `JdbcCatalog` uses, so Spark can share it |
 | `rest` | `uri`, `warehouse`, `name`, `token_env`, `credential_env`, and optional `properties` (such as `s3.endpoint`) | pyiceberg's `RestCatalog`, for any Iceberg REST catalog, such as Polaris, Nessie or Lakekeeper |
 | `glue` | `name`, `warehouse`, and optional `properties` | pyiceberg's `GlueCatalog` (the `glue` extra). AWS credentials come from boto3's default chain |
@@ -217,8 +228,8 @@ What has been tested: `local` and `sql` on SQLite; `rest` against Apache Iceberg
 test server (`tools/rest_fixture`, opt-in); `glue` against a local moto server. Postgres and
 hosted REST catalogs (Polaris, S3 Tables, Unity and so on) are not tested yet.
 
-The namespace tables live in comes from `identifier` for `local` catalogs (as in 0.1.1), and from
-`namespace`, falling back to `identifier`, for every other type.
+The namespace tables live in comes from `identifier` for `local` catalogs, and from `namespace`,
+falling back to `identifier`, for every other type.
 `properties` are passed through to pyiceberg, and `properties_env` maps a property to the
 environment variable holding its value. A REST target looks like this:
 
@@ -267,14 +278,16 @@ moto server; `gs://` reads and writes have no test against a GCS emulator yet.
 
 ## Exactly-once writes
 
-A plain `Iceberg.put(df, mode)` is **direct mode**. It keeps the 0.1.1 semantics (appending twice
-gives duplicates, overwriting twice doesn't) with three fixes:
+A plain `Iceberg.put(df, mode)` is **direct mode**. It keeps the semantics of the
+[hardening contract](docs/design/v0_1_1.md) (appending twice gives duplicates, overwriting twice
+doesn't) with three fixes:
 
 - **One commit per write.** Adding new columns and writing the data happen in one transaction.
 - **Counts from metadata.** `rows_before` and `rows_after` come from the snapshots' `total-records`,
   not from a scan.
 - **A lock on local catalogs.** `overwrite` and `upsert` take an exclusive file lock,
-  `<warehouse>/.ldp/locks/<namespace>.<table>.lock`, so two processes on one laptop can't race.
+  `<warehouse>/.ldp/locks/<namespace>.<table>.lock`, so two overwrites or upserts on one laptop
+  can't interleave. Appends take no lock (see [Known limitations](#known-limitations)).
 
 Direct mode on a shared remote catalog is a single-writer mode. For several writers, pass a
 `CommitContext` and `put` switches to the **staged publish protocol**: it writes to a private
@@ -318,7 +331,7 @@ multi-process upsert race.
 
 | Sink | Writes |
 |---|---|
-| `NullSink` | Nothing (the default, so 0.1.1 behaviour is unchanged) |
+| `NullSink` | Nothing (the default, so a run emits no events unless you choose a sink) |
 | `JsonlSink(path)` | One JSON event per line |
 | `OpenLineageSink(path_or_url)` | OpenLineage 1.x `RunEvent`s with schema, data-quality and output-statistics facets |
 | `IcebergSink(catalog_spec, base_dir)` | Batched appends to `_ldp.runs` and `_ldp.quality_results`, both day-partitioned, in your own catalog (the MCP server also uses it for `_ldp.audit`) |
@@ -348,7 +361,7 @@ read it from Python. `local_data_platform.spec` gives each config a stable `spec
 `DuckDBEngine.register_iceberg(table, alias, snapshot_id=None, row_filter=None, native=None)`
 uses DuckDB's `iceberg` extension when it can: the table becomes a view over `iceberg_scan` at the
 chosen snapshot, which streams and pushes filters down instead of loading the table into memory.
-If the extension can't load, it falls back to the 0.1.1 in-memory scan with a warning. It never
+If the extension can't load, it falls back to the in-memory scan with a warning. It never
 downloads the extension on its own, so it works offline; `DuckDBEngine(install_extensions=True)` allows
 that. `native=True` or `native=False` forces one path.
 
@@ -561,15 +574,16 @@ opt-in workflow (`.github/workflows/jvm.yml`): they run when started by hand, we
 request labelled `jvm`, and never block a merge. See the [changelog](CHANGELOG.md) for what changed
 in each release, and the [contributing guide](docs/contributing.md) to get involved.
 
-## Known limitations and roadmap
+## Known limitations
 
-- **Not on PyPI yet.** PyPI has only 0.1.0, which has a different module layout. Install 0.2.0
-  from source.
 - **The engine router is unused.** Nothing calls `engine.router` yet.
 - **Remote catalogs are lightly tested.** `rest` is tested against Iceberg's REST test server and
   `glue` against moto. Postgres, hosted REST catalogs and GCS have no integration tests yet.
 - **Direct writes to a shared catalog are single-writer.** Several writers need the staged protocol
   (`commit=`). The local file lock only covers processes on one machine.
+- **Concurrent direct-mode appends can fail on pyiceberg 0.11.** The append that loses the commit
+  race raises `CommitFailedException` (pyiceberg 0.12 retries it). Use the staged protocol
+  (`commit=`) for several writers. 0.1.2 adds the retry for direct appends (#88).
 - **Exactly once means at most one effect per key.** Duplicates a producer sent upstream are not
   removed.
 - **An upsert batch needs every column of the table.** An upsert replaces whole rows, so a batch
@@ -584,9 +598,24 @@ in each release, and the [contributing guide](docs/contributing.md) to get invol
 - **No compaction.** Maintenance expires snapshots and finds orphans; it doesn't rewrite data files.
 - **BigQuery is read-only.** It can be a source, not a target.
 
-Likely next steps, with no dates committed: releasing 0.2.0, then streaming and incremental reads,
-compaction, and Spark covered by required CI. The
-[SaaS architecture](docs/design/saas_architecture.md) sketches a longer-term roadmap.
+## Roadmap
+
+From 0.1.1 on, the package version equals the milestone number. Each milestone adds the next layer
+of a data platform, and every layer runs on a laptop first:
+
+| Version | Milestone | What it adds |
+|---|---|---|
+| 0.1.2 | Warehousing: DuckDB, Iceberg, DBT | dbt models over Iceberg tables, published back to Iceberg, plus Excel input |
+| 0.1.3 | Orchestration | Windows, backfills, retries and a laptop scheduler, plus an Airflow operator |
+| 0.1.4 | Self Serving Gold Layer | Gold tables with owners and docs, releases, metrics, a catalog and exports |
+| 0.1.5 | Monitoring | SLAs, freshness, volume, schema and metric monitors, alerts and `ldp status` |
+| 0.1.6 | Business Intelligence Reporting Dashboarding | Offline HTML reports, Slack delivery, a live dashboard and BI tool recipes |
+| 0.1.7 | Data Science Insights | Churn, retention, funnels, sessions, training sets and a notebook |
+| 0.1.8 | LLM | Catalog search and `ldp ask`, text to SQL that corrects itself |
+| 0.1.9 | Launch Documentation | The Learn path, generated reference pages, onboarding and contributor setup |
+| 0.2.0 | Cloud Integration | Profiles, cloud catalogs and storage, Snowflake and one container image |
+
+The [roadmap](docs/roadmap.md) has the goal, issues and demo of each milestone.
 
 ## References
 

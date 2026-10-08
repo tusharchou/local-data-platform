@@ -19,7 +19,7 @@ Commands::
     ldp mcp --config DIR_OR_FILE           (mcp_server)
 
 The commands in the second group are added by the ``add_cli`` function of the module named
-next to them (``docs/design/v0_2_0.md`` C9).
+next to them (``docs/design/v0_1_1_platform.md`` C9).
 
 Every command exits with 0 on success and 1 on error. Errors are printed as one
 friendly line on stderr; add ``-v`` for debug logging and the full traceback.

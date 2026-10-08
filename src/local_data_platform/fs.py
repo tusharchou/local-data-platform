@@ -1,6 +1,6 @@
 """Filesystem access for local paths and object stores, through ``pyarrow.fs``.
 
-Contract: ``docs/design/v0_2_0.md`` section C2. Every file format (CSV, Parquet, JSON) opens its
+Contract: ``docs/design/v0_1_1_platform.md`` section C2. Every file format (CSV, Parquet, JSON) opens its
 data through this module, so a dataset path can be any of:
 
 * a local path, absolute or relative. It follows :func:`local_data_platform.paths.resolve_path`

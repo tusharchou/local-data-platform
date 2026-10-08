@@ -4,6 +4,11 @@ Status: proposal, 2026-09-30. Nothing in this document changes the [v0.1.1 contr
 describes what is built on top of it, in which order, and what would make the result worth a
 billion dollars or tell us early that it will not be.
 
+!!! note "Phases and version numbers superseded by the roadmap"
+    The phases, dates and version numbers in this proposal are superseded by the
+    [roadmap](../roadmap.md). Its Phase 1 ships in 0.1.1 as the
+    [v0.1.1 platform contract](v0_1_1_platform.md), and in the roadmap 0.2.0 is Cloud Integration.
+
 This design starts from the operations-first proposal and takes ideas from the two proposals that
 lost to it (see [§15](#15-alternatives-considered)). It fixes every fatal flaw the technical,
 business and execution reviews raised. Market numbers come only from the research brief and link
@@ -18,10 +23,10 @@ without a link are planning assumptions and are labelled as such.
     `SqlCatalog` on SQLite. They will be checked in as tests in Phase 1; Postgres runs are pending,
     because Postgres and Docker are not installed on the machine used.
 
-    The line numbers and the four write-path defects in §2.1 describe the tree before the 0.2.0
-    work. The [v0.2.0 contract](v0_2_0.md) fixes them (C1, C3, C5), and its
-    [implementation status](v0_2_0.md#implementation-status) says what exists now. Nothing in this
-    document beyond that contract has been built.
+    The line numbers and the four write-path defects in §2.1 describe the tree before the platform
+    work. The [v0.1.1 platform contract](v0_1_1_platform.md) fixes them (C1, C3, C5), and its
+    [implementation status](v0_1_1_platform.md#implementation-status) says what exists now.
+    Nothing in this document beyond that contract has been built.
 
 ---
 

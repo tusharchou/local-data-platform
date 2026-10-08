@@ -4,25 +4,63 @@ All notable changes to this project are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
-## [0.2.0] - Unreleased
+## [0.1.1] - Unreleased
 
-"Multi-writer, any catalog, object storage, agent-ready": Phase 1 of
-`docs/design/saas_architecture.md`. The build contract is `docs/design/v0_2_0.md`. This is the
-first release on PyPI since 0.1.0, and it also ships the 0.1.1 hardening work listed in the next
-section, which was never released on its own. The features below work from Python and from the new
-`ldp` subcommands; see [Not done yet](#not-done-yet) for what is still missing.
+The first release since 0.1.0. It brings together two pieces of work that were never released on
+their own. The hardening work (contract `docs/design/v0_1_1.md`) gives one package, correct and
+idempotent writes, data quality checks, local SQL and a green CI. The platform work (contract
+`docs/design/v0_1_1_platform.md`) is "multi-writer, any catalog, object storage, agent-ready",
+Phase 1 of `docs/design/saas_architecture.md`, and was drafted as 0.2.0. Its features work from
+Python and from the new `ldp` subcommands. See [Not done yet](#not-done-yet) for what is still
+missing.
+
+From now on the package version follows the milestones in `docs/roadmap.md`, from 0.1.2
+Warehousing to 0.2.0 Cloud Integration. The deprecations below end in 0.2.0. The release tag for
+this version is `v0.1.1`. (A `release-v0.1.1` git tag from 2024-10-30 and a `v0.1.1` branch from
+2025-01 point at older code.)
 
 The project is now MIT licensed throughout. The `LICENSE` file was already MIT, but it named the
 wrong copyright holder, and the package metadata said Apache-2.0.
 
 ### Added
 
-- Pluggable catalogs: `catalog.provider.create_catalog(spec)` with the `local` (the default, as in
-  0.1.1), `sql`, `rest` and `glue` types, `register_catalog_type` for your own, and
-  `catalog_namespace`. Configs name environment variables for tokens, credentials and passwords
-  (`token_env`, `credential_env`, `password_env`, `properties_env`); literal secrets in a spec are
-  rejected, and reprs and logs redact secret-looking keys. `Iceberg(..., catalog_obj=)` takes an
-  existing catalog object.
+- Write modes for Iceberg targets: `append`, `overwrite` (replaces the table's rows, so re-runs
+  are idempotent) and `upsert` on configured `join_cols`. `Iceberg.put` returns a `WriteResult`
+  with row counts before and after, and the snapshot ID.
+- Partitioned Iceberg tables from `partition_by` in the config: `identity`, `year`, `month`,
+  `day`, `hour`, `bucket[N]` and `truncate[W]`.
+- Time travel: `Iceberg.snapshots()` and `Iceberg.get(snapshot_id=...)`, plus `row_filter`,
+  `selected_fields` and `limit` on reads.
+- Schema evolution: new columns in a batch are added to the table by name.
+- A `quality` module with `row_count`, `not_null`, `unique`, `accepted_values`, `range`,
+  `freshness` and `schema` checks. They run before the write, and with `on_failure: fail` a failed
+  check raises `DataQualityError` and nothing is written.
+- `DuckDBEngine` in `engine.duckdb` for SQL over Iceberg and Arrow tables (the `[duckdb]` extra).
+- A pipeline registry and factory: `register_pipeline`, `create_pipeline(config)` and
+  `registered_pipelines()`. An unknown route raises `PipelineNotFound` listing the registered ones.
+- `Pipeline` built by composition from a source, a target, transforms and checks, returning a
+  `PipelineResult`. New built-in `IcebergToParquet`.
+- The `ldp` command: `run`, `pipelines`, `snapshots`, `query` and `demo`.
+- `ldp demo`, an offline end-to-end walkthrough on deterministic synthetic data.
+- `Config.from_json`, which resolves the config's paths against the config file's folder, and
+  `resolve_path`.
+- `github.get_item` and an exception hierarchy under `LDPError`.
+- `CHANGELOG.md`, `docs/quickstart.md`, `examples/README.md` and
+  `docs/design/factory_registry.md`.
+- Tests for packaging (version, no import-time side effects, src-only layout) and for every
+  example config.
+- Makefile targets `install`, `lint`, `test`, `demo`, `build`, `smoke`, `docs`, `serve-docs`,
+  `clean` and `all`.
+- Experimental Spark support in `engine.spark`: `SparkEngine` (PySpark, the new `spark` extra, plus
+  a JDK 17+) and `ScalaSparkJob`, which runs `spark/IcebergJob.scala` with scala-cli. Both open the
+  same SQLite catalog as pyiceberg. Their integration tests are opt-in (`LDP_RUN_SPARK=1`) and not
+  run in CI. See `docs/spark.md`.
+- `LocalIcebergCatalog.close()` (also a context manager) and `LocalIcebergCatalog.database_path()`.
+- Pluggable catalogs: `catalog.provider.create_catalog(spec)` with the `local` (the default), `sql`,
+  `rest` and `glue` types, `register_catalog_type` for your own, and `catalog_namespace`. Configs
+  name environment variables for tokens, credentials and passwords (`token_env`, `credential_env`,
+  `password_env`, `properties_env`). Literal secrets in a spec are rejected, and reprs and logs
+  redact secret-looking keys. `Iceberg(..., catalog_obj=)` takes an existing catalog object.
 - Object storage: `local_data_platform.fs` (`filesystem_for`, `open_input`, `open_output_atomic`,
   `exists`) over `pyarrow.fs`. CSV, Parquet and JSON accept `s3://` and `gs://` paths, and `s3://`
   honours `AWS_ENDPOINT_URL_S3` and `AWS_ENDPOINT_URL`.
@@ -68,12 +106,13 @@ wrong copyright holder, and the package metadata said Apache-2.0.
   `find_orphans` and `remove_orphans` (a dry run by default).
 - `tools/rest_fixture`: Apache Iceberg's REST catalog test server, run with scala-cli, for the
   opt-in REST catalog tests (`LDP_RUN_REST=1`) and `make demo-rest`.
-- Makefile targets `demo-robotics`, `demo-agent`, `demo-spark`, `demo-rest`, `demo-all`,
-  `spark-test` and `rest-test`.
+- Makefile targets for the new features: `demo-robotics`, `demo-agent`, `demo-spark`,
+  `demo-rest`, `demo-all`, `spark-test` and `rest-test`.
 - The new `ldp` subcommands, registered by each module's `add_cli`: `ldp catalog test`,
   `ldp schema`, `ldp plan`, `ldp runs`, `ldp commits`, `ldp datasets pin|list|export`,
   `ldp maintain`, `ldp mcp` and `ldp spark`. Their modules are imported only when the command line
-  may need them, so `ldp --version` and the 0.1.1 commands don't load them.
+  may need them, so `ldp --version` and the core commands (`run`, `pipelines`, `snapshots`, `query`
+  and `demo`) don't load them.
 - `catalog.provider.catalog_database_file` and `require_catalog_database`, and
   `iceberg_from_config(..., must_exist=True)`, which every read-only command uses.
 - The `mcp`, `s3` and `glue` extras. The `dev` extra adds `moto[server]` and the MCP SDK.
@@ -83,107 +122,19 @@ wrong copyright holder, and the package metadata said Apache-2.0.
   and scala-cli. It runs when started by hand, weekly, or on a pull request labelled `jvm`, and its
   jobs never block a merge.
 - Docs: `docs/catalogs.md`, `docs/exactly_once.md`, `docs/observability.md`, `docs/agents.md` and
-  `docs/robotics.md`, with the v0.2.0 contract (and its implementation status) and the SaaS
-  architecture proposal in the site navigation.
-
-### Changed
-
-- The minimum pyiceberg is 0.11. On 0.10.0, a row filter on a nested field (such as
-  `loc.zone = 'north'`) either fails or is applied to a top-level column with the same name, so a
-  read can return the wrong rows and an `overwrite` can delete the wrong rows. 0.10.0 also fails to
-  expire a snapshot that has a table statistics file. pyiceberg 0.11.0 fixes both.
-- Direct-mode Iceberg writes make one commit per write: the schema union and the data write run in
-  one transaction.
-- `rows_before` and `rows_after` come from snapshot summaries (`total-records`) instead of a scan.
-- `format/iceberg` builds its catalog with `create_catalog`, so `ldp run`, `ldp snapshots` and
-  `ldp query` work with the new catalog types.
-- CI installs the `s3` and `glue` extras with `dev` and `bigquery`, so the moto-backed S3 and Glue
-  tests and the MCP tests run on every push.
-- `.gitignore` also ignores `.ldp/` run state and scala-cli, Bloop and Metals build output.
-- `make lint` (and so CI) also lints `scripts/`, which now passes flake8.
-- `docs/design/v0_1_1.md` records F9 (Scala Spark) as implemented, as the experimental
-  `engine.spark`.
-
-### Fixed
-
-- A direct `overwrite` or `upsert` could lose or duplicate rows when two processes wrote the same
-  local table at once. Both now take an exclusive lock on
-  `<warehouse>/.ldp/locks/<namespace>.<table>.lock`.
-- A write that added columns made two commits, so a reader or a failure between them could see the
-  new schema without the data.
-- `make generate-docs` ran an empty `docs/scripts/generate_issue_list.py`. It now runs
-  `scripts/generate_issue_list.py`, and the empty copy is removed.
-- Read-only commands on a `sql` config whose SQLite file didn't exist created an empty catalog
-  (0.1.1 guarded only `local` catalogs). `ldp snapshots`, `query`, `commits`, `maintain`,
-  `datasets pin` and `catalog test` now fail without creating anything.
-- An upsert batch that lacked one of the table's columns failed deep inside pyiceberg with
-  "Target schema's field names are not matching". It is now a `ConfigError` naming the missing
-  columns, in direct and staged mode, and nothing is written.
-- `make rest-test` (`pytest -m rest`) ran none of the REST catalog tests, because
-  `tests/test_rest_catalog.py` wasn't marked `rest`.
-
-### Removed
-
-- `how_to_setup.md`, a Poetry-based setup guide that no longer matched the build, and the unused
-  root `poetry.lock`. `make install` and the README cover setup.
-- The empty `scripts/github_api.py`, which nothing imported.
-- `scripts/fetch_rtd_urls.py`, an unused Read the Docs crawler that still imported `beautifulsoup4`
-  after that dependency was dropped.
-
-### Not done yet
-
-- No integration tests yet for Postgres `sql` catalogs, hosted REST catalogs or `gs://` reads and
-  writes.
-- Nothing calls the engine router (`engine.router`) yet.
-
-## [0.1.1] - Not released separately
-
-The hardening work: one package, correct and idempotent writes, data quality checks, local SQL,
-and a green CI. The design contract is in `docs/design/v0_1_1.md`. It was never published to PyPI
-on its own and ships as part of 0.2.0. (A `release-v0.1.1` git tag from 2024-10-30 points at older
-code.)
-
-### Added
-
-- Write modes for Iceberg targets: `append`, `overwrite` (replaces the table's rows, so re-runs
-  are idempotent) and `upsert` on configured `join_cols`. `Iceberg.put` returns a `WriteResult`
-  with row counts before and after, and the snapshot ID.
-- Partitioned Iceberg tables from `partition_by` in the config: `identity`, `year`, `month`,
-  `day`, `hour`, `bucket[N]` and `truncate[W]`.
-- Time travel: `Iceberg.snapshots()` and `Iceberg.get(snapshot_id=...)`, plus `row_filter`,
-  `selected_fields` and `limit` on reads.
-- Schema evolution: new columns in a batch are added to the table by name.
-- A `quality` module with `row_count`, `not_null`, `unique`, `accepted_values`, `range`,
-  `freshness` and `schema` checks. They run before the write, and with `on_failure: fail` a failed
-  check raises `DataQualityError` and nothing is written.
-- `DuckDBEngine` in `engine.duckdb` for SQL over Iceberg and Arrow tables (the `[duckdb]` extra).
-- A pipeline registry and factory: `register_pipeline`, `create_pipeline(config)` and
-  `registered_pipelines()`. An unknown route raises `PipelineNotFound` listing the registered ones.
-- `Pipeline` built by composition from a source, a target, transforms and checks, returning a
-  `PipelineResult`. New built-in `IcebergToParquet`.
-- The `ldp` command: `run`, `pipelines`, `snapshots`, `query` and `demo`.
-- `ldp demo`, an offline end-to-end walkthrough on deterministic synthetic data.
-- `Config.from_json`, which resolves the config's paths against the config file's folder, and
-  `resolve_path`.
-- `github.get_item` and an exception hierarchy under `LDPError`.
-- `CHANGELOG.md`, `docs/quickstart.md`, `examples/README.md` and
-  `docs/design/factory_registry.md`.
-- Tests for packaging (version, no import-time side effects, src-only layout) and for every
-  example config.
-- Makefile targets `install`, `lint`, `test`, `demo`, `build`, `smoke`, `docs`, `serve-docs`,
-  `clean` and `all`.
-- Experimental Spark support in `engine.spark`: `SparkEngine` (PySpark, the new `spark` extra, plus
-  a JDK 17+) and `ScalaSparkJob`, which runs `spark/IcebergJob.scala` with scala-cli. Both open the
-  same SQLite catalog as pyiceberg. Their integration tests are opt-in (`LDP_RUN_SPARK=1`) and not
-  run in CI. See `docs/spark.md`.
-- `LocalIcebergCatalog.close()` (also a context manager) and `LocalIcebergCatalog.database_path()`.
+  `docs/robotics.md`, with the platform contract (and its implementation status), the roadmap and
+  the SaaS architecture proposal in the site navigation.
+- `docs/roadmap.md`, the public roadmap from 0.1.2 to 0.2.0, and a Roadmap section in the README.
+- Packaging tests that no `CHANGELOG.md` version heading is newer than the package version, and
+  that every "removed in" notice in the code names a later version.
 
 ### Changed
 
 - The library lives only in `src/local_data_platform`, so the wheel you build is the code you
   test. The publish workflow builds from the repo root when a GitHub release is published, checks
-  that the tag matches the package version, smoke-tests the wheel and uploads it with PyPI trusted
-  publishing, so the repo holds no PyPI token.
+  that the release tag is exactly `v` followed by the package version (`v0.1.1` here),
+  smoke-tests the wheel and uploads it with PyPI trusted publishing, so the repo holds no PyPI
+  token.
 - `pyproject.toml` uses PEP 621 metadata with the poetry-core backend. Dependencies are declared:
   `pyiceberg[pyarrow,sql-sqlite,pyiceberg-core]>=0.11,<0.13`, `pyarrow` and `requests`, with the
   `duckdb`, `bigquery`, `dev`, `docs` and (experimental) `spark` extras. `pyiceberg-core` is needed for partitioned writes
@@ -201,14 +152,29 @@ code.)
   release, a wheel build with a smoke test, and `mkdocs build --strict`, on pushes and pull
   requests to `main` only.
 - The README describes only what exists.
+- The minimum pyiceberg is 0.11. On 0.10.0, a row filter on a nested field (such as
+  `loc.zone = 'north'`) either fails or is applied to a top-level column with the same name, so a
+  read can return the wrong rows and an `overwrite` can delete the wrong rows. 0.10.0 also fails to
+  expire a snapshot that has a table statistics file. pyiceberg 0.11.0 fixes both.
+- Direct-mode Iceberg writes make one commit per write: the schema union and the data write run in
+  one transaction.
+- `rows_before` and `rows_after` come from snapshot summaries (`total-records`) instead of a scan.
+- `format/iceberg` builds its catalog with `create_catalog`, so `ldp run`, `ldp snapshots` and
+  `ldp query` work with the new catalog types.
+- CI installs the `s3` and `glue` extras with `dev` and `bigquery`, so the moto-backed S3 and Glue
+  tests and the MCP tests run on every push.
+- `.gitignore` also ignores `.ldp/` run state and scala-cli, Bloop and Metals build output.
+- `make lint` (and so CI) also lints `scripts/`, which now passes flake8.
+- `docs/design/v0_1_1.md` records F9 (Scala Spark) as implemented, as the experimental
+  `engine.spark`.
 
 ### Deprecated
 
 - Legacy config paths with a leading slash that were really relative to the cwd (such as
-  `"/rides.csv"`). They still resolve, with a `DeprecationWarning`, and support ends in 0.3.0.
+  `"/rides.csv"`). They still resolve, with a `DeprecationWarning`, and support ends in 0.2.0.
 - `pipeline.egression.csv_to_iceberg.CSVToIceberg`, which was CSV to Iceberg filed under
-  egression. Use `create_pipeline`.
-- `logger.log()`. Use `logger.get_logger(name)`.
+  egression. Use `create_pipeline`. It will be removed in 0.2.0.
+- `logger.log()`. Use `logger.get_logger(name)`. It will be removed in 0.2.0.
 
 ### Removed
 
@@ -219,8 +185,15 @@ code.)
 - The `beautifulsoup4` dependency.
 - The placeholder test.
 - `local_data_platform.hello_world`, a project-template leftover that printed a greeting.
+- `how_to_setup.md`, a Poetry-based setup guide that no longer matched the build, and the unused
+  root `poetry.lock`. `make install` and the README cover setup.
+- The empty `scripts/github_api.py`, which nothing imported.
+- `scripts/fetch_rtd_urls.py`, an unused Read the Docs crawler that still imported `beautifulsoup4`
+  after that dependency was dropped.
 
 ### Fixed
+
+Bugs in 0.1.0, and bugs found and fixed while this release was built.
 
 - Every CSV or Parquet to Iceberg load crashed on pyiceberg 0.12, because it called the private
   `_namespace_exists`. It now uses the public `create_namespace_if_not_exists`.
@@ -245,6 +218,30 @@ code.)
   the caller's code rather than the library's.
 - `ldp snapshots` and `ldp query` on a config whose catalog didn't exist created an empty catalog.
   They now fail without creating anything.
+- A direct `overwrite` or `upsert` could lose or duplicate rows when two processes wrote the same
+  local table at once. Both now take an exclusive lock on
+  `<warehouse>/.ldp/locks/<namespace>.<table>.lock`.
+- A write that added columns made two commits, so a reader or a failure between them could see the
+  new schema without the data.
+- `make generate-docs` ran an empty `docs/scripts/generate_issue_list.py`. It now runs
+  `scripts/generate_issue_list.py`, and the empty copy is removed.
+- Read-only commands on a `sql` config whose SQLite file didn't exist created an empty catalog
+  (the hardening work guarded only `local` catalogs). `ldp snapshots`, `query`, `commits`,
+  `maintain`, `datasets pin` and `catalog test` now fail without creating anything.
+- An upsert batch that lacked one of the table's columns failed deep inside pyiceberg with
+  "Target schema's field names are not matching". It is now a `ConfigError` naming the missing
+  columns, in direct and staged mode, and nothing is written.
+- `make rest-test` (`pytest -m rest`) ran none of the REST catalog tests, because
+  `tests/test_rest_catalog.py` wasn't marked `rest`.
+
+### Not done yet
+
+- No integration tests yet for Postgres `sql` catalogs, hosted REST catalogs or `gs://` reads and
+  writes.
+- Nothing calls the engine router (`engine.router`) yet.
+- Concurrent direct-mode appends can fail with `CommitFailedException` on pyiceberg 0.11 (pyiceberg
+  0.12 retries them). Use staged mode for several writers. The retry for direct appends comes in
+  0.1.2 (#88).
 
 ## [0.1.0] - 2024-10
 

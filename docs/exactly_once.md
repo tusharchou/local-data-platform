@@ -2,19 +2,20 @@
 
 An Iceberg target can be written in two ways:
 
-- **Direct mode** is a plain `Iceberg.put(df, mode)`. It is what 0.1.1 did, with three fixes. It is
-  safe for one writer per table, and for several processes on one laptop.
+- **Direct mode** is a plain `Iceberg.put(df, mode)`, as the [hardening contract](design/v0_1_1.md)
+  specified it, with three fixes. It is safe for one writer per table. Several processes on one
+  laptop can overwrite and upsert safely, but see the note on concurrent appends below.
 - **Staged mode** is `Iceberg.put(df, mode, commit=CommitContext(...))`. It is for several writers,
   retries and re-runs: each idempotency key has at most one effect on `main`.
 
-This is contract C3 of the [v0.2.0 design](design/v0_2_0.md), and the protocol from §7 of the
-[SaaS architecture](design/saas_architecture.md). The code is in `format/iceberg/__init__.py` and
-`format/iceberg/commit.py`.
+This is contract C3 of the [v0.1.1 platform contract](design/v0_1_1_platform.md), and the
+protocol from §7 of the [SaaS architecture](design/saas_architecture.md). The code is in
+`format/iceberg/__init__.py` and `format/iceberg/commit.py`.
 
 ## Direct mode
 
-Appending the same batch twice gives duplicates, and overwriting twice doesn't, exactly as in
-0.1.1. What changed:
+Appending the same batch twice gives duplicates, and overwriting twice doesn't, exactly as in the
+hardening contract. What changed:
 
 - **One commit per write.** When a batch brings new columns, the schema union and the data write
   run in one `table.transaction()`, so a reader never sees the new schema without the data. (An
@@ -24,7 +25,10 @@ Appending the same batch twice gives duplicates, and overwriting twice doesn't, 
 - **A lock on local catalogs.** On a `local` catalog, `overwrite` and `upsert` hold an exclusive
   file lock, `<warehouse>/.ldp/locks/<namespace>.<table>.lock` (`fcntl` on POSIX, `msvcrt` on
   Windows), for their read-modify-write. Two processes on one machine can't interleave. `append`
-  takes no lock: concurrent appends don't conflict, because each one only adds its own files.
+  takes no lock. Concurrent appends add separate files, but they still race to commit. On
+  pyiceberg 0.11 the append that loses the race fails with `CommitFailedException`, and
+  pyiceberg 0.12 retries it. Use staged mode for several writers. The retry for direct appends
+  comes in 0.1.2 (#88).
 
 The lock only covers processes that share the warehouse folder. On a `sql`, `rest` or `glue`
 catalog that other machines also write, direct mode is a single-writer mode: use staged mode.

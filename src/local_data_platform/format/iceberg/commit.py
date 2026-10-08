@@ -1,7 +1,7 @@
 """Staged, exactly-once publishing to Iceberg tables.
 
 This is the publish protocol of ``docs/design/saas_architecture.md`` sections 7.3 to 7.8, built
-to the interfaces in ``docs/design/v0_2_0.md`` (C3). A write never touches ``main`` directly:
+to the interfaces in ``docs/design/v0_1_1_platform.md`` (C3). A write never touches ``main`` directly:
 
 1. **Fence** (:func:`fence`): one commit removes the branches of superseded attempts and records a
    fence marker for each, so a zombie attempt can never publish afterwards.

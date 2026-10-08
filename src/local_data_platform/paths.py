@@ -29,7 +29,7 @@ _PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__)) + os.sep
 def _warn_legacy(path: str | os.PathLike, root: Path, what: str = "it") -> None:
     warnings.warn(
         f"Path {str(path)!r} is written as absolute but {what} only exists relative to {root}. "
-        "Write it without the leading slash; legacy support will be removed in 0.3.0.",
+        "Write it without the leading slash; legacy support will be removed in 0.2.0.",
         DeprecationWarning,
         skip_file_prefixes=(_PACKAGE_DIR,),
     )
