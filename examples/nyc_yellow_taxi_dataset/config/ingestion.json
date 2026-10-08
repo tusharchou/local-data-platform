@@ -1,0 +1,33 @@
+{
+  "identifier": "nyc_taxi",
+  "who": "tourist",
+  "what": "trust",
+  "where": "NYC",
+  "when": "travel",
+  "how": "taxi",
+  "metadata": {
+    "source": {
+      "name": "rides",
+      "format": "PARQUET",
+      "path": "../data/yellow_tripdata_2023-01.parquet"
+    },
+    "target": {
+      "name": "rides",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "nyc_yellow_taxi_dataset",
+        "warehouse_path": "../warehouse"
+      },
+      "write_mode": "overwrite",
+      "partition_by": [{"column": "tpep_pickup_datetime", "transform": "day"}]
+    },
+    "quality": {
+      "on_failure": "warn",
+      "checks": [
+        {"check": "row_count", "min": 1},
+        {"check": "not_null", "columns": ["tpep_pickup_datetime", "tpep_dropoff_datetime"]},
+        {"check": "range", "column": "fare_amount", "min": 0}
+      ]
+    }
+  }
+}

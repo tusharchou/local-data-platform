@@ -1,5 +1,10 @@
 # Agentic Marketing Analyser
 
+!!! note "A proposal"
+    This page describes a possible offering built on local-data-platform. None of it is a product
+    or a feature of the library today.
+
+
 ## Summary
 
 This feature proposes the integration of an AI-powered agent that delivers location-specific marketing insights to help tour and activity operators understand what’s working and what needs attention across their local digital channels. Powered by a Local Data Platform (LDP), the agent transforms raw marketing data into clear, actionable recommendations that drive bookings, visibility, and revenue.

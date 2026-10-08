@@ -13,7 +13,7 @@
 | brmhastra-patch-1                          | User patch/feature branch                                    |
 | redpheonixx-patch-1 ... patch-5             | User patch/feature branches                                  |
 | tusharchou-patch-1 ... patch-8              | User patch/feature branches                                  |
-| v0.1.1                                     | Release tag branch                                           |
+| v0.1.1                                     | Old work-in-progress branch (2025-01), not the 0.1.1 release, which is the tag `v0.1.1` |
 | 3-012-viewing-data-through-duck-db-from-iceberg | Feature: DuckDB/Iceberg integration                     |
 | 51-011-supported-file-formats-and-io        | Feature: Supported file formats and IO                       |
 | dependabot/pip/docs/pip-e49d2f513e          | Automated dependency update                                  |

@@ -1,0 +1,25 @@
+{
+  "identifier": "near_transactions",
+  "who": "investor",
+  "what": "gain",
+  "where": "near",
+  "when": "trade",
+  "how": "gcp",
+  "metadata": {
+    "source": {
+      "name": "transaction_query",
+      "format": "JSON",
+      "engine": "BIGQUERY",
+      "path": "sample_queries/near_transaction.json",
+      "credentials": {
+        "name": "GCP",
+        "path": "~/.config/local-data-platform/gcp-service-account.json"
+      }
+    },
+    "target": {
+      "name": "near_transactions",
+      "format": "CSV",
+      "path": "../near_transactions.csv"
+    }
+  }
+}
