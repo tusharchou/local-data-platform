@@ -33,7 +33,7 @@ wrong copyright holder, and the package metadata said Apache-2.0.
   policy=None)` uses it when given a `CommitContext`: a re-run with the same idempotency key is a
   no-op (`skipped_duplicate=True`), a concurrent writer causes a rebase and retry, and superseded
   attempts are fenced. `WriteResult` gains `branch`, `idempotency_key`, `attempts` and
-  `skipped_duplicate`. It needs pyiceberg 0.10 or newer.
+  `skipped_duplicate`.
 - Run events: `events.RunEvent` and the `NullSink`, `MemorySink`, `JsonlSink`, `OpenLineageSink`,
   `IcebergSink` (the `_ldp.runs` and `_ldp.quality_results` tables) and `MultiSink` sinks, plus
   `read_jsonl`, `read_iceberg_events` and `summarize_runs`.
@@ -85,6 +85,10 @@ wrong copyright holder, and the package metadata said Apache-2.0.
 
 ### Changed
 
+- The minimum pyiceberg is 0.11. On 0.10.0, a row filter on a nested field (such as
+  `loc.zone = 'north'`) either fails or is applied to a top-level column with the same name, so a
+  read can return the wrong rows and an `overwrite` can delete the wrong rows. 0.10.0 also fails to
+  expire a snapshot that has a table statistics file. pyiceberg 0.11.0 fixes both.
 - Direct-mode Iceberg writes make one commit per write: the schema union and the data write run in
   one transaction.
 - `rows_before` and `rows_after` come from snapshot summaries (`total-records`) instead of a scan.
@@ -176,7 +180,7 @@ code.)
   that the tag matches the package version, smoke-tests the wheel and uploads it with PyPI trusted
   publishing, so the repo holds no PyPI token.
 - `pyproject.toml` uses PEP 621 metadata with the poetry-core backend. Dependencies are declared:
-  `pyiceberg[pyarrow,sql-sqlite,pyiceberg-core]>=0.10,<0.13`, `pyarrow` and `requests`, with the
+  `pyiceberg[pyarrow,sql-sqlite,pyiceberg-core]>=0.11,<0.13`, `pyarrow` and `requests`, with the
   `duckdb`, `bigquery`, `dev`, `docs` and (experimental) `spark` extras. `pyiceberg-core` is needed for partitioned writes
   with time, bucket or truncate transforms on pyiceberg 0.10 and later.
 - Config paths are relative to the config file's folder, and absolute paths work.
@@ -188,7 +192,7 @@ code.)
   the CLI and the demo add a handler.
 - The example report scripts use `Config.from_json` and `create_pipeline` instead of an if/else on
   formats, and their configs use relative paths.
-- CI runs lint, tests on Python 3.12 and 3.13 against pyiceberg 0.10.0 and the newest supported
+- CI runs lint, tests on Python 3.12 and 3.13 against pyiceberg 0.11.0 and the newest supported
   release, a wheel build with a smoke test, and `mkdocs build --strict`, on pushes and pull
   requests to `main` only.
 - The README describes only what exists.

@@ -286,7 +286,7 @@ def expire_snapshots(
             return report
         if not expiry_supported():
             raise NotImplementedError(
-                f"expiring snapshots needs pyiceberg >= 0.10 (installed: {_pyiceberg_version()}); "
+                f"expiring snapshots needs pyiceberg >= 0.11 (installed: {_pyiceberg_version()}); "
                 "pass dry_run=True to see the plan, or upgrade pyiceberg"
             )
         try:

@@ -11,7 +11,7 @@ authors = [
 requires-python = ">=3.12,<4"
 dependencies = [
     # pyiceberg-core: from pyiceberg 0.10, writes partitioned by year/month/day/hour/bucket/truncate need it.
-    "pyiceberg[pyarrow,sql-sqlite,pyiceberg-core]>=0.10,<0.13",
+    "pyiceberg[pyarrow,sql-sqlite,pyiceberg-core]>=0.11,<0.13",
     "pyarrow>=17",
     "requests>=2.31",
 ]
@@ -28,7 +28,7 @@ mcp = ["mcp>=2.2,<3", "duckdb>=1.1"]
 # S3 Tables or the Glue Iceberg REST endpoint. See docs/catalogs.md.
 s3 = ["boto3>=1.34"]
 # The AWS Glue catalog (catalog type "glue"). The provider imports boto3 lazily.
-glue = ["pyiceberg[glue]>=0.10,<0.13"]
+glue = ["pyiceberg[glue]>=0.11,<0.13"]
 dev = [
     "pytest>=8",
     "flake8>=7",

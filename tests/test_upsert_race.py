@@ -6,6 +6,8 @@ Contract: ``docs/design/v0_2_0.md`` C3 and SaaS design §7.15. Three runs of the
   base, finds the round's keys missing and inserts them. The catalog CAS lets one commit win;
   pyiceberg 0.12's commit retry then *rebases* each loser's append onto the new head instead of
   failing it, so every key lands once per writer. That is the race, and the test proves it exists.
+  pyiceberg 0.11 has no commit retry, so there the race shows as every loser raising
+  ``CommitFailedException``: one writer per round lands and the others' upserts are rejected.
 * **direct mode** ``Iceberg.put(mode="upsert")``, which takes the table's exclusive file lock on a
   ``local`` catalog: the read-modify-write is serialised, so there are no duplicates.
 * **staged mode** ``Iceberg.put(mode="upsert", commit=CommitContext(...))``, i.e.
@@ -289,10 +291,18 @@ def test_workload_shape():
 
 
 def test_raw_pyiceberg_upserts_race_and_duplicate_keys(tmp_path):
+    from pyiceberg.table import TableProperties
+
     report = run_race("raw", "insert", tmp_path)
 
-    # The race exists: each round's keys land once per writer.
-    assert report["duplicate_rows"] > 0, report
+    if hasattr(TableProperties, "COMMIT_NUM_RETRIES"):
+        # The race exists: each round's keys land once per writer.
+        assert report["duplicate_rows"] > 0, report
+    else:
+        # pyiceberg < 0.12 has no commit retry: the race exists, but the catalog CAS fails every
+        # writer but one per round instead of landing its keys again.
+        assert len(report["errors"]) == (PROCS - 1) * ROUNDS, report
+        assert all(error.startswith("CommitFailedException:") for error in report["errors"]), report
     assert report["duplicate_rows"] == report["rows"] - report["expected_keys"]
     assert report["distinct_keys"] == report["expected_keys"]
     assert report["rows"] == PROCS * ROUNDS * KEYS - sum(KEYS for e in report["errors"])

@@ -33,8 +33,8 @@ only the first. ``Catalog.commit_table`` validates every requirement it is given
 (``Catalog._update_and_stage_table``). It also bypasses ``Transaction.commit_transaction``'s
 retry, which would rebase the publish blindly.
 
-The staged protocol needs branch writes, so pyiceberg 0.10 or newer. Direct-mode writes in
-:mod:`local_data_platform.format.iceberg` keep working on pyiceberg 0.9.
+The staged protocol needs branch writes, which arrived in pyiceberg 0.10. This package needs 0.11
+or newer, so every supported pyiceberg has them.
 """
 
 import contextlib
@@ -749,8 +749,8 @@ def _upsert_takes_properties() -> bool:
 def _require_branch_writes() -> None:
     if not _branch_writes_supported():
         raise EngineNotFound(
-            "the staged commit protocol writes to Iceberg branches, which needs pyiceberg>=0.10; "
-            "upgrade with: pip install -U \"pyiceberg>=0.10\""
+            "the staged commit protocol writes to Iceberg branches, and this package needs pyiceberg>=0.11; "
+            "upgrade with: pip install -U \"pyiceberg>=0.11\""
         )
 
 

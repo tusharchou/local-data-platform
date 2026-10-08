@@ -348,7 +348,7 @@ def test_pyiceberg_without_expiry_support_plans_but_refuses_to_apply(ice, monkey
     monkeypatch.setattr(snapshots_module, "expiry_supported", lambda: False)
     plan = expire_snapshots(ice, older_than=_future(), retain_last=1, protect_keys_since=_future(), dry_run=True)
     assert sorted(plan["expired_snapshot_ids"]) == sorted(ids[:2])
-    with pytest.raises(NotImplementedError, match="pyiceberg >= 0.10"):
+    with pytest.raises(NotImplementedError, match="pyiceberg >= 0.11"):
         expire_snapshots(ice, older_than=_future(), retain_last=1, protect_keys_since=_future())
     assert _ids(ice.table()) == ids
 

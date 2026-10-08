@@ -602,7 +602,7 @@ def test_staged_put_validates_its_options(table):
 def test_staged_protocol_needs_branch_writes(table, monkeypatch):
     monkeypatch.setattr(commit, "_branch_writes_supported", lambda: False)
 
-    with pytest.raises(EngineNotFound, match="pyiceberg>=0.10"):
+    with pytest.raises(EngineNotFound, match="pyiceberg>=0.11"):
         table.put(rows([1]), commit=ctx())
 
 

@@ -304,7 +304,7 @@ upsert is recomputed against the new rows, never blindly rebased. A superseded a
 removing its branch, so it can't publish afterwards. `WriteResult` gains `branch`,
 `idempotency_key`, `attempts` and `skipped_duplicate`. What this guarantees is at most one effect
 on `main` per key, which with retries means effectively once. It doesn't remove duplicates a
-producer sent twice upstream. The staged protocol needs pyiceberg 0.10 or newer. `ldp commits
+producer sent twice upstream. `ldp commits
 CONFIG` lists the publishes on a table with their keys.
 [Exactly-once writes](docs/exactly_once.md) has the protocol and its tests, including the
 multi-process upsert race.
@@ -555,7 +555,7 @@ Temurin 17 JDK; the first run downloads it with Spark, Iceberg and their jars (a
 `tools/rest_fixture` (`make demo-rest` on port 8181; `REST_PORT=` changes it) and stop it
 afterwards, also when a step fails.
 
-CI runs lint, tests on Python 3.12 and 3.13 against both pyiceberg 0.10.0 and the newest supported
+CI runs lint, tests on Python 3.12 and 3.13 against both pyiceberg 0.11.0 and the newest supported
 release, the wheel smoke test and a strict docs build. The Spark and REST jobs are in a separate,
 opt-in workflow (`.github/workflows/jvm.yml`): they run when started by hand, weekly, or on a pull
 request labelled `jvm`, and never block a merge. See the [changelog](CHANGELOG.md) for what changed
@@ -569,8 +569,7 @@ in each release, and the [contributing guide](docs/contributing.md) to get invol
 - **Remote catalogs are lightly tested.** `rest` is tested against Iceberg's REST test server and
   `glue` against moto. Postgres, hosted REST catalogs and GCS have no integration tests yet.
 - **Direct writes to a shared catalog are single-writer.** Several writers need the staged protocol
-  (`commit=`), which needs pyiceberg 0.10 or newer. The local file lock only covers processes on
-  one machine.
+  (`commit=`). The local file lock only covers processes on one machine.
 - **Exactly once means at most one effect per key.** Duplicates a producer sent upstream are not
   removed.
 - **An upsert batch needs every column of the table.** An upsert replaces whole rows, so a batch

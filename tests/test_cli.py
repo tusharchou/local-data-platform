@@ -319,7 +319,10 @@ def test_module_command_help_exits_zero_and_offers_verbose(argv, capsys):
 def test_an_unknown_command_lists_the_module_commands_too(capsys):
     assert main(["catalg", "test"]) == 1
     err = capsys.readouterr().err
-    assert "invalid choice: 'catalg'" in err and "'maintain'" in err and "'mcp'" in err
+    assert "invalid choice: 'catalg'" in err
+    # Whether argparse quotes the choices depends on the Python version (3.12.15 doesn't, 3.13 does).
+    choices = {choice.strip(" '") for choice in err.split("choose from ", 1)[1].rstrip(")\n").split(",")}
+    assert {"maintain", "mcp"} <= choices
 
 
 @pytest.mark.parametrize("argv, needed", [

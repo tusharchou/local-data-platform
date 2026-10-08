@@ -19,8 +19,7 @@ There are two write paths:
 
 The catalog is built by :func:`local_data_platform.catalog.provider.create_catalog` from the
 ``target.catalog`` block, or passed in ready-made as ``catalog_obj``. Only public pyiceberg APIs
-are used; direct mode works across the supported pyiceberg range (``>=0.10,<0.13``) and staged
-mode needs pyiceberg 0.10 or newer.
+are used. Direct and staged mode both work across the supported pyiceberg range (``>=0.11,<0.13``).
 """
 
 import contextlib

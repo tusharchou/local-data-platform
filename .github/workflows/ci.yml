@@ -33,9 +33,9 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13"]
-        # 0.10.0 is the oldest pyiceberg that pyproject.toml allows (the staged commit protocol needs branch writes);
-        # "latest" is the newest release below 0.13.
-        pyiceberg: ["0.10.0", "latest"]
+        # 0.11.0 is the oldest pyiceberg that pyproject.toml allows (0.10.0 applies nested-field filters to the wrong
+        # column and can't expire snapshots that have statistics); "latest" is the newest release below 0.13.
+        pyiceberg: ["0.11.0", "latest"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

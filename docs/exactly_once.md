@@ -133,8 +133,8 @@ earlier commit. See [Run events and the `_ldp` namespace](observability.md#exact
   carries an idempotency key newer than the table's idempotency horizon: the
   `ldp.idempotency.horizon-days` table property, 7 days by default.
 
-Staged mode needs branch writes, which arrived in pyiceberg 0.10, the oldest version this package supports.
-Direct mode works on every supported pyiceberg.
+Staged mode needs branch writes, which arrived in pyiceberg 0.10. This package needs 0.11 or newer, so
+staged and direct mode both work on every supported pyiceberg.
 
 ## Tests
 
