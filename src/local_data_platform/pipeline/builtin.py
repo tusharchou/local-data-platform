@@ -9,6 +9,7 @@ first lookup, so callers don't have to.
 | PARQUET -> ICEBERG | :class:`ParquetToIceberg` |
 | ICEBERG -> CSV | :class:`IcebergToCSV` |
 | ICEBERG -> PARQUET | :class:`IcebergToParquet` |
+| DUCKDB -> ICEBERG | :class:`DuckDBToIceberg` |
 | JSON -> CSV, engine BIGQUERY | :class:`BigQueryToCSV` |
 """
 
@@ -16,10 +17,11 @@ from local_data_platform.pipeline.egression.iceberg_to_csv import IcebergToCSV
 from local_data_platform.pipeline.egression.iceberg_to_parquet import IcebergToParquet
 from local_data_platform.pipeline.ingestion.bigquery_to_csv import BigQueryToCSV
 from local_data_platform.pipeline.ingestion.csv_to_iceberg import CSVToIceberg
+from local_data_platform.pipeline.ingestion.duckdb_to_iceberg import DuckDBToIceberg
 from local_data_platform.pipeline.ingestion.parquet_to_iceberg import ParquetToIceberg
 
-BUILTIN_PIPELINES = (CSVToIceberg, ParquetToIceberg, IcebergToCSV, IcebergToParquet, BigQueryToCSV)
+BUILTIN_PIPELINES = (CSVToIceberg, ParquetToIceberg, IcebergToCSV, IcebergToParquet, BigQueryToCSV, DuckDBToIceberg)
 """Every built-in pipeline class."""
 
-__all__ = ["BUILTIN_PIPELINES", "BigQueryToCSV", "CSVToIceberg", "IcebergToCSV", "IcebergToParquet",
-           "ParquetToIceberg"]
+__all__ = ["BUILTIN_PIPELINES", "BigQueryToCSV", "CSVToIceberg", "DuckDBToIceberg", "IcebergToCSV",
+           "IcebergToParquet", "ParquetToIceberg"]

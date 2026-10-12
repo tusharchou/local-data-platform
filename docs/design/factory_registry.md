@@ -82,9 +82,24 @@ Pipelines are chosen by a **registry** keyed by what a config declares, and buil
 - **Introspection:** `registered_pipelines()` returns what is registered, and
   `get_pipeline_class(...)` returns the class for a key without building it. `ldp pipelines`
   prints the registered routes.
-- **Built-ins:** `CSVToIceberg`, `ParquetToIceberg`, `IcebergToCSV`, `IcebergToParquet` and
-  `BigQueryToCSV` must be registered before the first lookup, so `create_pipeline` works without
-  the caller importing any pipeline module.
+- **Built-ins:** the routes in the table below must be registered before the first lookup, so
+  `create_pipeline` works without the caller importing any pipeline module.
+
+| Source | Target | Engine | Pipeline | Source block |
+|---|---|---|---|---|
+| `CSV` | `ICEBERG` | | `CSVToIceberg` | `name`, `path` |
+| `PARQUET` | `ICEBERG` | | `ParquetToIceberg` | `name`, `path` |
+| `ICEBERG` | `CSV` | | `IcebergToCSV` | `name`, `catalog` |
+| `ICEBERG` | `PARQUET` | | `IcebergToParquet` | `name`, `catalog` |
+| `JSON` | `CSV` | `BIGQUERY` | `BigQueryToCSV` | `name`, `path` of a JSON file holding the query, `credentials` |
+| `DUCKDB` | `ICEBERG` | | `DuckDBToIceberg` | `name`, `path` of the DuckDB file, and one of `relation` or `sql` |
+
+**One SQL format.** `DUCKDB` to `ICEBERG` is the only route that publishes SQL-built data to
+Iceberg, and `DUCKDB` is the only SQL format. The source opens the DuckDB file read-only, runs a
+table scan (`relation`) or one `SELECT` query (`sql`), and closes the file before the Iceberg write
+starts. Later work extends this route and does not add a second one: 0.1.4 adds `inputs` and
+`query_file` to the source block, and the 0.1.7 insights run through it. A `DUCKDB` block is a
+source only.
 
 The pipelines themselves use composition: a `Pipeline` *has* a source, a target, a list of
 transforms and a list of quality checks. The registry only decides which class turns a config

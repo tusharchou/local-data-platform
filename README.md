@@ -198,7 +198,7 @@ and a `metadata` block:
 
 | Key | What it holds |
 |---|---|
-| `metadata.source` | `name`, `format` (`CSV`, `PARQUET`, `ICEBERG` or `JSON`), and a `path` (local, `s3://` or `gs://`) or, for Iceberg, a `catalog` |
+| `metadata.source` | `name`, `format` (`CSV`, `PARQUET`, `ICEBERG`, `JSON` or `DUCKDB`), and a `path` (local, `s3://` or `gs://`) or, for Iceberg, a `catalog`. A `DUCKDB` source also has one of `relation` (a table or view) and `sql` (one `SELECT` query), see [A DuckDB file as a source](#a-duckdb-file-as-a-source) |
 | `metadata.target` | The same, plus for Iceberg `write_mode` (`append`, `overwrite` or `upsert`), `join_cols` for upserts, and `partition_by` |
 | `metadata.target.catalog` | `type` (`local` by default, `sql`, `rest` or `glue`) and that type's keys; see [Catalogs](#catalogs-and-object-storage) |
 | `metadata.quality` | `on_failure` (`fail` or `warn`) and a list of `checks`: `row_count`, `not_null`, `unique`, `accepted_values`, `range`, `freshness`, `schema`, and the temporal checks `monotonic`, `max_skew`, `rate_below` and `max_gap` |
@@ -211,6 +211,29 @@ demo's step 4 says so and partitions by `identity(pickup_date)` instead. The ful
 example of every check, is in the [v0.1.1 hardening contract](docs/design/v0_1_1.md#config-schema).
 `local_data_platform.spec.json_schema()` returns it as JSON Schema, and `ldp schema` prints it. The configs in
 [`examples/`](examples/README.md) are real ones you can run.
+
+### A DuckDB file as a source
+
+A `DUCKDB` source reads one table, or the result of one query, from a DuckDB database file and
+publishes it to Iceberg like any other source, with the same quality checks, run events and
+snapshots. It is how tables built with SQL (or with dbt, in the next item of 0.1.2) reach the lakehouse:
+
+```json
+{
+  "identifier": "churn_by_month",
+  "metadata": {
+    "source": {"name": "churn_by_month", "format": "DUCKDB", "path": "target/build.duckdb",
+               "relation": "gold.churn_by_month"},
+    "target": {"name": "churn_by_month", "format": "ICEBERG", "write_mode": "overwrite",
+               "catalog": {"identifier": "gold", "warehouse_path": "warehouse"}}
+  }
+}
+```
+
+Use `relation` (`table`, `schema.table` or `catalog.schema.table`) or `sql`, not both. The file is
+opened read-only and closed before the Iceberg write starts, and a `sql` source must be exactly one
+`SELECT` or `WITH` query. It needs the `duckdb` extra. `ldp plan` reports a missing file or a
+source with both or neither of `relation` and `sql`.
 
 ## Catalogs and object storage
 
