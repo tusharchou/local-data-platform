@@ -76,6 +76,7 @@ More demos, each one a `make` target (see [Development](#development)):
 | `glue` | `pyiceberg[glue]` (boto3) | The AWS Glue catalog |
 | `bigquery` | Google Cloud BigQuery client | BigQuery as a source |
 | `spark` | PySpark | The experimental `SparkEngine`, which also needs a JDK 17+ |
+| `dbt` | dbt-core, the dbt-duckdb adapter and DuckDB | Running dbt on DuckDB. `ldp dbt` for your Iceberg tables is the next item of 0.1.2 (see the [roadmap](docs/roadmap.md)), and the tests marked `dbt` need it today |
 | `dev` | pytest, flake8, build, DuckDB, `moto[server]`, the MCP SDK | Working on the library |
 | `docs` | MkDocs and plugins | Building the docs |
 
@@ -557,6 +558,7 @@ make demo         # run the demo into ./ldp_demo
 make demo-all     # every demo; demo-spark and demo-rest need scala-cli
 make spark-test   # opt-in Spark integration tests (LDP_RUN_SPARK=1, scala-cli)
 make rest-test    # opt-in REST catalog integration tests (LDP_RUN_REST=1, scala-cli)
+make dbt-test     # the tests that need the dbt extra (pip install -e ".[dev,dbt]" first)
 make docs         # mkdocs build --strict
 make build        # build the sdist and wheel into dist/
 make smoke        # install the wheel in a fresh venv and run ldp --version and ldp demo

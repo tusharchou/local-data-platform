@@ -9,9 +9,14 @@ Fixtures:
     sample_table_tz: ``make_table(tz="Asia/Bangkok")``, the same rides with a tz-aware
         ``timestamp[ns, tz=Asia/Bangkok]`` column.
     catalog_config: An Iceberg catalog config dict whose warehouse is under ``tmp_path``.
+
+Tests marked ``dbt`` need the ``dbt`` extra (dbt-core and the dbt-duckdb adapter). They skip when
+dbt cannot be imported, so ``make test`` passes on a plain install, and the ``dbt`` CI job runs
+them with ``pytest -m dbt``.
 """
 
 import datetime as dt
+import importlib.util
 
 import pyarrow as pa
 import pytest
@@ -46,6 +51,24 @@ def build_rides(n: int = 6, start_id: int = 1, fare_offset: float = 0.0, tz: str
         "fare": pa.array([round(10.0 + i * 1.5 + fare_offset, 2) for i in ids], pa.float64()),
         "pickup_ts": pa.array(pickup, pa.timestamp("ns", tz=tz)),
     })
+
+
+def dbt_is_installed() -> bool:
+    """Whether dbt-core and the dbt-duckdb adapter can be imported, which is what the ``dbt`` extra installs."""
+    try:
+        return all(importlib.util.find_spec(name) is not None for name in ("dbt.cli.main", "dbt.adapters.duckdb"))
+    except ModuleNotFoundError:
+        return False
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip every test marked ``dbt`` when the dbt extra is not installed."""
+    if dbt_is_installed():
+        return
+    skip = pytest.mark.skip(reason="needs the dbt extra: pip install \"local-data-platform[dbt]\"")
+    for item in items:
+        if "dbt" in item.keywords:
+            item.add_marker(skip)
 
 
 @pytest.fixture
