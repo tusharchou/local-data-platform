@@ -14,14 +14,14 @@ This pull request enhances the documentation and testing for the `local-data-pla
 - Adding a `recipes.md` page to the documentation, featuring practical usage examples such as reading a JSON file and building a JSON-to-Parquet pipeline.
 - Ensuring the recipes page appears in the sidebar/main navigation for easier access.
 - Updating Sphinx and Markdown documentation structure for improved navigation and clarity.
-- Adding a test (`tests/test_json_source.py`) to verify that the `JsonSource` class can read a JSON file as described in the documentation.
+- Adding a test (`tests/test_json_source.py`) to verify that the JSON source class (now `local_data_platform.store.source.json.Json`) can read a JSON file as described in the documentation.
 - Maintaining compatibility for documentation builds both locally and on Read the Docs.
 
 ### How to Test
-- Build the documentation locally:
+- Build the documentation locally (the Sphinx build this PR touched has since been replaced by
+  MkDocs):
   ```sh
-  cd docs
-  make html
+  make docs
   ```
   Verify that the "Recipes" page appears in the sidebar and renders correctly.
 

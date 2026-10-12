@@ -1,0 +1,266 @@
+# Design: v0.1.1 platform contract, "multi-writer, any catalog, object storage, agent-ready"
+
+!!! note "Drafted as the 0.2.0 contract, shipped in 0.1.1"
+    This contract was drafted as the 0.2.0 contract and ships in 0.1.1, together with the
+    [v0.1.1 hardening contract](v0_1_1.md). In the [roadmap](../roadmap.md), 0.2.0 is now Cloud
+    Integration. Where this document says the hardening contract or the 0.1.1 hardening work, it means
+    the code this work builds on, described in the hardening contract.
+
+Status: built and tested, and it ships in 0.1.1 from PR #117. It builds on the green hardening
+contract (`docs/design/v0_1_1.md`). This document is the build contract for Phase 1 of
+`docs/design/saas_architecture.md` (§13). Where this file and the SaaS doc disagree, this file wins
+for the 0.1.1 release. [Implementation status](#implementation-status) says what is still
+untested.
+
+## What the platform contract adds
+
+| # | Capability | Module(s) | SaaS doc |
+|---|---|---|---|
+| C1 | Pluggable catalogs: `local`, `sql`, `rest`, `glue` | `catalog/provider.py` | §13 Phase 1 |
+| C2 | Object storage IO (`file://`, `s3://`, `gs://`) for CSV, Parquet and JSON | `fs.py` | §13 Phase 1 |
+| C3 | Direct-mode write fixes, plus the staged publish protocol with idempotency keys (exactly-once effects) | `format/iceberg/__init__.py`, `format/iceberg/commit.py` | §7.1–§7.9 |
+| C4 | Run events, a `_ldp` system namespace, OpenLineage output, and spec hashing | `events.py`, `spec.py`, `pipeline/**` | §6.4, §6.5 |
+| C5 | Engines: native DuckDB `iceberg_scan` with a fallback; `attach_rest`; an engine router; `spark_catalog_conf_for` | `engine/**` | §5.5, §13 |
+| C6 | Agent-ready access: a read-only MCP server with guardrails and an audit log | `mcp_server/**` | §4.5 |
+| C7 | Reproducible datasets (snapshot-pinned versions) and a robot-episode example | `datasets.py`, `quality/temporal.py`, `examples/robot_episodes/**` | — |
+| C8 | Table maintenance: expire snapshots with an idempotency floor, and a dry-run orphan finder | `maintenance/**` | §13 |
+| C9 | Wiring: CLI subcommands, Makefile demo targets, CI jobs, extras, docs | `cli.py`, `Makefile`, `.github/`, `pyproject.toml`, `docs/` | — |
+
+## Implementation status
+
+As of 2026-10-04, checked by running each feature on this branch:
+
+| # | State |
+|---|---|
+| C1 | Done. `local` and `sql` are tested on SQLite, `glue` against moto, and `rest` against Iceberg's REST test server (opt-in, `LDP_RUN_REST=1`). No Postgres test yet |
+| C2 | Done. `s3://` is tested against moto; `gs://` only has tests of its settings, not of reads and writes |
+| C3 | Done, with `tests/test_commit.py` and `tests/test_upsert_race.py` |
+| C4 | Done in `events.py` and `spec.py`, with `ldp runs`, `ldp schema` and `ldp plan` |
+| C5 | Done. Nothing calls the router yet |
+| C6 | Done, as `ldp mcp` (or `python -m local_data_platform.mcp_server`). Audit records go to JSONL after every call and to `_ldp.audit` (`IcebergSink.emit_audit`) when the server stops; `--no-iceberg-audit` turns the table off |
+| C7 | Done, with `ldp datasets pin\|list\|export`; `make demo-robotics` runs the example |
+| C8 | Done, with `ldp maintain` |
+| C9 | Done. `cli.py` registers every module's `add_cli` (imported only when the command line may need it, so `ldp --version` and the 0.1.1 commands stay fast). The extras, the Makefile targets (`make demo-rest` passes against the REST fixture), `.github/workflows/jvm.yml` and the docs exist. `ldp commits` (from `format/iceberg/commit.py`) is registered too, although the contract's command list doesn't name it |
+
+## Contracts
+
+### C1. `catalog/provider.py`
+
+```python
+CatalogFactory = Callable[[Mapping[str, Any], Path | None], pyiceberg.catalog.Catalog]
+def register_catalog_type(name: str) -> Callable[[CatalogFactory], CatalogFactory]: ...
+def create_catalog(spec: Mapping[str, Any], *, base_dir: Path | None = None) -> pyiceberg.catalog.Catalog: ...
+def catalog_namespace(spec: Mapping[str, Any]) -> str: ...
+```
+
+The catalog spec is the `target.catalog` dict. `type` defaults to `local`, so every 0.1.1 config
+keeps working unchanged.
+
+| Type | Spec keys | Returns |
+|---|---|---|
+| `local` (alias `LocalIceberg`) | `identifier`, `warehouse_path` | `LocalIcebergCatalog`, exactly as in 0.1.1 |
+| `sql` | `uri` (SQLAlchemy URI, e.g. `sqlite:///…` or `postgresql+psycopg://…`), `warehouse`, `name` | `SqlCatalog`, JdbcCatalog-compatible |
+| `rest` | `uri`, `warehouse`, `name`, `token_env` (the name of an env var holding the token), `credential_env`, and optional `properties` (passed through, e.g. `s3.endpoint`) | `RestCatalog` |
+| `glue` | `name`, `warehouse`, and optional `properties` | `GlueCatalog`. It imports `boto3` lazily and raises `EngineNotFound` with an install hint if it's missing |
+
+For `rest`, `sql` and `glue`, the namespace comes from `namespace`, falling back to `identifier`.
+
+**Secrets never appear in configs or logs.** Configs reference env var names. `__repr__` and log
+lines redact any key containing `token`, `secret`, `password` or `credential`.
+
+`format/iceberg` builds its catalog with `create_catalog(...)`. A new `Iceberg(..., catalog_obj=)`
+keyword takes an existing catalog object.
+
+### C2. `fs.py`
+
+```python
+def filesystem_for(uri: str | PathLike, base_dir: Path | None = None) -> tuple[pyarrow.fs.FileSystem, str]
+def open_input(uri, base_dir=None) -> pyarrow.NativeFile
+def open_output_atomic(uri, base_dir=None) -> ContextManager[pyarrow.NativeFile]
+def exists(uri, base_dir=None) -> bool
+```
+
+- Local paths keep `paths.resolve_path` semantics.
+- `s3://` uses `pyarrow.fs.S3FileSystem`, honouring `AWS_ENDPOINT_URL` and region settings.
+- "Atomic" means temp file plus rename locally, and a single PUT on object stores, since S3 PUT is
+  atomic per object.
+- `CSV`, `Parquet` and `Json` read and write through `fs.py`, so they accept `s3://` paths.
+- Tests use a moto S3 server; the dev extra adds `moto[server]`.
+
+### C3. Iceberg writes
+
+**Direct mode (SaaS §7.9)** fixes three things:
+
+1. **One commit per write.** The schema union and the data write run in ONE `table.transaction()`.
+2. **Counts from metadata.** `rows_before` and `rows_after` come from snapshot summaries
+   (`total-records`), not from a scan.
+3. **Locking.** On `local` catalogs, `overwrite` and `upsert` take an exclusive lock on
+   `<warehouse>/.ldp/locks/<identifier>.lock` (`fcntl` on POSIX, `msvcrt` on Windows).
+
+**Staged protocol** (`format/iceberg/commit.py`, SaaS §7.3–§7.8, with its exact interfaces):
+`CommitContext`, `CommitPolicy`, `StagedWrite`, `branch_name`, `ensure_base`, `find_commit`,
+`fence`, `stage`, `publish`, `write_once`, `CommitConflict(retriable)` and `CommitSearchExhausted`.
+
+- **Idempotency key:** stored as the snapshot property `ldp.idempotency-key`, together with
+  `ldp.run-id` and `ldp.attempt`.
+- **Publishing:** goes through `Catalog.commit_table` with explicit `AssertRefSnapshotId`
+  requirements on BOTH `main` and the branch. This works around `Transaction._stage` dropping
+  repeated requirement types (SaaS §7.1 fact 3).
+- **Exactly once:** re-running with the same key finds the published snapshot and returns
+  `WriteResult(skipped_duplicate=True)` without writing.
+- **Races:** a concurrent writer that moved `main` forces a rebase-and-retry within `CommitPolicy`.
+- **Fencing:** superseded attempts are fenced by removing their branches.
+- **API:** `Iceberg.put(df, mode=None, *, commit: CommitContext | None = None, overwrite_filter=None)
+  -> WriteResult`. `WriteResult` gains `branch`, `idempotency_key`, `attempts` and
+  `skipped_duplicate`.
+- **Required tests:**
+  - `test_upsert_race` (N processes upserting the same keys) must lose no rows and duplicate no
+    keys through `write_once`. It must show the raw pyiceberg race exists, or document that it
+    couldn't be reproduced.
+  - Re-running a key is a no-op.
+  - A zombie attempt is fenced.
+
+### C4. Events, the `_ldp` namespace and specs
+
+`events.py` provides:
+
+- The `RunEvent` dataclass from SaaS §6.5.
+- An `EventSink` protocol with `emit(event)` and `flush()`, and these implementations:
+  - `NullSink`
+  - `JsonlSink(path)`
+  - `OpenLineageSink(path_or_url)`, which writes OpenLineage 1.x `RunEvent` JSON with schema,
+    data-quality and output-statistics facets
+  - `IcebergSink(catalog_spec, base_dir)`, which appends batched events to
+    `_ldp.runs` and `_ldp.quality_results`, both day-partitioned
+  - `MultiSink`
+
+`Pipeline.run(mode=None, *, commit=None, sink=None) -> PipelineResult` behaves like this:
+
+- It emits `run.started`, `run.extracted`, `quality.evaluated`, then one of `run.blocked_quality`,
+  `run.published`, `run.skipped_duplicate` or `run.failed`, and finally `run.finished`.
+- `PipelineResult` gains `run_id` (a uuid7 string), `idempotency_key` and `published_snapshot_id`.
+- Config `metadata.observability` sets the default sinks, e.g. `{"sinks": ["iceberg", "jsonl"]}`.
+  The default is `NullSink`, so 0.1.1 behaviour is unchanged.
+
+`spec.py` provides:
+
+- `API_VERSION = "ldp/v1"`, `json_schema() -> dict` and `validate_spec(data) -> list[ConfigError]`.
+- `spec_hash(config) -> str`, a stable sha256 over the canonicalized pipeline-relevant fields.
+- `idempotency_key(config, window=None) -> str`.
+
+### C5. Engines
+
+**`engine/duckdb`:**
+
+- `register_iceberg(table, alias, snapshot_id=None, row_filter=None, native=None)`:
+  - `native=None` means auto: use the DuckDB `iceberg` extension's
+    `iceberg_scan('<metadata_location>', snapshot_from_id => <id>)` as a VIEW, which streams and
+    pushes filters down.
+  - If the extension can't load, it falls back to the 0.1.1 in-memory path, with a warning. For
+    offline use, it doesn't auto-install the extension unless `install_extensions=True`.
+  - `native=True` or `False` forces one path.
+- `attach_rest(name, uri, warehouse, token_env=None)` runs `ATTACH ... (TYPE iceberg)`.
+- `snapshots(alias)` and `files(alias)` read `iceberg_snapshots` and `iceberg_metadata`.
+
+**`engine/router.py`:**
+
+- `estimate_scan_bytes(table, row_filter=None, snapshot_id=None) -> int`, from manifest file sizes
+  after partition pruning.
+- `choose_engine(scan_bytes, how="sql", available=None, *, duckdb_max_bytes=50 * 2**30) -> SupportedEngine`.
+
+**`engine/spark`:** `spark_catalog_conf_for(spec, base_dir=None) -> dict[str, str]` for the `local`,
+`sql` and `rest` types. `spark_catalog_conf` stays as it is.
+
+### C6. `mcp_server/` (package name avoids shadowing the `mcp` SDK)
+
+`ldp mcp --config DIR_OR_FILE [--catalog SPEC.json] [--allow TABLES] [--max-rows N]` runs a stdio
+MCP server built on the `mcp` SDK (the `mcp` extra). It exposes these tools:
+
+| Tool | Returns |
+|---|---|
+| `list_tables()` | Every table |
+| `describe_table(table)` | Schema, partition spec, row count, snapshots, the latest `_ldp` run and quality status, and freshness |
+| `query(sql, max_rows)` | Results of read-only SQL |
+| `sample_rows(table, n)` | A sample of rows |
+| `table_history(table)` | The table's history |
+| `get_dataset(name)` | A pinned dataset version (C7) |
+
+**Guardrails:**
+
+- Exactly one statement, which must be a SELECT or WITH query, parsed with DuckDB's
+  `extract_statements`.
+- DuckDB runs with `enable_external_access=false`, and `allowed_directories` is limited to the
+  warehouse or warehouses. `lock_configuration=true` is set once the views are registered.
+- A row cap and a timeout.
+- A table allowlist.
+- Every call is audited to `_ldp.audit` (Iceberg) or to JSONL. The audit records the tool, the SQL,
+  row counts, the duration and any error, never the result data.
+
+Tests use the SDK's in-memory client and server session, and check that `COPY`, `ATTACH`,
+`read_csv('/etc/passwd')`, `INSTALL`, `SET` and multi-statement SQL are all rejected.
+
+### C7. `datasets.py`, `quality/temporal.py` and the robotics example
+
+`datasets.py`:
+
+- `DatasetVersion(name, table_identifier, snapshot_id, row_filter, selected_fields, row_count,
+  schema_fingerprint, created_at)`, written as JSON manifests under `<warehouse>/.ldp/datasets/`.
+- `pin(iceberg, name, row_filter=None, selected_fields=None) -> DatasetVersion`.
+- `load(version) -> pyarrow.Table`, which gives exactly the same rows at any later time.
+- `list_versions(name)` and `export(version, uri, format="parquet"|"jsonl")`.
+
+`quality/temporal.py` adds these checks, all registered in `checks_from_config`:
+
+| Check | Config name |
+|---|---|
+| `Monotonic(column, group_by=None, strict=False)` | `monotonic` |
+| `MaxSkew(column_a, column_b, max_ms)` | `max_skew` |
+| `RateBelow(predicate_column, max_rate)` | `rate_below` |
+| `MaxGap(column, max_ms, group_by)` | `max_gap` |
+
+`examples/robot_episodes/` contains:
+
+- A deterministic generator of humanoid-robot episodes: `episode_id`, `robot_id`, `task`,
+  `operator`, `start_ts`, `end_ts`, `success`, `frame_count`.
+- Sensor frames: `episode_id`, `frame_idx`, `rgb_ts`, `depth_ts`, `joint_state` (a list of
+  doubles), `rgb_uri`, `depth_uri`, and a `dropped` flag.
+- Bronze, silver and gold Iceberg tables. Episodes are partitioned by `day(start_ts)` and
+  `bucket(8, robot_id)`.
+- Quality configs using the temporal checks: frame-drop rate, RGB/depth sync skew, monotonic
+  frame timestamps, and accepted tasks.
+- A pinned training split (`DatasetVersion`).
+- DuckDB research queries, plus an optional Scala Spark per-robot aggregate.
+- A README.
+
+`run.py` runs everything offline in under a minute.
+
+### C8. `maintenance/`
+
+- `expire_snapshots(table, *, older_than, retain_last=20, protect_keys_since=None) -> dict` never
+  expires a snapshot that carries an idempotency key newer than the floor. It uses pyiceberg's API
+  where available, guarded for pyiceberg 0.9.
+- `find_orphans(table, *, older_than_hours=72) -> list[str]` is a dry run and deletes nothing.
+- `remove_orphans(..., dry_run=True)` defaults to a dry run.
+- `ldp maintain CONFIG [--expire] [--orphans] [--apply]` is the CLI.
+
+### C9. Wiring
+
+- **CLI:** each module exposes `add_cli(subparsers)`, and `cli.py` registers them. The commands are
+  `ldp mcp`, `ldp runs`, `ldp schema`, `ldp plan`, `ldp datasets pin|list|export`, `ldp maintain`,
+  `ldp spark` and `ldp catalog test`.
+- **Makefile:** `demo-robotics`, `demo-agent` (starts the MCP server and runs a scripted client),
+  `demo-spark`, `demo-rest` (starts the Iceberg REST fixture on scala-cli's JVM and runs the demo
+  against it) and `demo-all`.
+- **Extras:** `mcp`, `s3`, `glue`. The `dev` extra adds `moto[server]` and `mcp`.
+- **CI:** a `spark` job and a `rest` job on ubuntu with actions/setup-java, both opt-in and not
+  required for merge.
+- **Docs:** `docs/agents.md`, `docs/robotics.md`, `docs/catalogs.md`, `docs/exactly_once.md`, all
+  added to the mkdocs nav.
+
+## Rules
+
+- Existing 0.1.1 behaviour and all 647 tests keep passing, unless a test encoded a bug that this
+  contract fixes, in which case update the test and say so.
+- Everything runs offline, except the first-time download of the DuckDB extension and the Maven
+  jars. Tests that need network or a JVM are opt-in and skip with a reason.
+- There are no secrets in configs, logs or reprs, and no import-time side effects.

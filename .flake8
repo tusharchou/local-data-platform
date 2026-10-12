@@ -1,0 +1,5 @@
+[flake8]
+max-line-length = 120
+exclude = .git,__pycache__,.venv,build,dist,site,docs
+per-file-ignores =
+    src/local_data_platform/__init__.py:F401

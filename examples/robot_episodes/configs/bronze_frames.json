@@ -1,0 +1,58 @@
+{
+  "identifier": "bronze_frames",
+  "who": "humanoid fleet uploader",
+  "what": "30 Hz sensor frames, as uploaded",
+  "where": "landing zone",
+  "when": "every upload batch",
+  "how": "batch append",
+  "metadata": {
+    "source": {
+      "name": "frames",
+      "format": "PARQUET",
+      "path": "landing/frames.parquet"
+    },
+    "target": {
+      "name": "bronze_frames",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "robots",
+        "warehouse_path": "warehouse"
+      },
+      "write_mode": "append",
+      "partition_by": [
+        {
+          "column": "episode_id",
+          "transform": "bucket[8]"
+        }
+      ]
+    },
+    "quality": {
+      "on_failure": "fail",
+      "checks": [
+        {
+          "check": "row_count",
+          "min": 1
+        },
+        {
+          "check": "schema",
+          "columns": {
+            "batch_id": "string",
+            "episode_id": "string",
+            "frame_idx": "int32",
+            "rgb_ts": "timestamp[us, tz=UTC]",
+            "depth_ts": "timestamp[us, tz=UTC]",
+            "dropped": "bool"
+          }
+        },
+        {
+          "check": "not_null",
+          "columns": [
+            "batch_id",
+            "episode_id",
+            "frame_idx"
+          ]
+        }
+      ]
+    }
+  }
+}

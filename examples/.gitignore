@@ -1,0 +1,4 @@
+# Downloaded inputs and pipeline outputs of the examples. The NYC Parquet download is about
+# 48 MB and its CSV export several hundred MB, so neither may be committed.
+*/data/
+*/warehouse/

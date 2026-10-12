@@ -1,0 +1,45 @@
+{
+  "identifier": "gold_robot_daily",
+  "who": "fleet operations",
+  "what": "success and frame health per robot per day",
+  "where": "lakehouse",
+  "when": "after each promotion",
+  "how": "DuckDB SQL over gold_episode_stats (queries.sql), overwrite",
+  "metadata": {
+    "source": {
+      "name": "gold_episode_stats",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "robots",
+        "warehouse_path": "warehouse"
+      }
+    },
+    "target": {
+      "name": "gold_robot_daily",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "robots",
+        "warehouse_path": "warehouse"
+      },
+      "write_mode": "overwrite"
+    },
+    "quality": {
+      "on_failure": "fail",
+      "checks": [
+        {
+          "check": "unique",
+          "columns": [
+            "robot_id",
+            "recorded_on"
+          ]
+        },
+        {
+          "check": "range",
+          "column": "success_rate",
+          "min": 0,
+          "max": 1
+        }
+      ]
+    }
+  }
+}

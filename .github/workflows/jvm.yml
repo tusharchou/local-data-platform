@@ -1,0 +1,102 @@
+name: JVM integration (opt-in)
+
+# The Spark and Iceberg REST catalog integration tests need a JDK, scala-cli and a first-time
+# download of Spark, Iceberg and their jars (about 500 MB), so they are not part of CI (ci.yml).
+# They run when started by hand, once a week, or on a pull request labelled "jvm". Both jobs set
+# continue-on-error and should not be made required checks: they never block a merge.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jvm-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCALA_CLI_VERSION: "1.17.1"
+
+jobs:
+  spark:
+    name: spark (LDP_RUN_SPARK=1)
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'jvm')
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      # Caches the Coursier folder, where scala-cli keeps its JDK, Spark and Iceberg jars.
+      - uses: coursier/cache-action@v6
+      - uses: VirtusLab/scala-cli-setup@v1.17
+        with:
+          scala-cli-version: ${{ env.SCALA_CLI_VERSION }}
+          jvm: ""
+      - name: Install the package with the dev and spark extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,spark]"
+      - name: Show versions
+        run: |
+          java -version
+          scala-cli version
+          python -c "import pyspark, pyiceberg; print('pyspark', pyspark.__version__, '| pyiceberg', pyiceberg.__version__)"
+      - name: Spark integration tests
+        run: make spark-test PY=python SCALA_CLI=scala-cli
+      - name: Spark demo on the taxi demo table
+        run: make demo-spark PY=python LDP=ldp SCALA_CLI=scala-cli
+
+  rest:
+    name: rest (LDP_RUN_REST=1)
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'jvm')
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: coursier/cache-action@v6
+      - uses: VirtusLab/scala-cli-setup@v1.17
+        with:
+          scala-cli-version: ${{ env.SCALA_CLI_VERSION }}
+          jvm: ""
+      - name: Install the package with the dev extra
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Show versions
+        run: |
+          java -version
+          scala-cli version
+      - name: REST catalog integration tests
+        run: make rest-test PY=python SCALA_CLI=scala-cli
+      - name: REST demo (starts tools/rest_fixture, runs a REST-backed demo config, stops it)
+        run: make demo-rest PY=python LDP=ldp SCALA_CLI=scala-cli
+      - name: Upload the REST fixture log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rest-fixture-log
+          path: ldp_demo/rest/rest_fixture.log
+          if-no-files-found: ignore

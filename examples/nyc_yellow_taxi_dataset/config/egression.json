@@ -1,0 +1,23 @@
+{
+  "identifier": "nyc_taxi",
+  "who": "tourist",
+  "what": "trust",
+  "where": "NYC",
+  "when": "travel",
+  "how": "taxi",
+  "metadata": {
+    "source": {
+      "name": "rides",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "nyc_yellow_taxi_dataset",
+        "warehouse_path": "../warehouse"
+      }
+    },
+    "target": {
+      "name": "rides",
+      "format": "CSV",
+      "path": "../data/exports/nyc_yellow_taxi_rides.csv"
+    }
+  }
+}

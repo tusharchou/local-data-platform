@@ -1,0 +1,64 @@
+{
+  "identifier": "gold_episode_stats",
+  "who": "robot learning researchers",
+  "what": "one row per episode: outcome, frame health, sync",
+  "where": "lakehouse",
+  "when": "after each promotion",
+  "how": "DuckDB SQL over silver (queries.sql), overwrite",
+  "metadata": {
+    "source": {
+      "name": "silver_episodes",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "robots",
+        "warehouse_path": "warehouse"
+      }
+    },
+    "target": {
+      "name": "gold_episode_stats",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "robots",
+        "warehouse_path": "warehouse"
+      },
+      "write_mode": "overwrite",
+      "partition_by": [
+        {
+          "column": "start_ts",
+          "transform": "day"
+        },
+        {
+          "column": "robot_id",
+          "transform": "bucket[8]"
+        }
+      ]
+    },
+    "quality": {
+      "on_failure": "fail",
+      "checks": [
+        {
+          "check": "row_count",
+          "min": 1
+        },
+        {
+          "check": "unique",
+          "columns": [
+            "episode_id"
+          ]
+        },
+        {
+          "check": "range",
+          "column": "drop_rate",
+          "min": 0,
+          "max": 1
+        },
+        {
+          "check": "range",
+          "column": "max_skew_ms",
+          "min": 0,
+          "max": 20
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "identifier": "silver_frames",
+  "who": "robot learning data team",
+  "what": "validated sensor frames",
+  "where": "lakehouse",
+  "when": "after each upload batch",
+  "how": "quality-gated promotion from bronze (run.py)",
+  "metadata": {
+    "source": {
+      "name": "bronze_frames",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "robots",
+        "warehouse_path": "warehouse"
+      }
+    },
+    "target": {
+      "name": "silver_frames",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "robots",
+        "warehouse_path": "warehouse"
+      },
+      "write_mode": "append",
+      "partition_by": [
+        {
+          "column": "episode_id",
+          "transform": "bucket[8]"
+        }
+      ]
+    },
+    "quality": {
+      "on_failure": "fail",
+      "checks": [
+        {
+          "check": "not_null",
+          "columns": [
+            "episode_id",
+            "frame_idx",
+            "rgb_ts",
+            "depth_ts",
+            "joint_state"
+          ]
+        },
+        {
+          "check": "unique",
+          "columns": [
+            "episode_id",
+            "frame_idx"
+          ]
+        },
+        {
+          "check": "monotonic",
+          "column": "rgb_ts",
+          "group_by": "episode_id",
+          "order_by": "frame_idx",
+          "strict": true,
+          "name": "frame timestamps rise"
+        },
+        {
+          "check": "max_skew",
+          "column_a": "rgb_ts",
+          "column_b": "depth_ts",
+          "max_ms": 20,
+          "name": "rgb/depth sync < 20 ms"
+        },
+        {
+          "check": "rate_below",
+          "predicate_column": "dropped",
+          "max_rate": 0.01,
+          "name": "batch frame-drop rate <= 1%"
+        },
+        {
+          "check": "rate_below",
+          "predicate_column": "dropped",
+          "max_rate": 0.05,
+          "group_by": "episode_id",
+          "name": "episode frame-drop rate <= 5%"
+        },
+        {
+          "check": "max_gap",
+          "column": "rgb_ts",
+          "max_ms": 100,
+          "group_by": "episode_id",
+          "name": "no stream gap > 100 ms"
+        }
+      ]
+    }
+  }
+}

@@ -1,5 +1,7 @@
 # Contributing
 
 1. Fork the repo and create your branch from `main`.
-2. Ensure tests and docs build (`poetry run pytest`, `poetry run mkdocs serve`).
+2. Run `make install`, then make sure the checks pass (`make lint`, `make test`, `make docs`).
 3. Open a pull request!
+
+The [contributing guide](../contributing.md) has the details.

@@ -9,7 +9,10 @@ In the digital age, our photo collections grow exponentially, quickly consuming 
 * **Privacy Concerns:** Uploading personal photos to public or semi-public cloud albums often compromises privacy.
 * **Sharing Friction:** Sending large batches of photos is cumbersome, often leading to using sub-optimal methods or public platforms.
 
-## How LDP Solves It
+## How LDP Could Solve It
+
+!!! note "A proposal"
+    local-data-platform has no photo features today. This is a use case it could grow into.
 
 The Local Data Platform (LDP) provides a robust, privacy-first, and highly customizable solution for managing your personal photo library. By leveraging LDP, you can:
 

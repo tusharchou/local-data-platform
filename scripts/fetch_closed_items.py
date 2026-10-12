@@ -13,6 +13,7 @@ REPO_NAME = "local-data-platform"
 OUTPUT_PATH = os.path.join('docs', 'closed_items.md')
 # ---------------------
 
+
 def format_items_as_markdown(items: List[Item], item_type: str) -> str:
     """Formats a list of GitHub items into a Markdown list."""
     if not items:
@@ -26,8 +27,10 @@ def format_items_as_markdown(items: List[Item], item_type: str) -> str:
             date_info = f" on {closed_date} "
         else:
             date_info = ""
-        markdown_list.append(f"- **[{item_type} #{item.number}]({item.url})**: {item.title} (closed{date_info}by @{author})")
+        markdown_list.append(
+            f"- **[{item_type} #{item.number}]({item.url})**: {item.title} (closed{date_info}by @{author})")
     return "\n".join(markdown_list)
+
 
 def main():
     """Main function to fetch closed items and write them to a Markdown file."""
@@ -47,8 +50,9 @@ def main():
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     with open(OUTPUT_PATH, 'w', encoding='utf-8') as f:
         f.write(content)
-    
+
     print(f"Successfully generated closed items report at {OUTPUT_PATH}")
+
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,34 @@
+{
+  "identifier": "near_transactions",
+  "who": "investor",
+  "what": "gain",
+  "where": "near",
+  "when": "trade",
+  "how": "gcp",
+  "metadata": {
+    "source": {
+      "name": "near_transactions",
+      "format": "CSV",
+      "path": "../near_transactions.csv"
+    },
+    "target": {
+      "name": "transactions",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "near_transactions",
+        "warehouse_path": "../warehouse"
+      },
+      "write_mode": "upsert",
+      "join_cols": ["transaction_hash"]
+    },
+    "quality": {
+      "on_failure": "fail",
+      "checks": [
+        {"check": "row_count", "min": 1},
+        {"check": "not_null", "columns": ["transaction_hash", "block_date"]},
+        {"check": "unique", "columns": ["transaction_hash"]},
+        {"check": "schema", "columns": {"transaction_hash": "string", "block_height": "int64"}}
+      ]
+    }
+  }
+}

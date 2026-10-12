@@ -1,5 +1,12 @@
 # Feature: A class to interact with the github API
 
+!!! note "How it was built"
+    This page keeps the prompt the feature started from. The code that exists today differs: it is
+    the `local_data_platform.github` module, with `get_items(owner, repo, state)` and
+    `get_item(owner, repo, number)` returning `Item` objects from the GitHub REST API.
+    `scripts/generate_issue_list.py` (`make generate-docs`) and `scripts/fetch_closed_items.py` use
+    it to build the issue pages.
+
 Okay, here's a prompt designed to be given to Gemini Code Assist, building on our previous discussion and leveraging its ability to generate multi-file projects and detailed code.
 
 ---

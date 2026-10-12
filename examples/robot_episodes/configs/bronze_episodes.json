@@ -1,0 +1,66 @@
+{
+  "identifier": "bronze_episodes",
+  "who": "humanoid fleet uploader",
+  "what": "teleoperated episodes, as uploaded",
+  "where": "landing zone",
+  "when": "every upload batch",
+  "how": "batch append",
+  "metadata": {
+    "source": {
+      "name": "episodes",
+      "format": "PARQUET",
+      "path": "landing/episodes.parquet"
+    },
+    "target": {
+      "name": "bronze_episodes",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "robots",
+        "warehouse_path": "warehouse"
+      },
+      "write_mode": "append",
+      "partition_by": [
+        {
+          "column": "start_ts",
+          "transform": "day"
+        },
+        {
+          "column": "robot_id",
+          "transform": "bucket[8]"
+        }
+      ]
+    },
+    "quality": {
+      "on_failure": "fail",
+      "checks": [
+        {
+          "check": "row_count",
+          "min": 1
+        },
+        {
+          "check": "schema",
+          "columns": {
+            "batch_id": "string",
+            "episode_id": "string",
+            "robot_id": "string",
+            "task": "string",
+            "operator": "string",
+            "start_ts": "timestamp[us, tz=UTC]",
+            "end_ts": "timestamp[us, tz=UTC]",
+            "success": "bool",
+            "frame_count": "int32"
+          }
+        },
+        {
+          "check": "not_null",
+          "columns": [
+            "batch_id",
+            "episode_id",
+            "robot_id",
+            "start_ts"
+          ]
+        }
+      ]
+    }
+  }
+}

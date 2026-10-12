@@ -11,6 +11,7 @@ REPO_OWNER = "tusharchou"
 REPO_NAME = "local-data-platform"
 OUTPUT_PATH = os.path.join('docs', 'user_issues.md')
 
+
 def parse_labels(labels: List[str]):
     """Parses labels to find status and theme."""
     status = "Planned"  # Default status
@@ -22,6 +23,7 @@ def parse_labels(labels: List[str]):
         elif label_name.startswith('theme:'):
             theme = label_name.replace('theme:', '').replace('-', ' ').title()
     return status, theme
+
 
 def generate_page_content(items: List[Item]):
     """Generates the full Markdown content for the user_issues.md page."""
