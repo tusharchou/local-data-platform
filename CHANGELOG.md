@@ -4,7 +4,7 @@ All notable changes to this project are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
-## [0.1.1] - Unreleased
+## [0.1.1] - 2026-10-12
 
 The first release since 0.1.0. It brings together two pieces of work that were never released on
 their own. The hardening work (contract `docs/design/v0_1_1.md`) gives one package, correct and
