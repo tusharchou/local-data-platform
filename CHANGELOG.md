@@ -16,8 +16,8 @@ missing.
 
 From now on the package version follows the milestones in `docs/roadmap.md`, from 0.1.2
 Warehousing to 0.2.0 Cloud Integration. The deprecations below end in 0.2.0. The release tag for
-this version is `v0.1.1`. (A `release-v0.1.1` git tag from 2024-10-30 and a `v0.1.1` branch from
-2025-01 point at older code.)
+this version is `v0.1.1`. (A `release-v0.1.1` git tag from 2024-10-30 points at older code. The old
+work-in-progress branch from 2025-01 was named `v0.1.1` too, and is now `archive/v0.1.1-wip`.)
 
 The project is now MIT licensed throughout. The `LICENSE` file was already MIT, but it named the
 wrong copyright holder, and the package metadata said Apache-2.0.
@@ -190,6 +190,9 @@ wrong copyright holder, and the package metadata said Apache-2.0.
 - The empty `scripts/github_api.py`, which nothing imported.
 - `scripts/fetch_rtd_urls.py`, an unused Read the Docs crawler that still imported `beautifulsoup4`
   after that dependency was dropped.
+- The `append_pr_history.yml` workflow, its script `scripts/append_pr_history.py` and the generated
+  `docs/PR_HISTORY.md`. The workflow pushed to `main` after every merge, which the branch rules
+  don't allow, so it failed each time and the page never held an entry.
 
 ### Fixed
 
