@@ -19,7 +19,12 @@ To make the race deterministic rather than timing-dependent, a barrier holds eve
 before its commit (raw) or its first publish of a round (staged), so all writers in a round work
 from the same base. The barrier only changes timing; it never changes what a writer does.
 
-The workload size is ``LDP_RACE_PROCS`` processes (default 4) x ``LDP_RACE_ROUNDS`` rounds
+A fourth run covers **direct appends** (#88): 8 processes each append 10 rows 5 times to one table,
+and every row must land with no error. A barrier holds the writers just before their commit, so
+they all commit from the same base. pyiceberg 0.11 fails every writer but one per round, so LDP's
+own retry has to land the rest. pyiceberg 0.12 retries inside its commit.
+
+The upsert workload size is ``LDP_RACE_PROCS`` processes (default 4) x ``LDP_RACE_ROUNDS`` rounds
 (default 5). Everything is offline; processes use the ``spawn`` start method.
 """
 
@@ -41,6 +46,9 @@ NAMESPACE = "race"
 TABLE = "entities"
 BARRIER_TIMEOUT_S = 60.0
 JOIN_TIMEOUT_S = 600.0
+APPEND_PROCS = 8
+APPEND_ROUNDS = 5
+APPEND_ROWS = 10
 
 SCHEMA = pa.schema([("id", pa.int64()), ("writer", pa.string()), ("round", pa.int64())])
 
@@ -70,6 +78,16 @@ def expected_ids(workload: str, rounds: int) -> set[int]:
 
 def key_for(proc: int, round_no: int) -> str:
     return f"race-p{proc}-r{round_no}"
+
+
+def append_batch(proc: int, round_no: int) -> pa.Table:
+    """The ``APPEND_ROWS`` rows process ``proc`` appends in round ``round_no``. Every id is unique."""
+    ids = list(range(proc * 1000 + round_no * APPEND_ROWS, proc * 1000 + (round_no + 1) * APPEND_ROWS))
+    return pa.table({
+        "id": pa.array(ids, pa.int64()),
+        "writer": pa.array([f"p{proc}r{round_no}"] * APPEND_ROWS, pa.string()),
+        "round": pa.array([round_no] * APPEND_ROWS, pa.int64()),
+    }, schema=SCHEMA)
 
 
 # --------------------------------------------------------------------------- worker (runs in a child process)
@@ -104,6 +122,8 @@ def race_worker(kind: str, workload: str, warehouse: str, proc: int, rounds: int
             _raw_rounds(workload, warehouse, proc, rounds, barrier, stats)
         elif kind == "locked":
             _locked_rounds(workload, warehouse, proc, rounds, barrier, stats)
+        elif kind == "append":
+            _append_rounds(warehouse, proc, rounds, barrier, stats)
         else:
             _staged_rounds(workload, warehouse, proc, rounds, barrier, stats)
     except BaseException as exc:  # noqa: BLE001 - reported to the parent
@@ -140,6 +160,27 @@ def _locked_rounds(workload, warehouse, proc, rounds, barrier, stats):
             pass
         table.put(batch(workload, round_no, proc), mode="upsert")
         stats["published"].append(key_for(proc, round_no))
+
+
+def _append_rounds(warehouse, proc, rounds, barrier, stats):
+    from pyiceberg.table import Transaction
+
+    import local_data_platform.format.iceberg.commit as commit
+    from local_data_platform.format.iceberg import Iceberg
+
+    # Hold every writer just before its commit, so they all commit from the same base.
+    gate = _OncePerRound(Transaction.commit_transaction, barrier)
+    Transaction.commit_transaction = lambda self: gate(self)
+    policy = commit.CommitPolicy(max_publish_attempts=40, base_delay_s=0.01, max_delay_s=0.25, deadline_s=240.0)
+    table = Iceberg(TABLE, {"identifier": NAMESPACE, "warehouse_path": warehouse})
+    for round_no in range(rounds):
+        gate.arm()
+        try:
+            result = table.put(append_batch(proc, round_no), mode="append", policy=policy)
+            stats["published"].append(key_for(proc, round_no))
+            stats["attempts"] += result.attempts
+        except Exception as exc:  # noqa: BLE001 - reported, and the next round still meets the barrier
+            stats["errors"].append(f"{type(exc).__name__}: {exc}")
 
 
 def _staged_rounds(workload, warehouse, proc, rounds, barrier, stats):
@@ -248,6 +289,47 @@ def run_race(kind: str, workload: str, workdir: Path, procs: int = PROCS, rounds
     }
 
 
+def run_append_race(workdir: Path, procs: int = APPEND_PROCS, rounds: int = APPEND_ROUNDS) -> dict:
+    """Run ``procs`` writers that each append ``rounds`` batches to a table that starts with one row."""
+    from local_data_platform.catalog.local.iceberg import LocalIcebergCatalog
+    from local_data_platform.format.iceberg import Iceberg
+
+    warehouse = str(workdir / "append")
+    seeded = Iceberg(TABLE, {"identifier": NAMESPACE, "warehouse_path": warehouse})
+    seeded.put(pa.table({"id": pa.array([-1], pa.int64()), "writer": pa.array(["seed"], pa.string()),
+                         "round": pa.array([-1], pa.int64())}, schema=SCHEMA))
+    seeded.catalog.close()
+
+    ctx = multiprocessing.get_context("spawn")
+    barrier, results = ctx.Barrier(procs), ctx.Queue()
+    workers = [ctx.Process(target=race_worker, args=("append", "append", warehouse, proc, rounds, barrier, results))
+               for proc in range(procs)]
+    for worker in workers:
+        worker.start()
+    stats = []
+    try:
+        for _ in workers:
+            stats.append(results.get(timeout=JOIN_TIMEOUT_S))
+    except queue.Empty:
+        pytest.fail(f"append race workers did not finish within {JOIN_TIMEOUT_S}s")
+    finally:
+        for worker in workers:
+            worker.join(timeout=30)
+            if worker.is_alive():
+                worker.terminate()
+
+    with LocalIcebergCatalog(NAMESPACE, path=warehouse) as catalog:
+        ids = catalog.load_table(f"{NAMESPACE}.{TABLE}").scan().to_arrow().column("id").to_pylist()
+    return {
+        "writes": procs * rounds,
+        "rows": len(ids),
+        "distinct_ids": len(set(ids)),
+        "errors": [error for s in stats for error in s["errors"]],
+        "published": sum(len(s["published"]) for s in stats),
+        "attempts": sum(s["attempts"] for s in stats),
+    }
+
+
 def main_effects(table) -> list[tuple[str, str, str]]:
     """``main``'s LDP effects, oldest first, as ``(key, run id, attempt)``.
 
@@ -338,3 +420,18 @@ def test_write_once_loses_no_rows_and_duplicates_no_keys(tmp_path, workload):
     assert report["attempts"] > PROCS * ROUNDS
     # Re-running every key is a no-op.
     assert report["replayed_skipped"] == PROCS * ROUNDS
+
+
+def test_direct_appends_from_several_processes_all_land(tmp_path):
+    from pyiceberg.table import TableProperties
+
+    report = run_append_race(tmp_path)
+
+    assert report["errors"] == [], report
+    # The seed row plus 8 writers x 5 rounds x 10 rows, each exactly once.
+    assert report["rows"] == 1 + APPEND_PROCS * APPEND_ROUNDS * APPEND_ROWS == 401
+    assert report["distinct_ids"] == report["rows"]
+    assert report["published"] == report["writes"]
+    if not hasattr(TableProperties, "COMMIT_NUM_RETRIES"):
+        # pyiceberg < 0.12 fails every writer but one per round, so LDP's own retry did the work.
+        assert report["attempts"] > report["writes"], report

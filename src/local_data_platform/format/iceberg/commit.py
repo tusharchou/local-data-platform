@@ -115,8 +115,9 @@ class WriteResult:
             is the snapshot that already carries the idempotency key.
         branch: The staged branch that was published (staged protocol only).
         idempotency_key: The key the write ran under (staged protocol only).
-        attempts: Stage and publish cycles used. A direct write is always 1; a duplicate
-            found before any staging is 0.
+        attempts: Tries used. For a staged write, the stage and publish cycles. A direct write
+            is 1 unless it lost a commit race and ran again. A duplicate found before any
+            staging is 0.
         skipped_duplicate: True when the key was already published, so nothing was written.
     """
 

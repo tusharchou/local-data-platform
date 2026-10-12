@@ -13,7 +13,9 @@ There are two write paths:
   union and the data. ``rows_before`` and ``rows_after`` come from snapshot summaries. On a
   ``local`` catalog, ``overwrite`` and ``upsert`` hold an exclusive file lock
   (``<warehouse>/.ldp/locks/<identifier>.lock``), which closes the read-modify-write race between
-  processes on one machine. On a shared remote catalog direct mode is a single-writer mode.
+  processes on one machine. An ``append`` takes no lock, and one that loses a commit race is
+  retried on the new head (see :meth:`Iceberg.put`). On a shared remote catalog ``overwrite`` and
+  ``upsert`` in direct mode are single-writer.
 * **Staged mode**, ``put(df, mode, commit=CommitContext(...))``: the exactly-once publish protocol
   in :mod:`local_data_platform.format.iceberg.commit`. Re-running a key is a no-op.
 
@@ -25,12 +27,13 @@ are used. Direct and staged mode both work across the supported pyiceberg range 
 import contextlib
 import os
 import re
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import pyarrow as pa
-from pyiceberg.exceptions import NoSuchTableError, TableAlreadyExistsError
+from pyiceberg.exceptions import CommitFailedException, NoSuchTableError, TableAlreadyExistsError
 from pyiceberg.expressions import AlwaysTrue
 from pyiceberg.table import Table as PyIcebergTable
 from pyiceberg.table import Transaction
@@ -510,8 +513,16 @@ class Iceberg(Format):
 
         Without ``commit`` this is a direct write: one transaction (one catalog commit) holds
         the schema union and the data, and on a ``local`` catalog ``overwrite`` and ``upsert``
-        hold the table's exclusive file lock (see :meth:`exclusive_lock`). With ``commit`` the
-        write goes through the staged, exactly-once protocol
+        hold the table's exclusive file lock (see :meth:`exclusive_lock`). Several processes may
+        ``append`` to one table at once. An append whose commit the catalog refuses, because
+        another writer got there first, reloads the table and runs again after a backoff, up to
+        ``policy.max_publish_attempts`` tries or ``policy.deadline_s``. The data files of a
+        refused try stay in storage unreferenced, and maintenance can find them as orphans. A
+        direct write is never retried when its outcome is unknown
+        (``CommitStateUnknownException``), because the first try may have landed and a direct
+        write carries no idempotency key.
+
+        With ``commit`` the write goes through the staged, exactly-once protocol
         (:func:`~local_data_platform.format.iceberg.commit.write_once`): re-running the same
         idempotency key is a no-op that returns ``skipped_duplicate=True``.
 
@@ -526,7 +537,8 @@ class Iceberg(Format):
             overwrite_filter: For ``overwrite`` only: a pyiceberg expression or string such as
                 ``"day = '2024-01-01'"``. Only matching rows are replaced (a window overwrite);
                 by default every row is.
-            policy: Retry limits for the staged protocol; the
+            policy: Retry limits for the staged protocol and for a direct ``append`` that loses a
+                commit race. The
                 :class:`~local_data_platform.format.iceberg.commit.CommitPolicy` defaults otherwise.
 
         Returns:
@@ -540,8 +552,9 @@ class Iceberg(Format):
                 join column is missing from ``df``, an ``upsert`` into a table with rows lacks
                 one of the table's columns, ``overwrite_filter`` is given for another mode, or
                 the partition spec doesn't fit the data.
-            CommitConflict: Staged mode only: the publish could not win within the policy
-                (``retriable``), or this attempt was fenced by a newer one.
+            CommitConflict: The publish could not win within the policy (``retriable``): a
+                staged publish, or a direct ``append`` that lost the commit race on every try.
+                Staged mode also raises it when this attempt was fenced by a newer one.
         """
         mode = self.write_mode if mode is None else self._check_mode(mode)
         if mode == "upsert" and not self.join_cols:
@@ -557,7 +570,7 @@ class Iceberg(Format):
         else:
             lock = self.exclusive_lock() if mode in _LOCKED_MODES else contextlib.nullcontext()
             with lock:
-                result = self._put_direct(df, mode, overwrite_filter)
+                result = self._put_direct(df, mode, overwrite_filter, policy)
         logger.info(
             "%s %d rows to Iceberg table %s (%d -> %d rows, snapshot %s%s)",
             mode, result.rows_written, self.identifier, result.rows_before, result.rows_after, result.snapshot_id,
@@ -610,16 +623,51 @@ class Iceberg(Format):
         )
         return _replace(result, table_identifier=self.identifier)
 
-    def _put_direct(self, df: pa.Table, mode: str, overwrite_filter: Any) -> WriteResult:
-        for attempt in range(1, _SEQUENCE_RACE_TRIES + 1):
+    def _put_direct(self, df: pa.Table, mode: str, overwrite_filter: Any,
+                    policy: CommitPolicy | None = None) -> WriteResult:
+        policy = policy or CommitPolicy()
+        started = time.monotonic()
+        attempt = sequence_races = 0
+        while True:
+            attempt += 1
             try:
-                return self._put_direct_once(df, mode, overwrite_filter)
+                result = self._put_direct_once(df, mode, overwrite_filter)
             except ValueError as exc:
                 # A staged writer committed to its branch meanwhile; nothing was written, so redo.
-                if not is_sequence_race(exc) or attempt == _SEQUENCE_RACE_TRIES:
+                sequence_races += 1
+                if not is_sequence_race(exc) or sequence_races == _SEQUENCE_RACE_TRIES:
                     raise
                 logger.debug("Direct %s to %s raced a concurrent commit (%s); retrying", mode, self.identifier, exc)
-        raise AssertionError("unreachable")  # pragma: no cover
+            except CommitFailedException as exc:
+                # The catalog refused the commit, so nothing was published. Only an append can be
+                # redone on the new head. An overwrite or upsert recomputes from what it read, and
+                # on a shared catalog a blind rerun could replace another writer's rows.
+                if mode != "append":
+                    raise
+                self._wait_after_lost_race(policy, attempt, time.monotonic() - started, exc)
+            else:
+                return result if attempt == 1 else _replace(result, attempts=attempt)
+
+    def _wait_after_lost_race(self, policy: CommitPolicy, attempt: int, elapsed_s: float,
+                              error: CommitFailedException) -> None:
+        """Back off before the next try of a direct append, or raise ``CommitConflict`` when the policy is spent."""
+        tries = f"{attempt} attempt" + ("" if attempt == 1 else "s")
+        if attempt >= policy.max_publish_attempts:
+            reason = tries
+        elif elapsed_s >= policy.deadline_s:
+            reason = f"{tries}, which used up the policy deadline of {policy.deadline_s:g} s"
+        else:
+            delay = policy.backoff_s(attempt)
+            logger.debug("Direct append to %s lost a commit race (try %d, %s); retrying in %.2f s",
+                         self.identifier, attempt, error, delay)
+            time.sleep(delay)
+            return
+        raise CommitConflict(
+            f"direct append to {self.identifier} lost the commit race on every try, after {reason}, because other "
+            f"writers kept changing the table. Run it again, raise the CommitPolicy limits, or pass commit= to "
+            f"use staged mode for several writers. The last error was: {error}",
+            retriable=True,
+        ) from error
 
     def _put_direct_once(self, df: pa.Table, mode: str, overwrite_filter: Any) -> WriteResult:
         table, created = self._load_or_create(df.schema)
