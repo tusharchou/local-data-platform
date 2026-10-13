@@ -17,6 +17,9 @@ them with ``pytest -m dbt``.
 
 import datetime as dt
 import importlib.util
+import os
+import socket
+import threading
 
 import pyarrow as pa
 import pytest
@@ -69,6 +72,39 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "dbt" in item.keywords:
             item.add_marker(skip)
+
+
+@pytest.fixture
+def network_trap():
+    """A fake HTTP proxy on localhost. Yields ``(environment, connections)``.
+
+    Run a subprocess with ``environment`` and ``connections`` gets one item per connection it opens,
+    so an empty list means it made no network request that honours the proxy variables (requests,
+    urllib and httpx do). The ``dbt`` tests use it to prove that dbt runs offline.
+    """
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(16)
+    connections: list[bytes] = []
+
+    def serve() -> None:
+        while True:
+            try:
+                client, _ = server.accept()
+            except OSError:
+                return  # the fixture closed the socket
+            connections.append(client.recv(200))
+            client.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    proxy = f"http://127.0.0.1:{server.getsockname()[1]}"
+    env = dict(os.environ, NO_PROXY="", no_proxy="")
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        env[name] = proxy
+    try:
+        yield env, connections
+    finally:
+        server.close()
 
 
 @pytest.fixture
