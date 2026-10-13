@@ -331,7 +331,8 @@ class Check(ABC):
 
         Args:
             df: The data, as a ``pyarrow.Table`` (see :func:`as_table` for other inputs).
-            context: Extra facts about the load, e.g. ``{"source_rows": 1000}``.
+            context: Extra facts about the load, e.g. ``{"source_rows": 1000}``. A windowed run also sets
+                ``"now"``, the end of its window, which ``Freshness`` reads when it has no ``now`` of its own.
 
         Returns:
             The result. Problems with the data give a failed result, never an exception.
@@ -686,7 +687,8 @@ class Freshness(Check):
         column: The timestamp or date column.
         max_age_hours: The oldest the newest value may be, in hours (greater than 0).
         now: The reference time: a ``datetime`` or an ISO-8601 string. ``None`` means the
-            current time, read each time the check runs.
+            current time, read each time the check runs. In a windowed run it means the end of the window
+            (the ``now`` of the run context), so a backfill of last month passes the checks the first run passed.
         name: Replaces the default name, e.g. ``"freshness(pickup_ts)"``.
     """
 
@@ -733,7 +735,8 @@ class Freshness(Check):
         if not latest.is_valid:
             details = f"{self.column} has no non-null values, so the data can't be shown to be fresh"
             return CheckResult(self.name, False, details, 0, metrics)
-        now = _utc(self.now) if self.now is not None else dt.datetime.now(_UTC)
+        reference = self.now if self.now is not None else context.get("now")
+        now = _utc(_to_datetime(reference)) if reference is not None else dt.datetime.now(_UTC)
         latest_us = _epoch_us(latest, column_type)
         age_hours = ((now - _EPOCH) // _MICROSECOND - latest_us) / _US_PER_HOUR
         latest_iso = _iso_from_epoch_us(latest_us)

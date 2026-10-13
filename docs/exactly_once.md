@@ -146,6 +146,7 @@ ldp run rides.json --window 2026-08-01/2026-08-02                 # skipped_dupl
 ldp run rides.json --window 2026-08-01/2026-08-02 --run-id RUN --attempt 2   # a retry of run RUN
 ldp run rides.json --idempotency-key sales-2026-08-01             # a key from the orchestrator, used as given
 ldp run rides.json --window 2026-08-01/2026-08-02 --json          # PipelineResult.to_dict() on stdout
+ldp run rides.json --window yesterday                             # the local day before today; also last-week, last-month
 ```
 
 A staged run prints its `window`, `idempotency_key`, `run_id`, `attempt`, `status` and `snapshot`. The key is the one
@@ -155,6 +156,24 @@ window, or one of these combinations that does not make sense, exits with 1 and 
 the run exits with 3, and `ldp run` exits with 0 for a skipped duplicate, so a scheduler can retry exit 1, never
 retry exit 3, and treat a re-run of a finished window as done. The exit-code table is in the
 [README](https://github.com/tusharchou/local-data-platform#use-it-from-the-command-line).
+
+### What a window reads
+
+A window is the key of a run, and it also picks what the run reads, when the config says how: a
+`{window_start:FORMAT}` placeholder in `metadata.source.path` names the file of the window, and `metadata.window.column`
+keeps only the rows of the window. The rules are in the
+[contract](design/v0_1_1.md#windows-and-schedules-013). Without either, a window only scopes the key and the run loads the
+whole source, so three daily windows over one file that holds three days of rows write 9 rows. With
+`"window": {"size": "day", "column": "ordered_at"}` they write 3, and with the write mode `overwrite` a run replaces only
+the rows of its window.
+
+`yesterday`, `last-week` (the last full Monday-to-Monday week) and `last-month` are counted in the time zone of
+`metadata.window`, and `ldp run` prints the window each one stands for. A published window is skipped when it runs again,
+so to replace a day that changed at the source, run it with a key of your own:
+
+```bash
+ldp run orders.json --window 2026-08-02/2026-08-03 --idempotency-key orders-2026-08-02-v2
+```
 
 ## What it guarantees
 
@@ -179,6 +198,10 @@ staged and direct mode both work on every supported pyiceberg.
   skips, the key that `ldp plan` prints, a retry with a higher attempt that fences the staged branch an earlier
   attempt left, `--json`, and the exit status 3. Two processes that start at the same moment with the same key, on
   the `local` catalog and on a `sql` catalog on SQLite, write the batch once.
+- `tests/test_windows.py` covers what a window reads: the window shortcuts with a fixed clock, across month ends and clock
+  changes, the source path placeholders, the rows of a window and the replacement of one day, in each time zone, the
+  freshness check at the end of the window, and the three-days probe, where three daily windows over one file write 3 rows
+  and not 9.
 - `tests/test_upsert_race.py` runs N processes upserting the same keys into one table, three ways.
   Raw pyiceberg `Table.upsert` duplicates keys: pyiceberg's commit retry rebases each loser's
   insert onto the new head, so the race is real. Direct mode on a `local` catalog is serialised by

@@ -46,7 +46,7 @@ depends on the type:
 | Type | Payload |
 |---|---|
 | `run.started` | `mode`, `publish` (`direct` or `staged`), `idempotency_key`, `spec_hash`, `logical_window`, `source` and `target` (dataset names), `ldp_version` |
-| `run.extracted` | `rows_read`, `schema` (names and types) |
+| `run.extracted` | `rows_read`, `rows_kept` (only when the config names a `metadata.window.column` and the run has a window: the rows inside the window), `schema` (names and types) |
 | `quality.evaluated` | `rows`, `schema`, `null_counts` per column, `on_failure`, `passed`, `checks_run`, `checks_failed`, and `results`: one entry per check with `name`, `column`, `passed`, `failing_rows`, `details` and numeric `metrics` |
 | `run.published`, `run.skipped_duplicate` | `rows_written`, `snapshot_id`, `idempotency_key`, `write` (the `WriteResult`), `snapshot_summary` |
 | `run.blocked_quality` | `checks_failed`, `failures` (check names), `on_failure` |

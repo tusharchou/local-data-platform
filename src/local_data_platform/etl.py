@@ -15,6 +15,12 @@ A scheduler that retries a run passes the run id of the first attempt and the ne
 number, and the new attempt fences the older ones::
 
     run_config("rides.json", window="2026-09-01/2026-09-02", run_id=run_id, attempt=2)
+
+A window is also what a config's ``metadata.source.path`` placeholders and ``metadata.window.column`` read, so a
+daily run loads the file or the rows of its own day. The shortcuts ``yesterday``, ``last-week`` and ``last-month``
+stand for a window that is worked out in the time zone of the config's ``metadata.window``::
+
+    run_config("orders.json", window="yesterday")
 """
 
 import datetime as dt
@@ -64,7 +70,8 @@ def commit_context(config: Config, *, window: Any = None, idempotency_key: str |
     Args:
         config: The dataset config.
         window: The run's logical window, in any form
-            :func:`~local_data_platform.spec.parse_window` accepts.
+            :func:`~local_data_platform.spec.parse_window` accepts. A shortcut such as ``yesterday`` is counted in
+            the time zone of the config's ``metadata.window``.
         idempotency_key: Use this key instead of deriving one from the config and
             window with :func:`~local_data_platform.spec.idempotency_key`.
         run_id: The run id; a new UUIDv7 by default.
@@ -84,7 +91,7 @@ def commit_context(config: Config, *, window: Any = None, idempotency_key: str |
     """
     from local_data_platform.events import uuid7
     from local_data_platform.spec import idempotency_key as derive_key
-    from local_data_platform.spec import parse_window, spec_hash
+    from local_data_platform.spec import spec_hash, window_bounds
 
     try:
         from local_data_platform.format.iceberg.commit import CommitContext
@@ -93,7 +100,7 @@ def commit_context(config: Config, *, window: Any = None, idempotency_key: str |
                           "local_data_platform.format.iceberg.commit, which this build doesn't have") from exc
     if idempotency_key is not None and (not isinstance(idempotency_key, str) or not idempotency_key.strip()):
         raise ConfigError(f"idempotency_key must be a non-empty string, got {idempotency_key!r}")
-    bounds = parse_window(window)
+    bounds = window_bounds(config, window, now=now)
     key = idempotency_key.strip() if idempotency_key else derive_key(config, bounds)
     now_ms = int((now.timestamp() if now is not None else time.time()) * 1000)
     return CommitContext(
@@ -119,9 +126,13 @@ def run_config(path_or_config: Config | str | os.PathLike | dict[str, Any], mode
             writes through the staged publish protocol.
         sink: Where the run's events go, instead of the config's
             ``metadata.observability`` sinks.
-        window: A logical window. With ``window`` or ``idempotency_key`` (and no
+        window: A logical window: ``"START/END"``, a ``(start, end)`` pair, or ``yesterday``, ``last-week`` or
+            ``last-month`` in the time zone of the config. With ``window`` or ``idempotency_key`` (and no
             ``commit``), the run writes through the staged protocol with a context from
-            :func:`commit_context`, so re-running it is a no-op.
+            :func:`commit_context`, so re-running it is a no-op. The window also picks what the run reads: the
+            source path of the window, when ``metadata.source.path`` has ``{window_start:FORMAT}`` placeholders,
+            and only the rows in the window, when the config names a ``metadata.window.column``. With a window
+            column and the write mode ``overwrite``, the run replaces only the rows of the window.
         idempotency_key: An explicit idempotency key, e.g. from an orchestrator.
         run_id: The id of the run, for a retry: the next attempt reuses the id of the one before it. A new
             UUIDv7 by default. It belongs to a staged run, so it needs ``window`` or ``idempotency_key``.
@@ -133,13 +144,16 @@ def run_config(path_or_config: Config | str | os.PathLike | dict[str, Any], mode
 
     Raises:
         ConfigError: If the config is missing or invalid, ``attempt`` is not a whole number from 1, ``attempt``
-            is above 1 without ``run_id``, ``run_id`` or ``attempt`` come without a window or key, or ``commit``
-            is given together with ``window``, ``idempotency_key``, ``run_id`` or ``attempt``.
+            is above 1 without ``run_id``, ``run_id`` or ``attempt`` come without a window or key, ``commit``
+            is given together with ``window``, ``idempotency_key``, ``run_id`` or ``attempt``, or the source path
+            has window placeholders and the run has no window.
         PipelineNotFound: If no pipeline is registered for the config's route.
         DataQualityError: If a quality check fails and ``on_failure`` is ``"fail"``;
             nothing is written.
     """
+    from local_data_platform.orchestration.windows import lacks_window_selection
     from local_data_platform.pipeline.registry import create_pipeline
+    from local_data_platform.spec import window_bounds
 
     config = load_config(path_or_config)
     if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
@@ -150,13 +164,21 @@ def run_config(path_or_config: Config | str | os.PathLike | dict[str, Any], mode
     retry = run_id is not None or attempt > 1
     if commit is not None and (staged or retry):
         raise ConfigError("pass either commit= or window=/idempotency_key=/run_id=/attempt=, not both")
+    bounds = None  # the window as UTC bounds; a shortcut is worked out once, in the config's time zone
     if commit is None and staged:
-        commit = commit_context(config, window=window, idempotency_key=idempotency_key, run_id=run_id,
+        bounds = window_bounds(config, window)
+        commit = commit_context(config, window=bounds, idempotency_key=idempotency_key, run_id=run_id,
                                 attempt=attempt)
     elif retry and commit is None:
         raise ConfigError("run_id and attempt belong to a staged run, so give a window or an idempotency_key too")
+    elif commit is not None:
+        bounds = getattr(commit, "logical_window", None)  # a ready context brings its window along
+    if bounds is not None and lacks_window_selection(config.metadata, config.when, mode):
+        logger.warning("config %s has a schedule and appends, but nothing selects the rows of a window, so every "
+                       "window loads the same rows again; put {window_start:FORMAT} in metadata.source.path or set "
+                       "metadata.window.column", config.identifier)
     logger.info("Running config %s", config.identifier)
-    return create_pipeline(config).run(mode=mode, commit=commit, sink=sink)
+    return create_pipeline(config, window=bounds).run(mode=mode, commit=commit, sink=sink)
 
 
 __all__ = ["IDEMPOTENCY_HORIZON_DAYS", "commit_context", "load_config", "run_config"]

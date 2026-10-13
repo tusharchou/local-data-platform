@@ -22,7 +22,10 @@ built-in pipeline class for the config's source and target formats.
 
 ``run()`` goes through four steps in order: ``extract`` reads the source,
 ``transform`` applies the callables in order, ``validate`` runs the checks, and
-the target is written. Checks run *before* the write: with ``on_failure="fail"`` a
+the target is written. A pipeline built for a ``window`` (see ``docs/design/v0_1_1.md``, "Windows and schedules")
+reads the source path of that window, keeps only the rows of the window right after the extract when the config
+names a ``metadata.window.column``, replaces only those rows when it overwrites an Iceberg table, and checks
+freshness at the end of the window. Checks run *before* the write: with ``on_failure="fail"`` a
 failing check raises :class:`~local_data_platform.exceptions.DataQualityError` and
 nothing is written; with ``"warn"`` the failures are logged and the write goes ahead.
 
@@ -38,6 +41,7 @@ exactly-once publish protocol (see ``docs/exactly_once.md``).
 import dataclasses
 import inspect
 import time
+import warnings
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -57,6 +61,7 @@ from local_data_platform.events import (
 )
 from local_data_platform.exceptions import ConfigError, DataQualityError
 from local_data_platform.logger import get_logger
+from local_data_platform.orchestration import windows
 from local_data_platform.quality import Check, QualityReport, checks_from_config, run_checks
 
 logger = get_logger(__name__)
@@ -92,6 +97,8 @@ class PipelineResult:
             carries the key. ``None`` for file targets.
         status: ``"published"``, or ``"skipped_duplicate"`` when the staged protocol
             found the key already on ``main`` and wrote nothing.
+        rows_kept: The rows of ``rows_read`` that lie in the window, when the config names a
+            ``metadata.window.column`` and the run had a window. ``None`` otherwise.
     """
 
     name: str
@@ -104,6 +111,7 @@ class PipelineResult:
     idempotency_key: str | None = None
     published_snapshot_id: int | None = None
     status: str = "published"
+    rows_kept: int | None = None
 
     @property
     def skipped_duplicate(self) -> bool:
@@ -126,13 +134,16 @@ class PipelineResult:
             "idempotency_key": self.idempotency_key,
             "published_snapshot_id": self.published_snapshot_id,
             "status": self.status,
+            "rows_kept": self.rows_kept,
         }
 
     def __str__(self) -> str:
+        kept = f", kept {self.rows_kept} in the window" if self.rows_kept is not None else ""
         if self.skipped_duplicate:
-            return (f"{self.name}: read {self.rows_read} rows, skipped: idempotency key already published in "
+            return (f"{self.name}: read {self.rows_read} rows{kept}, skipped: idempotency key already published in "
                     f"snapshot {self.published_snapshot_id} ({self.duration_s:.2f}s)")
-        text = f"{self.name}: read {self.rows_read} rows, wrote {self.rows_written} rows in {self.duration_s:.2f}s"
+        text = (f"{self.name}: read {self.rows_read} rows{kept}, wrote {self.rows_written} rows in "
+                f"{self.duration_s:.2f}s")
         if len(self.quality):
             text += f" (quality: {len(self.quality) - len(self.quality.failures)} of {len(self.quality)} checks passed)"
         return text
@@ -161,10 +172,15 @@ class Pipeline(Flow):
         sink: The default :class:`~local_data_platform.events.EventSink` for
             :meth:`run`. Defaults to the one the config's ``metadata.observability``
             block describes, else a :class:`~local_data_platform.events.NullSink`.
+        window: The logical window the pipeline is built for: ``(start, end)``, ``"START/END"`` or a shortcut such
+            as ``"yesterday"``, as :func:`~local_data_platform.spec.parse_window` reads it. The source path of the
+            config is read for it (``{window_start:FORMAT}`` placeholders), and :meth:`run` keeps its rows. The
+            window is :attr:`window`, as UTC datetimes.
 
     Raises:
-        ConfigError: If there is no source or target, ``on_failure`` is invalid, or
-            a check config or the observability block is invalid.
+        ConfigError: If there is no source or target, ``on_failure`` is invalid, a check config or the
+            observability block is invalid, the window is malformed, or the source path has window placeholders
+            and there is no window.
         TypeError: If the source, target, a transform or the sink has the wrong shape.
     """
 
@@ -179,11 +195,13 @@ class Pipeline(Flow):
         on_failure: str | None = None,
         name: str | None = None,
         sink: EventSink | None = None,
+        window: Any = None,
     ):
         if config is not None and not isinstance(config, Config):
             raise TypeError(f"config must be a local_data_platform.Config, got {type(config).__name__}; "
                             "load one with Config.from_json(path)")
         self.config = config
+        self.window = self._check_window(window, config)
         quality = config.quality if config is not None else {"on_failure": "fail", "checks": []}
 
         # Validate the cheap, side-effect-free parts first: building an Iceberg target creates its catalog.
@@ -192,7 +210,8 @@ class Pipeline(Flow):
         self.on_failure = self._check_on_failure(on_failure if on_failure is not None else quality["on_failure"])
         self.sink = self._check_sink(sink) if sink is not None else sink_from_config(config)
 
-        self.source = source if source is not None else self._build(config, self.build_source, "source")
+        self.source = source if source is not None else self._build(
+            windows.bind_config(config, self.window), self.build_source, "source")
         self.target = target if target is not None else self._build(config, self.build_target, "target")
         if not callable(getattr(self.source, "get", None)):
             raise TypeError(f"source must have a get() method, got {type(self.source).__name__}")
@@ -234,6 +253,14 @@ class Pipeline(Flow):
         if config is None:
             raise ConfigError(f"{type(self).__name__} needs a {role}: pass {role}= or a config")
         return builder(config)
+
+    @staticmethod
+    def _check_window(window: Any, config: Config | None) -> tuple[Any, Any] | None:
+        if window is None:
+            return None
+        from local_data_platform.spec import window_bounds
+
+        return window_bounds(config, window)
 
     @staticmethod
     def _check_transforms(transforms: Transform | Iterable[Transform] | None) -> list[Transform]:
@@ -337,6 +364,9 @@ class Pipeline(Flow):
     def write(self, df: pa.Table, mode: str | None = None, *, commit: Any = None) -> Any:
         """Write ``df`` to the target.
 
+        In a windowed run of a config that names a ``metadata.window.column``, an ``overwrite`` of an Iceberg table
+        replaces only the rows of the window (the ``overwrite_filter`` of ``Iceberg.put``), not the whole table.
+
         Args:
             df: The validated data.
             mode: The write mode, for targets whose ``put`` takes one (Iceberg:
@@ -351,17 +381,27 @@ class Pipeline(Flow):
         Raises:
             ConfigError: If ``mode`` is given for a target that always replaces its
                 data (CSV, Parquet) and is not ``"overwrite"``, or ``commit`` is given
-                for a target that can't take it.
+                for a target that can't take it, or a window overwrite needs a ``metadata.window.column`` that
+                ``df`` does not have.
         """
+        options = self._overwrite_options(df, mode, commit)
+        if not options:
+            return self._put(df, mode, commit, options)
+        with warnings.catch_warnings():
+            # The first load of a window has no rows to replace, which pyiceberg reports as a warning.
+            warnings.filterwarnings("ignore", message="Delete operation did not match any records")
+            return self._put(df, mode, commit, options)
+
+    def _put(self, df: pa.Table, mode: str | None, commit: Any, options: Mapping[str, Any]) -> Any:
         if commit is not None:
             self._require_commit_support()
             if mode is None:
-                return self.target.put(df, commit=commit)
-            return self.target.put(df, mode=mode, commit=commit)
+                return self.target.put(df, commit=commit, **options)
+            return self.target.put(df, mode=mode, commit=commit, **options)
         if mode is None:
-            return self.target.put(df)
+            return self.target.put(df, **options)
         if self._accepts_mode(self.target):
-            return self.target.put(df, mode=mode)
+            return self.target.put(df, mode=mode, **options)
         if isinstance(mode, str) and mode.strip().lower() == "overwrite":
             return self.target.put(df)
         raise ConfigError(f"target {self.target!r} is always overwritten; write mode {mode!r} only applies to "
@@ -386,6 +426,48 @@ class Pipeline(Flow):
         if not self._accepts(self.target, "commit"):
             raise ConfigError(f"target {self.target!r} can't write through the staged publish protocol: its put() "
                               "takes no commit=; idempotency keys need an Iceberg target")
+
+    # ------------------------------------------------------------------ windows
+
+    def _run_window(self, commit: Any) -> tuple[Any, Any] | None:
+        """The window of a run: the pipeline's own, else the one a commit context carries, else none."""
+        carried = getattr(commit, "logical_window", None)
+        carried = tuple(carried) if carried else None
+        if self.window is None:
+            return carried
+        if carried is not None and carried != self.window:
+            raise ConfigError(f"the pipeline was built for the window {_iso(self.window[0])}/{_iso(self.window[1])}, "
+                              f"but the commit context is for {_iso(carried[0])}/{_iso(carried[1])}")
+        return self.window
+
+    def _window_column(self) -> windows.WindowSpec | None:
+        """The ``metadata.window`` of the config when it names a column, else ``None``."""
+        declared = self.config.window if self.config is not None else None
+        return declared if declared is not None and declared.column is not None else None
+
+    def _select_window(self, df: pa.Table, window: tuple[Any, Any] | None) -> tuple[pa.Table, int | None]:
+        """Keep the rows in the window: ``(table, rows_kept)``, or ``(table, None)`` when nothing selects rows."""
+        declared = self._window_column()
+        if window is None or declared is None:
+            return df, None
+        kept = windows.filter_rows(df, declared.column, window, declared.tz)
+        logger.info("Pipeline %s: kept %d of %d rows in the window %s/%s", self.name, kept.num_rows, df.num_rows,
+                    _iso(window[0]), _iso(window[1]))
+        return kept, kept.num_rows
+
+    def _overwrite_options(self, df: pa.Table, mode: str | None, commit: Any) -> dict[str, Any]:
+        """``{"overwrite_filter": ...}`` when a windowed run overwrites an Iceberg table, else ``{}``."""
+        window, declared = self._run_window(commit), self._window_column()
+        if window is None or declared is None:
+            return {}
+        effective = mode if mode is not None else getattr(self.target, "write_mode", None)
+        if str(effective or "").strip().lower() != "overwrite" or not self._accepts(self.target, "overwrite_filter"):
+            return {}
+        if declared.column not in df.column_names:
+            raise ConfigError(f"metadata.window.column {declared.column!r} is not a column of the data to write "
+                              f"(columns: {', '.join(df.column_names)}); a transform may have dropped or renamed it")
+        column_type = df.schema.field(declared.column).type
+        return {"overwrite_filter": windows.overwrite_filter(declared.column, window, declared.tz, column_type)}
 
     # ------------------------------------------------------------------ run
 
@@ -414,6 +496,7 @@ class Pipeline(Flow):
         started = time.perf_counter()
         if commit is not None:
             self._require_commit_support()
+        window = self._run_window(commit)
         run_id = str(getattr(commit, "run_id", None) or uuid7())
         attempt = int(getattr(commit, "attempt", None) or 1)
         key = getattr(commit, "idempotency_key", None) if commit is not None else None
@@ -437,13 +520,14 @@ class Pipeline(Flow):
             stage = "extract"
             df = self.extract()
             counts["rows_read"] = rows_read = df.num_rows
-            emitter.emit("run.extracted", lambda: {"rows_read": rows_read, "schema": schema_payload(df.schema)})
+            df, rows_kept = self._select_window(df, window)
+            emitter.emit("run.extracted", lambda: self._extracted_payload(df, rows_read, rows_kept))
             stage = "transform"
             df = self.transform(df)
             stage = "validate"
             blocked: DataQualityError | None = None
             try:
-                report = self.validate(df, {"source_rows": rows_read})
+                report = self.validate(df, self._check_context(rows_read if rows_kept is None else rows_kept, window))
             except DataQualityError as error:
                 blocked = error
                 report = error.report if isinstance(error.report, QualityReport) else QualityReport()
@@ -459,7 +543,7 @@ class Pipeline(Flow):
             stage = "write"
             written = self.write(df, mode, commit=commit)
             stage = "report"
-            result = self._result(df, rows_read, written, report, key, run_id, started)
+            result = self._result(df, rows_read, written, report, key, run_id, started, rows_kept)
             counts["rows_written"] = result.rows_written
             key = result.idempotency_key
             table_uuid, summary = self._snapshot_facts(result.published_snapshot_id) if emitter.enabled else (None, {})
@@ -481,7 +565,7 @@ class Pipeline(Flow):
             emitter.flush()
 
     def _result(self, df: pa.Table, rows_read: int, written: Any, report: QualityReport, key: str | None,
-                run_id: str, started: float) -> PipelineResult:
+                run_id: str, started: float, rows_kept: int | None = None) -> PipelineResult:
         skipped = getattr(written, "skipped_duplicate", False) is True
         if isinstance(getattr(written, "rows_written", None), int):
             rows_written = written.rows_written
@@ -501,6 +585,7 @@ class Pipeline(Flow):
             idempotency_key=getattr(written, "idempotency_key", None) or key,
             published_snapshot_id=snapshot_id if isinstance(snapshot_id, int) else None,
             status="skipped_duplicate" if skipped else "published",
+            rows_kept=rows_kept,
         )
 
     def load(self, mode: str | None = None, **kwargs: Any) -> PipelineResult:
@@ -535,6 +620,22 @@ class Pipeline(Flow):
             "target": dataset_ref(self.target),
             "ldp_version": __version__,
         }
+
+    @staticmethod
+    def _extracted_payload(df: pa.Table, rows_read: int, rows_kept: int | None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"rows_read": rows_read}
+        if rows_kept is not None:
+            payload["rows_kept"] = rows_kept
+        payload["schema"] = schema_payload(df.schema)
+        return payload
+
+    @staticmethod
+    def _check_context(source_rows: int, window: tuple[Any, Any] | None) -> dict[str, Any]:
+        """What every check is told about the load: the source rows, and ``now`` as the window end in a window run."""
+        context: dict[str, Any] = {"source_rows": source_rows}
+        if window is not None:
+            context["now"] = window[1]
+        return context
 
     def _quality_payload(self, df: pa.Table, report: QualityReport) -> dict[str, Any]:
         return {

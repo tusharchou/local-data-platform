@@ -168,6 +168,7 @@ ldp pipelines                                    # list the registered source/ta
 ldp run rides.json                               # run the config's pipeline
 ldp run rides.json --mode overwrite              # override the config's write_mode
 ldp run rides.json --window 2026-08-01/2026-08-02   # staged and exactly once: a second run for the window skips
+ldp run orders.json --window yesterday              # a window by name: also last-week and last-month, in the config's time zone
 ldp run rides.json --window 2026-08-01/2026-08-02 --run-id RUN_ID --attempt 2   # a retry of that run
 ldp run rides.json --idempotency-key sales-2026-08-01   # a key of your own, for an orchestrator
 ldp run rides.json --window 2026-08-01/2026-08-02 --json   # the result as JSON on stdout, for scripts
@@ -186,7 +187,9 @@ its rows, and running it again for the same window finds that snapshot and write
 prints the same key, and `--idempotency-key auto` asks for it. A retry reuses the run id with the next attempt number,
 and the new attempt fences the older ones, so a staged branch that an earlier attempt left behind never reaches `main`.
 `--attempt` needs `--run-id`, and both need a window or a key. Without these options `ldp run` writes directly, as it
-always did.
+always did. A window is `START/END`, or `yesterday`, `last-week` (the last full Monday-to-Monday week) or `last-month`,
+counted in the time zone of the config, and `ldp run` prints the window it stands for. What a window reads, and how a
+config says so, is in [Windows](#windows).
 
 Every command follows one exit-code table.
 
@@ -214,7 +217,7 @@ call:
 |---|---|---|
 | `ldp catalog test SPEC` | Connect to a catalog (a spec file, or a config's catalog block) and list its namespaces and tables | `catalog.provider.create_catalog(spec).list_namespaces()` |
 | `ldp schema [--kind KIND]` | Print the `ldp/v1` JSON Schema of a kind of file, the dataset config by default | `spec.json_schema()`, `spec.kind_schema(kind)` |
-| `ldp plan CONFIG [--window START/END] [--json]` | Validate a config (or a folder of files, each as its kind) and print its spec hash, route, target, sinks and idempotency key | `spec.validate_spec(data)`, `spec.plan(config, window=...)` |
+| `ldp plan CONFIG [--window WINDOW] [--json]` | Validate a config (or a folder of files, each as its kind) and print its spec hash, route, target, sinks, schedule, and the source path and idempotency key of a window | `spec.validate_spec(data)`, `spec.plan(config, window=...)` |
 | `ldp runs CONFIG [--run RUN_ID] [--events]` | List the runs a config's sinks recorded | `events.summarize_runs(events.read_jsonl(path))` or `read_iceberg_events(catalog)` |
 | `ldp commits CONFIG [--key KEY] [--branches]` | List the staged publishes on a table, newest first | `format.iceberg.commit.commit_log(iceberg.table())` and `staged_branches(...)` |
 | `ldp datasets pin\|list\|export` | Pin, list and export dataset versions | `datasets.pin`, `list_versions`, `export` |
@@ -230,11 +233,13 @@ and a `metadata` block:
 
 | Key | What it holds |
 |---|---|
-| `metadata.source` | `name`, `format` (`CSV`, `PARQUET`, `ICEBERG`, `JSON`, `DUCKDB` or `XLSX`), and a `path` (local, `s3://` or `gs://`) or, for Iceberg, a `catalog`. A `DUCKDB` source also has one of `relation` (a table or view) and `sql` (one `SELECT` query), see [A DuckDB file as a source](#a-duckdb-file-as-a-source). An `XLSX` source may have `sheet` and `header_row`, see [An Excel sheet as a source](#an-excel-sheet-as-a-source) |
+| `metadata.source` | `name`, `format` (`CSV`, `PARQUET`, `ICEBERG`, `JSON`, `DUCKDB` or `XLSX`), and a `path` (local, `s3://` or `gs://`, and it may have `{window_start:FORMAT}` placeholders, see [Windows](#windows)) or, for Iceberg, a `catalog`. A `DUCKDB` source also has one of `relation` (a table or view) and `sql` (one `SELECT` query), see [A DuckDB file as a source](#a-duckdb-file-as-a-source). An `XLSX` source may have `sheet` and `header_row`, see [An Excel sheet as a source](#an-excel-sheet-as-a-source) |
 | `metadata.target` | The same, plus for Iceberg `write_mode` (`append`, `overwrite` or `upsert`), `join_cols` for upserts, and `partition_by` |
 | `metadata.target.catalog` | `type` (`local` by default, `sql`, `rest` or `glue`) and that type's keys; see [Catalogs](#catalogs-and-object-storage) |
 | `metadata.quality` | `on_failure` (`fail` or `warn`) and a list of `checks`: `row_count`, `not_null`, `unique`, `accepted_values`, `range`, `freshness`, `schema`, and the temporal checks `monotonic`, `max_skew`, `rate_below` and `max_gap` |
 | `metadata.observability` | Where run events go, for example `{"sinks": ["iceberg", "jsonl"]}`. The default sends them nowhere |
+| `metadata.schedule` | When the config runs: a 5-field cron expression, or `@hourly`, `@daily`, `@weekly` or `@monthly`. Without it, a `when` of `hourly`, `daily`, `weekly` or `monthly` means the alias. Editing it does not change the spec hash |
+| `metadata.window` | `"none"`, or `size` (`day`, `hour` or `15m`), an optional `column` that selects the rows of a window, and an optional `timezone` (UTC by default); see [Windows](#windows) |
 
 A config may also say `"apiVersion": "ldp/v1"` and `"kind": "Pipeline"`. `kind` says what a JSON file is. `Pipeline`
 is the default, so every config here is one, and a config has the same spec hash with and without it. `Workflow` is
@@ -250,6 +255,40 @@ demo's step 4 says so and partitions by `identity(pickup_date)` instead. The ful
 example of every check, is in the [v0.1.1 hardening contract](docs/design/v0_1_1.md#config-schema).
 `local_data_platform.spec.json_schema()` returns it as JSON Schema, and `ldp schema` prints it. The configs in
 [`examples/`](examples/README.md) are real ones you can run.
+
+### Windows
+
+A run can be responsible for one window of time, `[start, end)`, which is what `--window` gives it. A config says how a
+window picks what the run reads, and when the config runs:
+
+```json
+{
+  "identifier": "daily_orders",
+  "when": "daily",
+  "metadata": {
+    "schedule": "5 2 * * *",
+    "window": {"size": "day", "column": "ordered_at", "timezone": "Europe/Paris"},
+    "source": {"name": "orders", "format": "CSV", "path": "drops/orders_{window_start:%Y-%m-%d}.csv"},
+    "target": {"name": "orders", "format": "ICEBERG", "write_mode": "overwrite",
+               "catalog": {"identifier": "shop", "warehouse_path": "warehouse"}}
+  }
+}
+```
+
+- `{window_start:FORMAT}` and `{window_end:FORMAT}` in `metadata.source.path` name the file of the window, with a Python
+  `strftime` FORMAT shown in the time zone of the window. A run without a window on such a path fails and names the
+  placeholder.
+- `window.column` keeps only the rows at or after the start of the window and before its end, before the transforms and
+  the quality checks. `run.extracted` reports the rows read and the rows kept.
+- With `window.column` and the write mode `overwrite`, a run replaces only the rows of its window, so one changed day can
+  be redone and the other days stay. A published window is skipped when it runs again, so redo a day with a key of your
+  own: `ldp run daily_orders.json --window 2026-08-02/2026-08-03 --idempotency-key orders-2026-08-02-v2`.
+- A `freshness` check in a windowed run measures the age of the data at the end of the window.
+- A config with a schedule that appends, and that has neither a placeholder nor a `window.column`, would load the same
+  rows in every window. `ldp plan` reports that as an error and `ldp run --window` logs a warning.
+
+The [contract](docs/design/v0_1_1.md#windows-and-schedules-013) has the full rules, including how each column type is
+compared.
 
 ### A DuckDB file as a source
 

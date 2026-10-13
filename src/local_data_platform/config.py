@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .exceptions import ConfigError
+from .orchestration import windows
 from .paths import resolve_path
 from .spec import API_VERSION, DEFAULT_KIND, kind_of
 
@@ -79,7 +80,7 @@ class Config:
         return cls.from_dict(data, base_dir=resolved.parent)
 
     def validate(self) -> None:
-        """Raise :class:`ConfigError` if the metadata block is incomplete."""
+        """Raise :class:`ConfigError` if the metadata block is incomplete, or its schedule or window is invalid."""
         if not isinstance(self.metadata, dict):
             raise ConfigError("config 'metadata' must be an object")
         for key in REQUIRED_METADATA_KEYS:
@@ -90,6 +91,12 @@ class Config:
         for key in REQUIRED_METADATA_KEYS:
             if "format" not in self.metadata[key]:
                 raise ConfigError(f"config metadata '{key}' is missing 'format'")
+        if self.metadata.get("schedule") is not None:
+            try:
+                windows.parse_schedule(self.metadata["schedule"])
+            except ConfigError as exc:
+                raise ConfigError(f"metadata.schedule: {exc}") from None
+        windows.parse_window_spec(self.metadata.get("window"))
 
     @property
     def source(self) -> dict[str, Any]:
@@ -98,6 +105,24 @@ class Config:
     @property
     def target(self) -> dict[str, Any]:
         return self.metadata["target"]
+
+    @property
+    def schedule(self) -> windows.Schedule | None:
+        """When the config runs: its ``metadata.schedule``, else the schedule its ``when`` text means, else ``None``.
+
+        A ``when`` of ``hourly``, ``daily``, ``weekly`` or ``monthly`` means ``@hourly``, ``@daily``, ``@weekly`` or
+        ``@monthly``, and any other ``when`` text is a label that nothing reads. ``Schedule.source`` says which of the
+        two the schedule came from.
+        """
+        return windows.effective_schedule(self.metadata, self.when)
+
+    @property
+    def window(self) -> windows.WindowSpec | None:
+        """The ``metadata.window`` declaration: the size of a window, its column and its time zone.
+
+        It is ``None`` when the config has no ``window`` or sets it to ``"none"``.
+        """
+        return windows.parse_window_spec(self.metadata.get("window"))
 
     @property
     def quality(self) -> dict[str, Any]:

@@ -3,8 +3,8 @@
 Commands::
 
     ldp --version
-    ldp run CONFIG [--mode {append,overwrite,upsert}]
-                   [--window START/END] [--idempotency-key KEY|auto] [--run-id ID [--attempt N]] [--json]
+    ldp run CONFIG [--mode {append,overwrite,upsert}] [--window START/END|yesterday|last-week|last-month]
+                   [--idempotency-key KEY|auto] [--run-id ID [--attempt N]] [--json]
     ldp pipelines
     ldp snapshots CONFIG
     ldp query CONFIG [CONFIG ...] SQL [--max-rows N] [--snapshot ID | --as-of TIME]
@@ -12,7 +12,7 @@ Commands::
 
     ldp catalog test SPEC                  (catalog.provider)
     ldp schema [--kind KIND]               (spec)
-    ldp plan CONFIG                        (spec)
+    ldp plan CONFIG [--window WINDOW]      (spec)
     ldp runs CONFIG                        (events)
     ldp commits CONFIG                     (format.iceberg.commit)
     ldp datasets pin|list|export ...       (datasets)
@@ -191,11 +191,13 @@ def _staged_options(args: argparse.Namespace) -> tuple[str | None, str | None, s
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    from local_data_platform.etl import run_config
+    from local_data_platform.etl import load_config, run_config
+    from local_data_platform.spec import window_bounds
 
     window, key, run_id, attempt = _staged_options(args)
-    result = run_config(args.config, mode=args.mode, window=window, idempotency_key=key, run_id=run_id,
-                        attempt=attempt)
+    config = load_config(args.config)
+    bounds = window_bounds(config, window)  # a shortcut such as yesterday, worked out once, in the config's time zone
+    result = run_config(config, mode=args.mode, window=bounds, idempotency_key=key, run_id=run_id, attempt=attempt)
     if args.json:
         _print(json.dumps(result.to_dict(), indent=2))
         return EXIT_OK
@@ -208,16 +210,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
         for line in result.quality.summary().splitlines():
             _print(f"  {line}")
     if result.idempotency_key is not None:
-        _print_staged(result, window, attempt)
+        _print_staged(result, bounds, attempt)
     return EXIT_OK
 
 
-def _print_staged(result: Any, window: str | None, attempt: int) -> None:
+def _print_staged(result: Any, bounds: Any, attempt: int) -> None:
     """What a staged run did, in the words a scheduler or a person reads: window, key, run, status, snapshot."""
-    from local_data_platform.spec import format_instant, parse_window
+    from local_data_platform.spec import format_instant
 
     lines = []
-    bounds = parse_window(window)
     if bounds is not None:
         lines.append(("window", f"{format_instant(bounds[0])}/{format_instant(bounds[1])}"))
     lines += [("idempotency_key", result.idempotency_key), ("run_id", result.run_id), ("attempt", str(attempt)),
@@ -358,8 +359,10 @@ def build_parser(*, module_commands: bool = True) -> argparse.ArgumentParser:
                "such as a quality check held the run back. Retry 1, and do not retry 3.")
     run.add_argument("config", metavar="CONFIG", help="path to a JSON dataset config")
     run.add_argument("--mode", choices=WRITE_MODES, help="override the target's write_mode for this run")
-    run.add_argument("--window", metavar="START/END",
-                     help="the logical window of the run, an ISO 8601 interval such as 2026-08-01/2026-08-02")
+    run.add_argument("--window", metavar="WINDOW",
+                     help="the logical window of the run: an ISO 8601 interval such as 2026-08-01/2026-08-02, or "
+                          "yesterday, last-week or last-month, with the days counted in the time zone of the "
+                          "config. The run reads the window's source path and rows, when the config says how")
     run.add_argument("--idempotency-key", metavar="KEY",
                      help="use KEY as the key of the run, or 'auto' for the key that 'ldp plan' prints for the "
                           "config and the window. A key alone makes the run staged too")
