@@ -39,7 +39,7 @@ API_VERSION = "ldp/v1"
 """The spec version this library reads and writes."""
 
 TOP_LEVEL_KEYS = ("apiVersion", "identifier", "who", "what", "where", "when", "how", "metadata")
-FORMATS = ("CSV", "PARQUET", "JSON", "ICEBERG", "DUCKDB")
+FORMATS = ("CSV", "PARQUET", "JSON", "ICEBERG", "DUCKDB", "XLSX")
 WRITE_MODES = ("append", "overwrite", "upsert")
 ON_FAILURE = ("fail", "warn")
 HASH_EXCLUDED_METADATA = ("observability",)
@@ -364,6 +364,12 @@ def json_schema() -> dict[str, Any]:
                                  "description": "DUCKDB source: a table or view, as table, schema.table or "
                                                 "catalog.schema.table."},
                     "sql": {**non_empty, "description": "DUCKDB source: one SELECT or WITH query."},
+                    "sheet": {"oneOf": [non_empty, {"type": "integer", "minimum": 0}],
+                              "description": "XLSX source: the sheet's name, or its position from 0. The first "
+                                             "sheet by default."},
+                    "header_row": {"type": "integer", "minimum": 1,
+                                   "description": "XLSX source: the row that holds the column names, counted "
+                                                  "from 1. Rows above it are skipped."},
                 },
                 "allOf": [
                     {"if": {"properties": {"format": {"enum": ["ICEBERG", "iceberg"]}}, "required": ["format"]},
@@ -377,8 +383,8 @@ def json_schema() -> dict[str, Any]:
             "target": {
                 "allOf": [{"$ref": "#/$defs/block"}],
                 "properties": {
-                    "format": {"not": {"enum": ["DUCKDB", "duckdb"]},
-                               "description": "A DUCKDB block is a source only."},
+                    "format": {"not": {"enum": ["DUCKDB", "duckdb", "XLSX", "xlsx"]},
+                               "description": "A DUCKDB or XLSX block is a source only."},
                     "write_mode": {"type": "string", "enum": list(WRITE_MODES)},
                     "join_cols": {"oneOf": [non_empty, {"type": "array", "items": non_empty, "minItems": 1}]},
                     "partition_by": {"type": "array", "items": {"$ref": "#/$defs/partitionField"}},
@@ -549,6 +555,8 @@ def _check_block(problems: _Problems, block: Any, section: str) -> None:
     _check_string(problems, block, "path", where)
     if fmt == "DUCKDB":
         _check_duckdb_block(problems, block, section, where)
+    if fmt == "XLSX":
+        _check_xlsx_block(problems, block, section, where)
     if fmt == "JSON" and str(block.get("engine", "")).strip().upper() == "BIGQUERY":
         credentials = block.get("credentials")
         if credentials is not None:
@@ -567,6 +575,22 @@ def _check_duckdb_block(problems: _Problems, block: Mapping[str, Any], section: 
                             f"got {'both' if present else 'neither'}")
         return
     _check_string(problems, block, present[0], where)
+
+
+def _check_xlsx_block(problems: _Problems, block: Mapping[str, Any], section: str, where: str) -> None:
+    if section == "target":
+        problems.add(f"{where}.format", "XLSX is a source format only; write to CSV or ICEBERG instead")
+    path = block.get("path")
+    if isinstance(path, str) and path.strip().lower().endswith(".xls"):
+        problems.add(f"{where}.path", "is an old .xls workbook, which is not supported; save it as .xlsx")
+    sheet = block.get("sheet")
+    if sheet is not None and not (isinstance(sheet, str) and sheet.strip()) and not (
+            isinstance(sheet, int) and not isinstance(sheet, bool) and sheet >= 0):
+        problems.add(f"{where}.sheet", f"must be a sheet name or a position from 0, got {sheet!r}")
+    header_row = block.get("header_row")
+    if header_row is not None and (not isinstance(header_row, int) or isinstance(header_row, bool)
+                                   or header_row < 1):
+        problems.add(f"{where}.header_row", f"must be a whole number from 1, got {header_row!r}")
 
 
 def _check_iceberg_target(problems: _Problems, block: Mapping[str, Any], where: str) -> None:
@@ -753,6 +777,12 @@ def _describe(result: dict[str, Any], spec: Mapping[str, Any], base: Path | None
         database = resolve_path(source["path"], base)
         if not database.is_file():
             errors.append(ConfigError(f"metadata.source.path: the DuckDB file {database} does not exist"))
+    if route.source_format == "XLSX":
+        from local_data_platform.paths import resolve_path
+
+        workbook = resolve_path(source["path"], base)
+        if not workbook.is_file():
+            errors.append(ConfigError(f"metadata.source.path: the Excel file {workbook} does not exist"))
     if str(target["format"]).strip().upper() == "ICEBERG":
         catalog = target["catalog"]
         namespace = catalog.get("namespace") or catalog.get("identifier")

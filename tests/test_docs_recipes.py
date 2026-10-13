@@ -21,6 +21,7 @@ def test_recipes_has_python_blocks():
 
 def test_every_recipe_runs_in_order(tmp_path):
     pytest.importorskip("duckdb")
+    pytest.importorskip("openpyxl")
     script = tmp_path / "recipes.py"
     # Each block runs in its own namespace, as a reader would paste it.
     script.write_text("\n".join(f"exec(compile({block!r}, 'recipe {i}', 'exec'), {{}})"
@@ -35,3 +36,8 @@ def test_every_recipe_runs_in_order(tmp_path):
     assert "[{'city': 'BKK', 'revenue': 25.0}, {'city': 'NYC', 'revenue': 40.0}]" in out
     assert "rides_csv: read 3 rows, wrote 3 rows" in out
     assert (tmp_path / "exports" / "rides.csv").is_file()
+    # The Excel recipe: a sheet below a title row, as a CSV in the folder that stands for Google Drive.
+    assert (tmp_path / "drive" / "sales.csv").read_text().splitlines() == [
+        '"day","dish","orders","revenue"',
+        '2026-07-01 00:00:00.000000,"pad thai",12,143.5',
+        '2026-07-02 00:00:00.000000,"green curry",9,117']

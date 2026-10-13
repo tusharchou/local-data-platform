@@ -76,8 +76,9 @@ More demos, each one a `make` target (see [Development](#development)):
 | `glue` | `pyiceberg[glue]` (boto3) | The AWS Glue catalog |
 | `bigquery` | Google Cloud BigQuery client | BigQuery as a source |
 | `spark` | PySpark | The experimental `SparkEngine`, which also needs a JDK 17+ |
+| `excel` | openpyxl and defusedxml | Excel workbooks (`.xlsx`) as a source, for `ExcelToCSV` and `ExcelToIceberg` |
 | `dbt` | dbt-core, the dbt-duckdb adapter and DuckDB | `ldp dbt`, which runs a dbt project over your Iceberg tables and publishes the models you mark back to Iceberg ([how it works](docs/design/warehousing.md)), and the tests marked `dbt` |
-| `dev` | pytest, flake8, build, DuckDB, `moto[server]`, the MCP SDK | Working on the library |
+| `dev` | pytest, flake8, build, DuckDB, `moto[server]`, the MCP SDK, openpyxl | Working on the library |
 | `docs` | MkDocs and plugins | Building the docs |
 
 ## Use it from Python
@@ -200,7 +201,7 @@ and a `metadata` block:
 
 | Key | What it holds |
 |---|---|
-| `metadata.source` | `name`, `format` (`CSV`, `PARQUET`, `ICEBERG`, `JSON` or `DUCKDB`), and a `path` (local, `s3://` or `gs://`) or, for Iceberg, a `catalog`. A `DUCKDB` source also has one of `relation` (a table or view) and `sql` (one `SELECT` query), see [A DuckDB file as a source](#a-duckdb-file-as-a-source) |
+| `metadata.source` | `name`, `format` (`CSV`, `PARQUET`, `ICEBERG`, `JSON`, `DUCKDB` or `XLSX`), and a `path` (local, `s3://` or `gs://`) or, for Iceberg, a `catalog`. A `DUCKDB` source also has one of `relation` (a table or view) and `sql` (one `SELECT` query), see [A DuckDB file as a source](#a-duckdb-file-as-a-source). An `XLSX` source may have `sheet` and `header_row`, see [An Excel sheet as a source](#an-excel-sheet-as-a-source) |
 | `metadata.target` | The same, plus for Iceberg `write_mode` (`append`, `overwrite` or `upsert`), `join_cols` for upserts, and `partition_by` |
 | `metadata.target.catalog` | `type` (`local` by default, `sql`, `rest` or `glue`) and that type's keys; see [Catalogs](#catalogs-and-object-storage) |
 | `metadata.quality` | `on_failure` (`fail` or `warn`) and a list of `checks`: `row_count`, `not_null`, `unique`, `accepted_values`, `range`, `freshness`, `schema`, and the temporal checks `monotonic`, `max_skew`, `rate_below` and `max_gap` |
@@ -236,6 +237,34 @@ Use `relation` (`table`, `schema.table` or `catalog.schema.table`) or `sql`, not
 opened read-only and closed before the Iceberg write starts, and a `sql` source must be exactly one
 `SELECT` or `WITH` query. It needs the `duckdb` extra. `ldp plan` reports a missing file or a
 source with both or neither of `relation` and `sql`.
+
+### An Excel sheet as a source
+
+An `XLSX` source reads one sheet of an `.xlsx` workbook and writes it to a CSV file (`ExcelToCSV`) or an
+Iceberg table (`ExcelToIceberg`), so a spreadsheet that someone downloads from a website stops being converted
+by hand:
+
+```json
+{
+  "identifier": "sales",
+  "metadata": {
+    "source": {"name": "sales", "format": "XLSX", "path": "downloads/sales.xlsx", "sheet": "Sales",
+               "header_row": 1},
+    "target": {"name": "sales", "format": "CSV", "path": "drive/sales.csv"}
+  }
+}
+```
+
+`sheet` is the sheet's name or its position from 0, and the first sheet by default. `header_row` is the row
+that holds the column names, counted from 1, and the rows above it are skipped. Dates and datetimes become
+timestamps, whole numbers `int64`, other numbers `float64`, TRUE and FALSE `bool`, and text `string`. A column
+that mixes kinds becomes `string`, and a warning names it. A formula cell gives the value Excel saved with it,
+and empty rows at the end of the sheet and empty columns at its right edge are dropped. Formatting, charts and
+macros are ignored, and a merged range gives its value to its first cell and nulls to the rest. A `.xls` file, a
+sheet that does not exist, and an empty or repeated header cell fail with a message that names the file and the
+sheet. It needs the `excel` extra, and `ldp plan` reports a missing file or a `.xls` path. The CSV is replaced
+atomically, so a folder that Google Drive syncs never holds a half-written file; see the recipe
+[Excel to CSV in a Google Drive folder](docs/recipes.md#excel-to-csv-in-a-google-drive-folder).
 
 ## Catalogs and object storage
 

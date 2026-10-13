@@ -32,6 +32,9 @@ glue = ["pyiceberg[glue]>=0.11,<0.13"]
 # dbt over Iceberg tables (`ldp dbt`, local_data_platform.dbt_layer): dbt-core with the dbt-duckdb adapter, run as a subprocess.
 # It is not part of the dev extra, so the core install and `make test` never need it; tests that do carry the `dbt` marker.
 dbt = ["dbt-core>=1.12,<2", "dbt-duckdb>=1.11,<2", "duckdb>=1.1"]
+# Excel workbooks (.xlsx) as a source (the XLSX format, local_data_platform.format.excel). defusedxml makes openpyxl refuse a
+# spreadsheet built to exhaust memory, and openpyxl uses it on its own when it is installed.
+excel = ["openpyxl>=3.1", "defusedxml>=0.7"]
 dev = [
     "pytest>=8",
     "flake8>=7",
@@ -41,6 +44,9 @@ dev = [
     "moto[server]>=5.0",
     # The MCP SDK, for the in-memory MCP server tests.
     "mcp>=2.2,<3",
+    # The XLSX source: its tests build workbooks with openpyxl, so they run in every CI job.
+    "openpyxl>=3.1",
+    "defusedxml>=0.7",
 ]
 docs = [
     "mkdocs>=1.6.0",

@@ -21,6 +21,8 @@ from local_data_platform.pipeline.builtin import (
     BigQueryToCSV,
     CSVToIceberg,
     DuckDBToIceberg,
+    ExcelToCSV,
+    ExcelToIceberg,
     IcebergToCSV,
     IcebergToParquet,
     ParquetToIceberg,
@@ -45,6 +47,8 @@ BUILTIN_ROUTES = {
     Route("ICEBERG", "PARQUET"): IcebergToParquet,
     Route("JSON", "CSV", "BIGQUERY"): BigQueryToCSV,
     Route("DUCKDB", "ICEBERG"): DuckDBToIceberg,
+    Route("XLSX", "CSV"): ExcelToCSV,
+    Route("XLSX", "ICEBERG"): ExcelToIceberg,
 }
 
 

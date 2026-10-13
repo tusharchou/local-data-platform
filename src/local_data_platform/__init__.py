@@ -26,6 +26,7 @@ class SupportedFormat(Enum):
     CSV = "CSV"
     JSON = "JSON"
     DUCKDB = "DUCKDB"
+    XLSX = "XLSX"
 
 
 class SupportedEngine(Enum):
