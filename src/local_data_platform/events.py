@@ -395,6 +395,8 @@ def dataset_ref(obj: Any) -> dict[str, Any]:
     * Local files: ``namespace`` is ``file``, ``name`` is the absolute path.
     * Object-store files: ``namespace`` is ``<scheme>://<bucket>``, ``name`` is the key.
     * BigQuery queries: ``namespace`` is ``bigquery``, ``name`` is the source name.
+    * DuckDB tables and queries: ``namespace`` is ``duckdb``, ``name`` is the file's absolute path and
+      the relation (or the source name for a ``sql`` source), joined by ``#``.
     * Anything else: ``namespace`` is ``ldp``, ``name`` is its ``name``.
 
     Returns:
@@ -414,6 +416,10 @@ def dataset_ref(obj: Any) -> dict[str, Any]:
                 "table_identifier": identifier}
     if type(obj).__name__ == "BigQuery":
         return {"namespace": "bigquery", "name": str(getattr(obj, "name", "query")), "format": "BIGQUERY"}
+    if type(obj).__name__ == "DuckDBTable":
+        file = Path(obj.path).resolve().as_posix()
+        relation = getattr(obj, "relation", None) or obj.name
+        return {"namespace": "duckdb", "name": f"{file}#{relation}", "format": "DUCKDB"}
     path = getattr(obj, "path", None)
     if path:
         text = str(path)

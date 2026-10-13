@@ -25,6 +25,7 @@ class SupportedFormat(Enum):
     PARQUET = "PARQUET"
     CSV = "CSV"
     JSON = "JSON"
+    DUCKDB = "DUCKDB"
 
 
 class SupportedEngine(Enum):

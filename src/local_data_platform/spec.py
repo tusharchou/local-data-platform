@@ -39,7 +39,7 @@ API_VERSION = "ldp/v1"
 """The spec version this library reads and writes."""
 
 TOP_LEVEL_KEYS = ("apiVersion", "identifier", "who", "what", "where", "when", "how", "metadata")
-FORMATS = ("CSV", "PARQUET", "JSON", "ICEBERG")
+FORMATS = ("CSV", "PARQUET", "JSON", "ICEBERG", "DUCKDB")
 WRITE_MODES = ("append", "overwrite", "upsert")
 ON_FAILURE = ("fail", "warn")
 HASH_EXCLUDED_METADATA = ("observability",)
@@ -360,16 +360,25 @@ def json_schema() -> dict[str, Any]:
                     "engine": non_empty,
                     "catalog": {"$ref": "#/$defs/catalog"},
                     "credentials": {"type": "object", "properties": {"name": string, "path": non_empty}},
+                    "relation": {**non_empty,
+                                 "description": "DUCKDB source: a table or view, as table, schema.table or "
+                                                "catalog.schema.table."},
+                    "sql": {**non_empty, "description": "DUCKDB source: one SELECT or WITH query."},
                 },
                 "allOf": [
                     {"if": {"properties": {"format": {"enum": ["ICEBERG", "iceberg"]}}, "required": ["format"]},
                      "then": {"required": ["catalog"]},
                      "else": {"required": ["path"]}},
+                    {"if": {"properties": {"format": {"enum": ["DUCKDB", "duckdb"]}}, "required": ["format"]},
+                     "then": {"oneOf": [{"required": ["relation"], "not": {"required": ["sql"]}},
+                                        {"required": ["sql"], "not": {"required": ["relation"]}}]}},
                 ],
             },
             "target": {
                 "allOf": [{"$ref": "#/$defs/block"}],
                 "properties": {
+                    "format": {"not": {"enum": ["DUCKDB", "duckdb"]},
+                               "description": "A DUCKDB block is a source only."},
                     "write_mode": {"type": "string", "enum": list(WRITE_MODES)},
                     "join_cols": {"oneOf": [non_empty, {"type": "array", "items": non_empty, "minItems": 1}]},
                     "partition_by": {"type": "array", "items": {"$ref": "#/$defs/partitionField"}},
@@ -538,6 +547,8 @@ def _check_block(problems: _Problems, block: Any, section: str) -> None:
             _check_iceberg_target(problems, block, where)
         return
     _check_string(problems, block, "path", where)
+    if fmt == "DUCKDB":
+        _check_duckdb_block(problems, block, section, where)
     if fmt == "JSON" and str(block.get("engine", "")).strip().upper() == "BIGQUERY":
         credentials = block.get("credentials")
         if credentials is not None:
@@ -545,6 +556,17 @@ def _check_block(problems: _Problems, block: Any, section: str) -> None:
                 problems.add(f"{where}.credentials", "must be an object with a 'path' to a key file")
             else:
                 _check_string(problems, credentials, "path", f"{where}.credentials")
+
+
+def _check_duckdb_block(problems: _Problems, block: Mapping[str, Any], section: str, where: str) -> None:
+    if section == "target":
+        problems.add(f"{where}.format", "DUCKDB is a source format only; write to ICEBERG instead")
+    present = [key for key in ("relation", "sql") if block.get(key) is not None]
+    if len(present) != 1:
+        problems.add(where, "needs exactly one of 'relation' (a table or view) and 'sql' (one SELECT query), "
+                            f"got {'both' if present else 'neither'}")
+        return
+    _check_string(problems, block, present[0], where)
 
 
 def _check_iceberg_target(problems: _Problems, block: Mapping[str, Any], where: str) -> None:
@@ -725,6 +747,12 @@ def _describe(result: dict[str, Any], spec: Mapping[str, Any], base: Path | None
         result["pipeline"] = get_pipeline_class(*route).__name__
     except PipelineNotFound as exc:
         errors.append(ConfigError(str(exc)))
+    if route.source_format == "DUCKDB":
+        from local_data_platform.paths import resolve_path
+
+        database = resolve_path(source["path"], base)
+        if not database.is_file():
+            errors.append(ConfigError(f"metadata.source.path: the DuckDB file {database} does not exist"))
     if str(target["format"]).strip().upper() == "ICEBERG":
         catalog = target["catalog"]
         namespace = catalog.get("namespace") or catalog.get("identifier")

@@ -14,6 +14,7 @@ from local_data_platform.format.csv import CSV
 from local_data_platform.format.iceberg import Iceberg
 from local_data_platform.format.parquet import Parquet
 from local_data_platform.logger import get_logger
+from local_data_platform.store.source.duckdb import DuckDBTable
 from local_data_platform.store.source.gcp.bigquery import BigQuery, GCPCredentials
 
 logger = get_logger(__name__)
@@ -26,6 +27,7 @@ _ICEBERG_TARGET_KEYS = _ICEBERG_SOURCE_KEYS | {"write_mode", "join_cols", "parti
 # ``path`` on an Iceberg block is a pre-0.1.1 leftover that Iceberg ignores.
 _ICEBERG_LEGACY_KEYS = {"path"}
 _BIGQUERY_KEYS = {"name", "format", "engine", "path", "credentials"}
+_DUCKDB_KEYS = {"name", "format", "path", "relation", "sql"}
 
 
 def config_block(config: Config, section: str, expected_format: str | None = None,
@@ -79,6 +81,21 @@ def parquet_from_config(config: Config, section: str = "source") -> Parquet:
     block = config_block(config, section, "PARQUET", _FILE_KEYS)
     return Parquet(name=_require(block, "name", section), path=_require(block, "path", section),
                    base_dir=config.base_dir)
+
+
+def duckdb_from_config(config: Config, section: str = "source") -> DuckDBTable:
+    """Build a :class:`~local_data_platform.store.source.duckdb.DuckDBTable` from a config block.
+
+    The block is ``{"name", "format": "DUCKDB", "path", "relation"}`` or ``{"name", "format":
+    "DUCKDB", "path", "sql"}``. ``path`` resolves against the config's folder. The file is not
+    opened here, only when the source is read.
+
+    Raises:
+        ConfigError: If the block is incomplete, or does not have exactly one of ``relation`` and ``sql``.
+    """
+    block = config_block(config, section, "DUCKDB", _DUCKDB_KEYS)
+    return DuckDBTable(name=_require(block, "name", section), path=_require(block, "path", section),
+                       relation=block.get("relation"), sql=block.get("sql"), base_dir=config.base_dir)
 
 
 def iceberg_from_config(config: Config, section: str = "target", *, must_exist: bool = False) -> Iceberg:
@@ -162,6 +179,7 @@ __all__ = [
     "bigquery_from_config",
     "config_block",
     "csv_from_config",
+    "duckdb_from_config",
     "iceberg_from_config",
     "parquet_from_config",
 ]
