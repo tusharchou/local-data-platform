@@ -2,7 +2,8 @@
 
 Status: the contract for the 0.1.2 `ldp dbt` command, and it is built: source registration, the
 publish step and the command. It continues #45 (dbt transformation layer) and #57 (dbt dependencies),
-and it is milestone 0.1.2 Warehousing in the [roadmap](../roadmap.md).
+and it is milestone 0.1.2 Warehousing in the [roadmap](../roadmap.md). The [warehousing guide](../warehousing.md)
+walks through it with commands.
 
 ## Problem
 

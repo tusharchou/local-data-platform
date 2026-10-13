@@ -14,6 +14,7 @@ A modern, modular, and developer-friendly platform for local data engineering, a
 
 - [Quickstart](quickstart.md): install, run `ldp demo`, and load your own data.
 - [Recipes](recipes.md): short, runnable examples of the Python API.
+- [Warehousing](warehousing.md): from Excel and CSV exports to dbt-tested Iceberg tables, with churn and time travel.
 - [v0.1.1 hardening contract](design/v0_1_1.md): what each module does.
 - [Roadmap](roadmap.md): the milestones from 0.1.2 to 0.2.0 and what each one adds.
 
