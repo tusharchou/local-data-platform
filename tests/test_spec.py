@@ -91,7 +91,7 @@ def test_the_json_schema_rejects_what_validate_spec_rejects():
     jsonschema = pytest.importorskip("jsonschema")
     validator = jsonschema.Draft202012Validator(json_schema())
     for bad in (_spec(schedule="0 2 * * *"), _spec(apiVersion="ldp/v2"),
-                _spec(metadata__target__write_mode="merge"), _spec(metadata__source__format="XLSX"),
+                _spec(metadata__target__write_mode="merge"), _spec(metadata__source__format="AVRO"),
                 _spec(metadata__quality__checks=[{"check": "no_such_check"}]),
                 _spec(metadata__observability={"sinks": ["kafka"]})):
         assert list(validator.iter_errors(bad)), bad
@@ -133,7 +133,7 @@ def test_validate_spec_reports_every_problem_with_its_path():
     ({"metadata__target__catalog": {"identifier": "nyc"}}, "metadata.target.catalog.warehouse_path: is required"),
     ({"metadata__target__catalog": None}, "metadata.target.catalog: is required for an Iceberg table"),
     ({"metadata__target__name": "nyc.rides"}, "metadata.target.name: must not contain '.'"),
-    ({"metadata__source__format": "XLSX"}, "metadata.source.format: must be one of"),
+    ({"metadata__source__format": "AVRO"}, "metadata.source.format: must be one of"),
     ({"metadata__quality__checks": [{"check": "row_count", "min": 1}, {"check": "unique"}]},
      "metadata.quality.checks[1]: check (unique) is missing required parameter(s) ['columns']"),
     ({"metadata__observability": {"sinks": ["kafka"]}}, "metadata.observability.sinks[0] has unknown sink type"),

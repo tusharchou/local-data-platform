@@ -132,7 +132,7 @@ def test_ldp_console_script_is_declared():
 
 
 def test_extras_are_declared():
-    assert set(PYPROJECT["project"]["optional-dependencies"]) >= {"duckdb", "bigquery", "dev", "docs", "dbt"}
+    assert set(PYPROJECT["project"]["optional-dependencies"]) >= {"duckdb", "bigquery", "dev", "docs", "dbt", "excel"}
 
 
 def test_the_dbt_extra_is_not_part_of_the_dev_extra():
@@ -141,6 +141,12 @@ def test_the_dbt_extra_is_not_part_of_the_dev_extra():
     extras = PYPROJECT["project"]["optional-dependencies"]
     assert [name for name in extras["dev"] if name.lower().startswith("dbt")] == []
     assert {name.split(">")[0].split("=")[0] for name in extras["dbt"]} >= {"dbt-core", "dbt-duckdb", "duckdb"}
+
+
+def test_the_excel_extra_is_in_the_dev_extra_so_the_excel_tests_run_in_every_ci_job():
+    extras = PYPROJECT["project"]["optional-dependencies"]
+    for name in ("excel", "dev"):
+        assert {item.split(">")[0].split("=")[0] for item in extras[name]} >= {"openpyxl", "defusedxml"}, name
 
 
 def test_read_the_docs_requirements_match_the_docs_extra():

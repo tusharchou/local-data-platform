@@ -152,3 +152,47 @@ print(create_pipeline(config).run())   # rides_csv: read 3 rows, wrote 3 rows in
 
 Your module must be imported before `create_pipeline` is called. `ldp pipelines` lists the
 registered routes.
+
+## Excel to CSV in a Google Drive folder
+
+Needs the `excel` extra: `pip install "local-data-platform[excel]"`. A spreadsheet that you download from a
+website becomes a CSV in a folder you choose. To share it through Google Drive, make the target the folder that
+Google Drive for desktop syncs, such as `~/Google Drive/My Drive/sales`. LDP only writes a file there, so it
+needs no Drive API and no credentials, and the file is replaced atomically, so Drive never uploads a half-written
+one. `header_row` skips the title above the column names, and `sheet` picks the sheet by name or by position.
+
+```python
+import datetime as dt
+
+import openpyxl
+
+from local_data_platform import Config
+from local_data_platform.pipeline.registry import create_pipeline
+
+# A stand-in for the file you downloaded, with a title above the header row.
+workbook = openpyxl.Workbook()
+sheet = workbook.active
+sheet.title = "Sales"
+sheet.append(["Sales for July"])
+sheet.append(["day", "dish", "orders", "revenue"])
+sheet.append([dt.date(2026, 7, 1), "pad thai", 12, 143.5])
+sheet.append([dt.date(2026, 7, 2), "green curry", 9, 117.0])
+workbook.save("sales.xlsx")
+
+drive = "drive"   # on your machine, the folder that Google Drive for desktop syncs
+config = Config.from_dict({
+    "identifier": "sales_to_drive",
+    "metadata": {
+        "source": {"name": "sales", "format": "XLSX", "path": "sales.xlsx", "sheet": "Sales", "header_row": 2},
+        "target": {"name": "sales", "format": "CSV", "path": f"{drive}/sales.csv"},
+    },
+}, base_dir=".")
+print(create_pipeline(config).run().rows_written)   # 2
+print(open(f"{drive}/sales.csv").read())
+# "day","dish","orders","revenue"
+# 2026-07-01 00:00:00.000000,"pad thai",12,143.5
+# 2026-07-02 00:00:00.000000,"green curry",9,117
+```
+
+Dates become timestamps, whole numbers `int64` and other numbers `float64`. To load the sheet into an Iceberg table
+instead, make the target an Iceberg block, as in [the quickstart](quickstart.md).

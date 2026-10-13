@@ -93,6 +93,8 @@ Pipelines are chosen by a **registry** keyed by what a config declares, and buil
 | `ICEBERG` | `PARQUET` | | `IcebergToParquet` | `name`, `catalog` |
 | `JSON` | `CSV` | `BIGQUERY` | `BigQueryToCSV` | `name`, `path` of a JSON file holding the query, `credentials` |
 | `DUCKDB` | `ICEBERG` | | `DuckDBToIceberg` | `name`, `path` of the DuckDB file, and one of `relation` or `sql` |
+| `XLSX` | `CSV` | | `ExcelToCSV` | `name`, `path` of the workbook, and optionally `sheet` and `header_row` |
+| `XLSX` | `ICEBERG` | | `ExcelToIceberg` | `name`, `path` of the workbook, and optionally `sheet` and `header_row` |
 
 **One SQL format.** `DUCKDB` to `ICEBERG` is the only route that publishes SQL-built data to
 Iceberg, and `DUCKDB` is the only SQL format. The source opens the DuckDB file read-only, runs a
@@ -100,6 +102,10 @@ table scan (`relation`) or one `SELECT` query (`sql`), and closes the file befor
 starts. Later work extends this route and does not add a second one: 0.1.4 adds `inputs` and
 `query_file` to the source block, and the 0.1.7 insights run through it. A `DUCKDB` block is a
 source only.
+
+An `XLSX` block is a source only, and it reads a local workbook. The Excel reader is the `excel` extra, so
+the format module imports `openpyxl` when a sheet is read and not before, and without it the error is the
+install command.
 
 The pipelines themselves use composition: a `Pipeline` *has* a source, a target, a list of
 transforms and a list of quality checks. The registry only decides which class turns a config

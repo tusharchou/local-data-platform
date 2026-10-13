@@ -32,7 +32,9 @@ The extras are optional:
 | `s3` | boto3 | SigV4-signed REST catalogs on AWS, such as S3 Tables; `s3://` IO itself needs nothing extra ([Catalogs and object storage](catalogs.md)) |
 | `glue` | `pyiceberg[glue]` (boto3) | The AWS Glue catalog ([Catalogs and object storage](catalogs.md)) |
 | `bigquery` | Google Cloud BigQuery client | BigQuery as a source |
-| `dev` | pytest, flake8, build, DuckDB, `moto[server]`, the MCP SDK | Working on the library |
+| `excel` | openpyxl and defusedxml | Excel workbooks (`.xlsx`) as a source, with `ExcelToCSV` and `ExcelToIceberg` ([Recipes](recipes.md#excel-to-csv-in-a-google-drive-folder)) |
+| `dbt` | dbt-core, the dbt-duckdb adapter and DuckDB | `ldp dbt`, dbt models over your Iceberg tables ([Warehousing with dbt](design/warehousing.md)) |
+| `dev` | pytest, flake8, build, DuckDB, `moto[server]`, the MCP SDK, openpyxl | Working on the library |
 | `docs` | MkDocs and plugins | Building these docs |
 | `spark` | PySpark | The experimental `SparkEngine`, which also needs a JDK 17+ ([Spark](spark.md)) |
 

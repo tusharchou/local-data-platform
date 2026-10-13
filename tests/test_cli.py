@@ -70,10 +70,10 @@ def test_pipelines_lists_every_builtin(capsys):
     assert main(["pipelines"]) == 0
     out = capsys.readouterr().out
     for name in ("CSVToIceberg", "ParquetToIceberg", "IcebergToCSV", "IcebergToParquet", "BigQueryToCSV",
-                 "DuckDBToIceberg"):
+                 "DuckDBToIceberg", "ExcelToCSV", "ExcelToIceberg"):
         assert name in out
     assert "BIGQUERY" in out
-    assert "(6 rows)" in out
+    assert "(8 rows)" in out
 
 
 def test_run_loads_the_config_and_prints_a_summary(config_path, capsys):

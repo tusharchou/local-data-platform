@@ -11,6 +11,7 @@ from typing import Any
 from local_data_platform import Config
 from local_data_platform.exceptions import ConfigError
 from local_data_platform.format.csv import CSV
+from local_data_platform.format.excel import Excel
 from local_data_platform.format.iceberg import Iceberg
 from local_data_platform.format.parquet import Parquet
 from local_data_platform.logger import get_logger
@@ -28,6 +29,7 @@ _ICEBERG_TARGET_KEYS = _ICEBERG_SOURCE_KEYS | {"write_mode", "join_cols", "parti
 _ICEBERG_LEGACY_KEYS = {"path"}
 _BIGQUERY_KEYS = {"name", "format", "engine", "path", "credentials"}
 _DUCKDB_KEYS = {"name", "format", "path", "relation", "sql"}
+_EXCEL_KEYS = {"name", "format", "path", "sheet", "header_row"}
 
 
 def config_block(config: Config, section: str, expected_format: str | None = None,
@@ -96,6 +98,21 @@ def duckdb_from_config(config: Config, section: str = "source") -> DuckDBTable:
     block = config_block(config, section, "DUCKDB", _DUCKDB_KEYS)
     return DuckDBTable(name=_require(block, "name", section), path=_require(block, "path", section),
                        relation=block.get("relation"), sql=block.get("sql"), base_dir=config.base_dir)
+
+
+def excel_from_config(config: Config, section: str = "source") -> Excel:
+    """Build an :class:`~local_data_platform.format.excel.Excel` source from a config block.
+
+    The block is ``{"name", "format": "XLSX", "path"}`` and, optionally, ``sheet`` (a name, or a position from 0;
+    the first sheet by default) and ``header_row`` (counted from 1, 1 by default). ``path`` resolves against the
+    config's folder. The workbook is not opened here, only when the source is read.
+
+    Raises:
+        ConfigError: If the block is incomplete, or ``sheet`` or ``header_row`` is not valid.
+    """
+    block = config_block(config, section, "XLSX", _EXCEL_KEYS)
+    return Excel(name=_require(block, "name", section), path=_require(block, "path", section),
+                 sheet=block.get("sheet"), header_row=block.get("header_row", 1), base_dir=config.base_dir)
 
 
 def iceberg_from_config(config: Config, section: str = "target", *, must_exist: bool = False) -> Iceberg:
@@ -180,6 +197,7 @@ __all__ = [
     "config_block",
     "csv_from_config",
     "duckdb_from_config",
+    "excel_from_config",
     "iceberg_from_config",
     "parquet_from_config",
 ]
