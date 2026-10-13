@@ -41,10 +41,16 @@ EXPECTED_PIPELINES = {
     "near_data_lake/config/egression.json": "CSVToIceberg",
     "nyc_yellow_taxi_dataset/config/ingestion.json": "ParquetToIceberg",
     "nyc_yellow_taxi_dataset/config/egression.json": "IcebergToCSV",
+    "restaurant/config/restaurants_to_csv.json": "ExcelToCSV",
+    "restaurant/config/restaurants.json": "ExcelToIceberg",
+    "restaurant/config/customers.json": "CSVToIceberg",
+    "restaurant/config/orders.json": "CSVToIceberg",
 }
 
 # Inputs in these formats are committed next to the example; Parquet is a documented download.
 COMMITTED_INPUT_FORMATS = {"CSV", "JSON"}
+# The restaurant example's generator writes its inputs into the work folder, so none of them is committed.
+GENERATED_INPUTS = ("restaurant/",)
 
 
 def _example_id(path: Path) -> str:
@@ -124,6 +130,8 @@ def test_config_paths_stay_inside_the_example(path):
 def test_committed_inputs_exist(path):
     config = Config.from_json(path)
     source = config.source
+    if _example_id(path).startswith(GENERATED_INPUTS):
+        pytest.skip("the example's generator writes the input")
     if source["format"] not in COMMITTED_INPUT_FORMATS:
         pytest.skip(f"{source['format']} input is not committed")
     assert config.resolve(source["path"]).is_file()

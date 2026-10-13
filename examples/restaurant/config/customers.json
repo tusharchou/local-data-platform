@@ -1,0 +1,35 @@
+{
+  "identifier": "customers",
+  "who": "restaurant owner",
+  "what": "the customers, as exported",
+  "where": "landing/customers.csv",
+  "when": "whenever a new export is downloaded",
+  "how": "batch overwrite",
+  "metadata": {
+    "source": {
+      "name": "customers",
+      "format": "CSV",
+      "path": "../landing/customers.csv"
+    },
+    "target": {
+      "name": "customers",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "raw",
+        "warehouse_path": "../warehouse"
+      },
+      "write_mode": "overwrite"
+    },
+    "quality": {
+      "on_failure": "fail",
+      "checks": [
+        {"check": "row_count", "min": 1},
+        {"check": "not_null", "columns": ["customer_id"]},
+        {"check": "unique", "columns": ["customer_id"]},
+        {"check": "schema", "columns": {
+          "customer_id": "string", "name": "string", "city": "string", "signed_up_at": "timestamp[s]"}}
+      ]
+    },
+    "observability": {"sinks": ["jsonl"]}
+  }
+}

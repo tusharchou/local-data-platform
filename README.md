@@ -62,9 +62,10 @@ More demos, each one a `make` target (see [Development](#development)):
 |---|---|
 | `make demo-robotics` | Humanoid-robot episodes and sensor frames in bronze, silver and gold Iceberg tables, temporal quality checks, a pinned training split and DuckDB research queries |
 | `make demo-agent` | The read-only MCP server on the demo table, driven by a scripted agent client |
+| `make demo-warehouse` | A restaurant chain from Excel and CSV exports to dbt-tested Iceberg tables with monthly customer churn, a late batch and time travel (needs the `dbt` and `excel` extras) |
 | `make demo-spark` | The Scala Spark job reading the demo table and writing an aggregate that pyiceberg reads back (needs scala-cli) |
 | `make demo-rest` | The demo config against an Iceberg REST catalog started locally on scala-cli's JVM: `ldp catalog test`, two runs, the snapshots and a query (needs scala-cli) |
-| `make demo-all` | All of them; the two JVM demos are skipped when scala-cli isn't installed |
+| `make demo-all` | All of them; `demo-warehouse` is skipped when dbt isn't installed and the two JVM demos when scala-cli isn't |
 
 ### Extras
 
@@ -166,6 +167,9 @@ ldp run rides.json --mode overwrite              # override the config's write_m
 ldp snapshots rides.json                         # list the target table's snapshots
 ldp query rides.json "SELECT count(*) FROM rides"   # SQL over the target, named after target.name
 ldp query rides.json "SELECT * FROM rides" --max-rows 20   # print at most 20 rows (default 100)
+ldp query rides.json "SELECT count(*) FROM rides" --snapshot 4437   # an older snapshot, from ldp snapshots
+ldp query rides.json "SELECT count(*) FROM rides" --as-of "2026-07-31 23:59:59"   # the newest snapshot at or before that time (UTC)
+ldp query config/ "SELECT o.id FROM raw.orders o JOIN raw.customers c ON c.id = o.id"   # a folder of configs: every table, joinable
 ldp demo --workdir /tmp/ldp_demo                 # also --rows N (default 1000) and --seed N (default 42)
 ```
 
@@ -433,6 +437,21 @@ with DuckDBEngine() as duck:
     print(duck.snapshots("rides"))                             # from iceberg_snapshots
 ```
 
+`open_lake(path)` registers every Iceberg table that some dataset configs name, so SQL can join them. `path` is a
+config file, a folder of configs, or a list of them, and `ldp query` uses it when it is given a folder or more than
+one config. Each table is a view named `namespace.table` and, when no other table has the same name, a view with the
+bare name. `snapshot_id=` or `as_of=` read one table as it was, and refuse a lake of several. Nothing is written and
+nothing is downloaded, and the MCP SDK is not needed.
+
+```python
+from local_data_platform.lake import open_lake
+
+with open_lake("config") as lake:
+    lake.query("SELECT o.id, c.label FROM raw.orders o JOIN raw.customers c ON c.id = o.id")
+with open_lake("config/raw.orders.json", as_of="2026-07-31 23:59:59") as lake:   # UTC unless it has an offset
+    lake.query("SELECT count(*) FROM orders")
+```
+
 `attach_rest(name, uri, warehouse, token_env=None)` attaches a whole REST catalog to DuckDB.
 `engine.router` estimates how many bytes a scan reads from the manifests, after partition pruning,
 and `choose_engine` picks DuckDB below 50 GiB by default, and PySpark above that when it's
@@ -610,7 +629,7 @@ make install      # create .venv and install the package with the dev and docs e
 make lint         # flake8
 make test         # pytest, offline: the Spark and REST integration tests skip
 make demo         # run the demo into ./ldp_demo
-make demo-all     # every demo; demo-spark and demo-rest need scala-cli
+make demo-all     # every demo; demo-warehouse needs the dbt and excel extras, demo-spark and demo-rest need scala-cli
 make spark-test   # opt-in Spark integration tests (LDP_RUN_SPARK=1, scala-cli)
 make rest-test    # opt-in REST catalog integration tests (LDP_RUN_REST=1, scala-cli)
 make dbt-test     # the tests that need the dbt extra (pip install -e ".[dev,dbt]" first)

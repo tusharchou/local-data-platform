@@ -23,6 +23,13 @@ credentials. It generates synthetic taxi rides and walks through every feature.
 The file names are historical: in the NEAR example, `egression.json` is the step
 that loads the CSV into Iceberg.
 
+Two more examples have their own folder and README, and each one is a `make` target:
+
+| Example | What it shows | Run it |
+|---|---|---|
+| [`robot_episodes/`](robot_episodes/README.md) | Humanoid-robot episodes in bronze, silver and gold tables, temporal quality gates and a pinned training split | `make demo-robotics` |
+| [`restaurant/`](restaurant/README.md) | A restaurant chain from Excel and CSV exports to dbt-tested Iceberg tables, monthly customer churn, late orders and time travel | `make demo-warehouse` (needs the `dbt` and `excel` extras) |
+
 ## Run a config
 
 Each config can be run with the CLI or with the report script next to it. Both call

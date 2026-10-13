@@ -53,7 +53,31 @@ To build a data mart for managing restaurant data, enabling seamless data collec
   - `sale_date` (date)
   - `created_at` (timestamp)
 
-### 2. Iceberg Configuration
+### 2. The tables of the example
+
+`examples/restaurant` builds this data mart on a laptop, from synthetic data that a seeded generator writes. The two
+tables above become the six that a restaurant system would export. The sales table is `orders` and `order_lines`.
+
+| Table | Key | Columns |
+|---|---|---|
+| `restaurants` | `restaurant_id` | `name`, `location`, `cuisine`, `created_at` |
+| `menu_items` | `menu_item_id` | `restaurant_id`, `name`, `category`, `price` |
+| `customers` | `customer_id` | `name`, `city`, `signed_up_at` |
+| `orders` | `order_id` | `restaurant_id`, `customer_id`, `order_ts`, `channel` (`dine_in`, `takeaway` or `delivery`), `total_amount`, `updated_at` |
+| `order_lines` | `order_id`, `line_no` | `menu_item_id`, `quantity`, `unit_price` |
+| `reviews` | `review_id` | `order_id`, `customer_id`, `restaurant_id`, `rating`, `comment`, `reviewed_at` |
+
+Orders arrive in dated batches that every milestone reuses. Batch 1 covers January to June 2026. Batch 2 covers July
+2026 and five late orders from the end of June, which were placed on time and only synced in July. After that comes
+one drop file a day, from 1 to 7 August 2026. `updated_at` is when the restaurant system last changed an order, and
+the models load on it.
+
+**Churn.** A customer churns in the month they stop ordering. For month M, `customers_at_start` is the number of
+customers with an order in month M minus 1, `churned` is the number of those customers with no order in month M, and
+`churn_rate` is `churned` divided by `customers_at_start`, or null when `customers_at_start` is 0. The first month has
+no row. The gold layer and the insights of later milestones use this definition.
+
+### 3. Iceberg Configuration
 - Enable time travel and schema evolution.
 - Optimize for large-scale queries.
 

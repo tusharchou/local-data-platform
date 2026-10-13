@@ -1,0 +1,407 @@
+"""The restaurant example (``examples/restaurant``): its generator, configs, ingest, workdir and dbt project.
+
+Nothing here runs dbt, so it runs in every CI job. ``test_restaurant_warehouse.py`` runs the whole walkthrough with
+dbt and checks the numbers it prints.
+"""
+
+import csv
+import datetime as dt
+import re
+from pathlib import Path
+
+import pytest
+
+from local_data_platform import Config
+from local_data_platform.dbt_layer.project import DbtProject
+from local_data_platform.exceptions import DataQualityError, EngineNotFound
+from local_data_platform.format.excel import Excel
+from local_data_platform.pipeline.builders import iceberg_from_config
+from local_data_platform.pipeline.registry import create_pipeline
+from local_data_platform.spec import plan
+from tests.support import load_example_module
+
+pytest.importorskip("openpyxl")
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+EXAMPLE = REPO_ROOT / "examples" / "restaurant"
+run = load_example_module("restaurant_run", EXAMPLE / "run.py")
+generate = run.generate
+
+INGEST_CONFIGS = ("restaurants_to_csv", "restaurants", "customers", "orders")
+
+
+@pytest.fixture(scope="module")
+def dataset():
+    return generate.generate()
+
+
+@pytest.fixture
+def workdir(tmp_path):
+    return run.prepare_workdir(tmp_path / "work")
+
+
+def table_of(workdir: Path, name: str):
+    return iceberg_from_config(Config.from_json(workdir / "config" / f"{name}.json"), "target")
+
+
+def ingest(workdir: Path, name: str):
+    return create_pipeline(Config.from_json(workdir / "config" / f"{name}.json")).run()
+
+
+def land_batch_one(workdir: Path, dataset) -> None:
+    generate.write_static(workdir / "landing", dataset)
+    generate.write_batch(workdir / "landing", dataset, "batch1")
+
+
+# --------------------------------------------------------------------------- the generated data
+
+
+def test_the_generator_is_deterministic_and_the_seed_matters(dataset):
+    again = generate.generate()
+    other = generate.generate(8)
+
+    assert again.orders == dataset.orders and again.order_lines == dataset.order_lines
+    assert again.customers == dataset.customers and again.reviews == dataset.reviews
+    assert other.orders != dataset.orders
+
+
+def test_the_dataset_has_the_shape_the_example_describes(dataset):
+    assert (len(dataset.restaurants), len(dataset.menu_items), len(dataset.customers)) == (6, 36, 150)
+    assert (len(dataset.orders), len(dataset.order_lines), len(dataset.reviews)) == (883, 2195, 94)
+    assert dataset.batches() == ["batch1", "batch2", *(f"2026-08-0{day}" for day in range(1, 8))]
+    sizes = {batch: len(dataset.batch_orders(batch)) for batch in dataset.batches()}
+    assert sizes == {"batch1": 745, "batch2": 108, "2026-08-01": 3, "2026-08-02": 4, "2026-08-03": 7,
+                     "2026-08-04": 7, "2026-08-05": 1, "2026-08-06": 3, "2026-08-07": 5}
+
+
+def test_batch_one_is_the_first_half_of_the_year_and_batch_two_is_july_and_five_late_orders(dataset):
+    first, second = dataset.batch_orders("batch1"), dataset.batch_orders("batch2")
+    late = [order for order in second if order["order_ts"].date() <= generate.BATCH1_END]
+
+    assert all(generate.FIRST_DAY <= order["order_ts"].date() <= generate.BATCH1_END for order in first)
+    assert len(late) == generate.LATE_ORDERS == 5
+    july = [order for order in second if order not in late]
+    assert len(july) == 103 and all(order["order_ts"].month == 7 for order in july)
+    assert all(order["order_ts"] >= dt.datetime(2026, 6, 22) for order in late)  # placed at the end of June
+
+
+def test_the_late_orders_reach_the_lake_in_july(dataset):
+    late = [order for order in dataset.batch_orders("batch2") if order["order_ts"].month == 6]
+
+    assert all(order["updated_at"].month == 7 and order["updated_at"].day <= 3 for order in late)
+    # So an incremental load on updated_at sees them, and a load on order_ts would miss them.
+    assert max(order["updated_at"] for order in dataset.batch_orders("batch1")) < min(
+        order["updated_at"] for order in dataset.batch_orders("batch2"))
+
+
+def test_the_late_orders_belong_to_customers_who_looked_as_if_they_had_stopped_in_june(dataset):
+    first_half = dataset.batch_orders("batch1")
+    may = {order["customer_id"] for order in first_half if order["order_ts"].month == 5}
+    june = {order["customer_id"] for order in first_half if order["order_ts"].month == 6}
+    late = [order for order in dataset.batch_orders("batch2") if order["order_ts"].month == 6]
+
+    customers = {order["customer_id"] for order in late}
+    assert len(customers) == 5 and customers <= may and not customers & june
+
+
+def test_every_order_is_updated_after_it_is_placed_and_in_opening_hours(dataset):
+    for order in dataset.orders:
+        assert order["updated_at"] > order["order_ts"], order
+        if order["order_ts"].month != 6 or order["batch"] != "batch2":
+            assert order["updated_at"].date() == order["order_ts"].date()  # the late orders sync days later
+        assert dt.time(10, 0) <= order["order_ts"].time() < dt.time(22, 0)
+
+
+def test_every_key_refers_to_something_and_ids_are_unique(dataset):
+    restaurants = {row["restaurant_id"] for row in dataset.restaurants}
+    customers = {row["customer_id"] for row in dataset.customers}
+    items = {row["menu_item_id"]: row for row in dataset.menu_items}
+    orders = {row["order_id"]: row for row in dataset.orders}
+
+    assert len(orders) == len(dataset.orders) and len(customers) == len(dataset.customers)
+    assert {row["restaurant_id"] for row in dataset.orders} <= restaurants
+    assert {row["customer_id"] for row in dataset.orders} <= customers
+    assert {row["channel"] for row in dataset.orders} == {"dine_in", "takeaway", "delivery"}
+    assert all(line["order_id"] in orders and line["menu_item_id"] in items for line in dataset.order_lines)
+    assert all(items[line["menu_item_id"]]["restaurant_id"] == orders[line["order_id"]]["restaurant_id"]
+               and items[line["menu_item_id"]]["price"] == line["unit_price"] for line in dataset.order_lines)
+    assert all(row["order_id"] in orders and row["customer_id"] == orders[row["order_id"]]["customer_id"]
+               for row in dataset.reviews)
+
+
+def test_an_order_total_is_the_sum_of_its_lines(dataset):
+    totals = {}
+    for line in dataset.order_lines:
+        totals[line["order_id"]] = totals.get(line["order_id"], 0) + line["quantity"] * line["unit_price"]
+
+    assert totals == {order["order_id"]: order["total_amount"] for order in dataset.orders}
+
+
+# --------------------------------------------------------------------------- the files
+
+
+def read_csv(path: Path) -> list[dict]:
+    with path.open(newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
+def test_the_static_tables_are_written_once_and_the_restaurants_as_a_workbook(tmp_path, dataset):
+    written = generate.write_static(tmp_path, dataset)
+
+    assert [path.name for path in written] == list(generate.STATIC_FILES)
+    assert len(read_csv(tmp_path / "customers.csv")) == 150 and len(read_csv(tmp_path / "menu_items.csv")) == 36
+    assert read_csv(tmp_path / "customers.csv")[0]["signed_up_at"] == dataset.customers[0]["signed_up_at"].strftime(
+        "%Y-%m-%d %H:%M:%S")
+    assert read_csv(tmp_path / "reviews.csv")[0].keys() == {
+        "review_id", "order_id", "customer_id", "restaurant_id", "rating", "comment", "reviewed_at"}
+
+
+def test_a_batch_is_written_as_the_orders_and_lines_of_that_batch_only(tmp_path, dataset):
+    orders, lines = generate.write_batch(tmp_path, dataset, "batch2")
+
+    assert (orders.name, lines.name) == ("orders.csv", "order_lines.csv")
+    rows = read_csv(orders)
+    assert len(rows) == 108 and list(rows[0]) == list(generate.ORDER_COLUMNS)
+    assert all(re.fullmatch(r"\d+\.\d\d", row["total_amount"]) for row in rows)  # a decimal point in every amount
+    assert {line["order_id"] for line in read_csv(lines)} == {row["order_id"] for row in rows}
+    assert generate.write_batch(tmp_path, dataset, "batch1", "o1.csv", "l1.csv")[0].name == "o1.csv"
+
+
+def test_an_unknown_batch_is_refused(tmp_path, dataset):
+    with pytest.raises(ValueError, match="unknown batch 'batch3'; the batches are"):
+        generate.write_batch(tmp_path, dataset, "batch3")
+
+
+def test_the_restaurant_workbook_has_a_title_row_and_an_about_sheet_first(tmp_path, dataset):
+    path = generate.write_restaurants_xlsx(tmp_path / "restaurants.xlsx", dataset)
+
+    table = Excel("restaurants", path, sheet="Restaurants", header_row=2).get()
+
+    assert table.column_names == ["restaurant_id", "name", "location", "cuisine", "created_at"]
+    assert table.num_rows == 6 and str(table.schema.field("created_at").type) == "timestamp[us]"
+    assert table.column("name").to_pylist()[:2] == ["Dosa Corner", "Spice Route"]
+    from local_data_platform.exceptions import ConfigError
+
+    with pytest.raises(ConfigError, match=r"\(sheet 'Restaurants'\): the header cell B1 is empty"):
+        Excel("restaurants", path, sheet="Restaurants").get()  # the title row is not a header
+
+
+def test_the_generator_cli_writes_every_file(tmp_path, capsys):
+    assert generate.main(["--out", str(tmp_path), "--seed", "7"]) == 0
+
+    assert len(list(tmp_path.iterdir())) == 4 + 2 * 9
+    assert "Wrote 22 files" in capsys.readouterr().out and (tmp_path / "orders_2026-08-03.csv").is_file()
+
+
+# --------------------------------------------------------------------------- the configs and the ingest
+
+
+def test_every_ingest_config_is_valid_and_takes_the_route_the_example_names(workdir, dataset):
+    land_batch_one(workdir, dataset)
+
+    routes = {name: plan(workdir / "config" / f"{name}.json") for name in INGEST_CONFIGS}
+
+    assert {name: (result["valid"], result["pipeline"]) for name, result in routes.items()} == {
+        "restaurants_to_csv": (True, "ExcelToCSV"), "restaurants": (True, "ExcelToIceberg"),
+        "customers": (True, "CSVToIceberg"), "orders": (True, "CSVToIceberg")}
+
+
+def test_the_raw_tables_are_loaded_without_dbt_and_every_check_passes(workdir, dataset):
+    land_batch_one(workdir, dataset)
+
+    results = {name: ingest(workdir, name) for name in INGEST_CONFIGS}
+
+    assert (workdir / "landing" / "restaurants.csv").is_file()
+    assert {name: result.rows_written for name, result in results.items()} == {
+        "restaurants_to_csv": 6, "restaurants": 6, "customers": 150, "orders": 745}
+    assert all(result.quality.passed for result in results.values())
+    orders = table_of(workdir, "orders")
+    assert [field.transform.__class__.__name__ for field in orders.table().spec().fields] == [
+        "DayTransform", "IdentityTransform"]
+    assert orders.table().inspect.partitions().num_rows == 534
+    schema = {field.name: str(field.type) for field in orders.get().schema}
+    assert schema == {"order_id": "string", "restaurant_id": "string", "customer_id": "string",
+                      "order_ts": "timestamp[us]", "channel": "string", "total_amount": "double",
+                      "updated_at": "timestamp[us]"}
+
+
+def test_the_raw_orders_keep_everything_they_are_given(workdir, dataset):
+    land_batch_one(workdir, dataset)
+
+    ingest(workdir, "orders")
+    ingest(workdir, "orders")  # the same batch again: raw is append-only, so it keeps both copies
+
+    assert table_of(workdir, "orders").row_count() == 2 * 745
+
+
+def test_a_batch_with_an_unknown_channel_is_stopped_by_the_ingest_checks(workdir, dataset):
+    land_batch_one(workdir, dataset)
+    ingest(workdir, "orders")
+    landing = workdir / "landing" / "orders.csv"
+    landing.write_text(landing.read_text().replace(",dine_in,", ",walk_in,", 1))
+
+    with pytest.raises(DataQualityError, match="accepted_values"):
+        ingest(workdir, "orders")
+
+    assert table_of(workdir, "orders").row_count() == 745  # nothing of the bad batch was written
+
+
+# --------------------------------------------------------------------------- the work folder and the command line
+
+
+def test_the_work_folder_gets_the_configs_and_the_dbt_project(workdir):
+    assert (workdir / run.MARKER).is_file()
+    assert sorted(path.stem for path in (workdir / "config").glob("*.json")) == sorted(INGEST_CONFIGS)
+    assert (workdir / "dbt" / "ldp_dbt.json").is_file() and (workdir / "dbt" / "models" / "schema.yml").is_file()
+    assert not (workdir / "dbt" / "target").exists()
+
+
+def test_running_again_clears_what_the_example_made_and_nothing_else(tmp_path):
+    first = run.prepare_workdir(tmp_path / "work")
+    (first / "warehouse").mkdir()
+    (first / "warehouse" / "old.db").write_text("old")
+    (first / "dbt" / "models" / "mine.sql").write_text("select 1")
+    (first / "notes.txt").write_text("keep me")
+
+    again = run.prepare_workdir(first)
+
+    assert not (again / "warehouse").exists() and not (again / "dbt" / "models" / "mine.sql").exists()
+    assert (again / "notes.txt").read_text() == "keep me"
+
+
+def test_a_folder_the_example_did_not_make_is_refused(tmp_path):
+    (tmp_path / "mine.txt").write_text("hello")
+
+    with pytest.raises(ValueError, match="is not empty and was not created by this example"):
+        run.prepare_workdir(tmp_path)
+
+    assert [path.name for path in tmp_path.iterdir()] == ["mine.txt"]
+
+
+def test_an_unknown_layer_is_refused(tmp_path):
+    with pytest.raises(ValueError, match=r"unknown layer 'gold'; the layers are \['warehouse'\]"):
+        run.run_restaurant(tmp_path / "work", layer="gold", quiet=True)
+    with pytest.raises(SystemExit):
+        run.main(["--layer", "gold"])
+
+
+def test_without_dbt_the_example_says_which_extra_to_install_and_exits_with_1(tmp_path, monkeypatch, capsys):
+    from local_data_platform.dbt_layer import project
+
+    def missing(*args, **kwargs):
+        raise EngineNotFound("dbt was not found")
+
+    monkeypatch.setattr(project, "find_dbt", missing)
+
+    assert run.main(["--workdir", str(tmp_path / "work")]) == 1
+
+    assert capsys.readouterr().err == ('error: The restaurant example needs the dbt extra. Install with: '
+                                       'pip install "local-data-platform[dbt,excel]"\n')
+    assert not (tmp_path / "work").exists()  # nothing was created before the check
+
+
+def test_without_the_excel_reader_it_names_both_extras_when_both_are_missing(monkeypatch):
+    from local_data_platform.dbt_layer import project
+
+    monkeypatch.setattr(project, "find_dbt", lambda *args, **kwargs: (_ for _ in ()).throw(EngineNotFound("no dbt")))
+    monkeypatch.setattr(run.importlib.util, "find_spec", lambda name: None)
+
+    with pytest.raises(EngineNotFound, match="needs the dbt and excel extras"):
+        run.require_extras()
+
+
+# --------------------------------------------------------------------------- the dbt project, read without running it
+
+
+DBT = EXAMPLE / "dbt"
+
+
+def model_sql(name: str) -> str:
+    return next(DBT.glob(f"models/**/{name}.sql")).read_text()
+
+
+def test_the_dbt_project_is_a_valid_ldp_project_that_publishes_next_to_the_ingest_configs():
+    project = DbtProject.load(DBT)
+
+    assert project.source_configs == ((DBT.parent / "config").resolve(),)
+    assert project.config_dir == (DBT.parent / "config").resolve()
+    assert project.publish_catalog == {"identifier": "gold", "warehouse_path": "../warehouse"}
+    assert project.observability == {"sinks": ["jsonl"]}
+
+
+def test_the_models_are_the_ones_the_roadmap_names():
+    assert sorted(path.stem for path in DBT.glob("models/**/*.sql")) == [
+        "churn_by_month", "customer_activity_monthly", "fct_orders", "revenue_by_restaurant_day", "stg_customers",
+        "stg_orders", "stg_restaurants"]
+
+
+@pytest.mark.parametrize("model, namespace", [("fct_orders", "silver"), ("churn_by_month", "gold"),
+                                              ("revenue_by_restaurant_day", "gold")])
+def test_the_marked_models_publish_to_their_namespace(model, namespace):
+    sql = model_sql(model)
+
+    assert "'ldp_publish': true" in sql and f"'ldp_namespace': '{namespace}'" in sql
+
+
+@pytest.mark.parametrize("model", ["stg_restaurants", "stg_customers", "stg_orders", "customer_activity_monthly"])
+def test_the_other_models_are_not_published(model):
+    assert "ldp_publish" not in model_sql(model)
+
+
+def test_fct_orders_loads_incrementally_on_updated_at_with_delete_and_insert():
+    sql = model_sql("fct_orders")
+
+    assert "materialized='incremental'" in sql and "unique_key='order_id'" in sql
+    assert "incremental_strategy='delete+insert'" in sql
+    assert "where updated_at > (select max(updated_at) from {{ this }})" in sql
+
+
+def test_the_churn_model_and_its_description_say_what_churn_is():
+    yaml = pytest.importorskip("yaml")
+    schema = yaml.safe_load((DBT / "models" / "schema.yml").read_text())
+    description = next(model["description"] for model in schema["models"] if model["name"] == "churn_by_month")
+
+    for words in ("customers_at_start is the number of customers with an order in month M minus 1",
+                  "churned is the number of those customers with no order in month M",
+                  "churn_rate is churned divided by customers_at_start, or null when customers_at_start is 0",
+                  "The first month has no row"):
+        assert words in " ".join(description.split())
+    sql = model_sql("churn_by_month")
+    assert "month a customer stops ordering" in sql and "when customers_at_start = 0 then null" in sql
+
+
+def test_the_schema_tests_cover_every_key_the_relationships_and_the_channels():
+    yaml = pytest.importorskip("yaml")
+    models = {model["name"]: model for model in yaml.safe_load((DBT / "models" / "schema.yml").read_text())["models"]}
+
+    def tests(model: str, column: str) -> list:
+        entry = next(item for item in models[model]["columns"] if item["name"] == column)
+        return [next(iter(test)) if isinstance(test, dict) else test for test in entry.get("data_tests", [])]
+
+    for model, key in (("stg_restaurants", "restaurant_id"), ("stg_customers", "customer_id"),
+                       ("fct_orders", "order_id"), ("customer_activity_monthly", "customer_month_id"),
+                       ("churn_by_month", "month"), ("revenue_by_restaurant_day", "restaurant_day_id")):
+        assert {"unique", "not_null"} <= set(tests(model, key)), (model, key)
+    for model in ("stg_orders", "fct_orders"):
+        assert "relationships" in tests(model, "customer_id") and "relationships" in tests(model, "restaurant_id")
+        assert "accepted_values" in tests(model, "channel")
+    assert "unique" not in tests("stg_orders", "order_id")  # the raw orders keep every version of an order
+
+
+def test_a_singular_test_checks_that_the_churn_rate_is_a_share():
+    sql = (DBT / "tests" / "churn_rate_between_0_and_1.sql").read_text()
+
+    assert "ref('churn_by_month')" in sql and "churn_rate < 0 or churn_rate > 1" in sql
+
+
+# --------------------------------------------------------------------------- the Makefile
+
+
+def test_the_makefile_has_the_warehouse_demo_and_demo_all_runs_it_only_when_it_can():
+    makefile = (REPO_ROOT / "Makefile").read_text()
+
+    assert "demo-warehouse: $(DEMO_CONFIG)" in makefile
+    assert "examples/restaurant/run.py --workdir $(WAREHOUSE_DIR) --layer warehouse" in makefile
+    assert "WAREHOUSE_DIR ?= $(DEMO_DIR)/restaurant" in makefile
+    assert "demo-warehouse Run the restaurant example's warehouse layer" in makefile
+    assert 'import dbt.cli.main, dbt.adapters.duckdb, openpyxl' in makefile and "Skipping demo-warehouse" in makefile

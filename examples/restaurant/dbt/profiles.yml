@@ -1,0 +1,10 @@
+restaurant:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: target/ldp_build.duckdb
+      threads: 4
+      settings:
+        # The views over Iceberg tables need DuckDB's iceberg extension. dbt must never download one.
+        autoinstall_known_extensions: false
