@@ -62,9 +62,10 @@ More demos, each one a `make` target (see [Development](#development)):
 |---|---|
 | `make demo-robotics` | Humanoid-robot episodes and sensor frames in bronze, silver and gold Iceberg tables, temporal quality checks, a pinned training split and DuckDB research queries |
 | `make demo-agent` | The read-only MCP server on the demo table, driven by a scripted agent client |
+| `make demo-warehouse` | A restaurant chain from Excel and CSV exports to dbt-tested Iceberg tables with monthly customer churn, a late batch and time travel (needs the `dbt` and `excel` extras) |
 | `make demo-spark` | The Scala Spark job reading the demo table and writing an aggregate that pyiceberg reads back (needs scala-cli) |
 | `make demo-rest` | The demo config against an Iceberg REST catalog started locally on scala-cli's JVM: `ldp catalog test`, two runs, the snapshots and a query (needs scala-cli) |
-| `make demo-all` | All of them; the two JVM demos are skipped when scala-cli isn't installed |
+| `make demo-all` | All of them; `demo-warehouse` is skipped when dbt isn't installed and the two JVM demos when scala-cli isn't |
 
 ### Extras
 
@@ -628,7 +629,7 @@ make install      # create .venv and install the package with the dev and docs e
 make lint         # flake8
 make test         # pytest, offline: the Spark and REST integration tests skip
 make demo         # run the demo into ./ldp_demo
-make demo-all     # every demo; demo-spark and demo-rest need scala-cli
+make demo-all     # every demo; demo-warehouse needs the dbt and excel extras, demo-spark and demo-rest need scala-cli
 make spark-test   # opt-in Spark integration tests (LDP_RUN_SPARK=1, scala-cli)
 make rest-test    # opt-in REST catalog integration tests (LDP_RUN_REST=1, scala-cli)
 make dbt-test     # the tests that need the dbt extra (pip install -e ".[dev,dbt]" first)

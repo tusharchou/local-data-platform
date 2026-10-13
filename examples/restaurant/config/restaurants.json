@@ -1,0 +1,38 @@
+{
+  "identifier": "restaurants",
+  "who": "restaurant owner",
+  "what": "the restaurants, as exported",
+  "where": "landing/restaurants.xlsx",
+  "when": "whenever a new export is downloaded",
+  "how": "batch overwrite",
+  "metadata": {
+    "source": {
+      "name": "restaurants",
+      "format": "XLSX",
+      "path": "../landing/restaurants.xlsx",
+      "sheet": "Restaurants",
+      "header_row": 2
+    },
+    "target": {
+      "name": "restaurants",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "raw",
+        "warehouse_path": "../warehouse"
+      },
+      "write_mode": "overwrite"
+    },
+    "quality": {
+      "on_failure": "fail",
+      "checks": [
+        {"check": "row_count", "min": 1},
+        {"check": "not_null", "columns": ["restaurant_id", "name"]},
+        {"check": "unique", "columns": ["restaurant_id"]},
+        {"check": "schema", "columns": {
+          "restaurant_id": "string", "name": "string", "location": "string", "cuisine": "string",
+          "created_at": "timestamp[us]"}}
+      ]
+    },
+    "observability": {"sinks": ["jsonl"]}
+  }
+}

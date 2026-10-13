@@ -17,6 +17,9 @@ DEMO_CONFIG  := $(DEMO_DIR)/rides.json
 ROBOTICS_DIR ?= $(DEMO_DIR)/robotics
 # Extra arguments for examples/robot_episodes/run.py, e.g. ROBOTICS_ARGS=--spark for its Scala Spark aggregate.
 ROBOTICS_ARGS ?=
+# The restaurant example's work folder, and the extras its warehouse layer needs (dbt, and the Excel reader).
+WAREHOUSE_DIR ?= $(DEMO_DIR)/restaurant
+WAREHOUSE_HINT := pip install "local-data-platform[dbt,excel]"
 
 # The JVM demos and tests. scala-cli provisions its own JDK (Temurin 17) and the Maven jars on first use.
 SCALA_CLI ?= $(firstword $(shell command -v scala-cli 2>/dev/null) $(wildcard $(HOME)/.local/bin/scala-cli) scala-cli)
@@ -32,7 +35,7 @@ REST_DIR     ?= $(DEMO_DIR)/rest
 REST_CONFIG  ?= $(REST_DIR)/rides_rest.json
 
 .PHONY: help all install lint test demo build smoke docs serve-docs generate-docs clean \
-	demo-robotics demo-agent demo-spark demo-rest demo-all spark-test rest-test dbt-test check-scala-cli
+	demo-robotics demo-agent demo-warehouse demo-spark demo-rest demo-all spark-test rest-test dbt-test check-scala-cli
 
 help:
 	@echo "Usage: make [target]"
@@ -44,11 +47,14 @@ help:
 	@echo "  demo-robotics  Run the robot-episode example into ./$(ROBOTICS_DIR) (ROBOTICS_ARGS=--spark adds its"
 	@echo "                 Scala Spark aggregate)"
 	@echo "  demo-agent     Start the read-only MCP server on the demo table and run a scripted agent client"
+	@echo "  demo-warehouse Run the restaurant example's warehouse layer into ./$(WAREHOUSE_DIR): Excel and CSV to"
+	@echo "                 Iceberg, dbt models with tests, churn by month (needs the dbt and excel extras)"
 	@echo "  demo-spark     Run the Scala Spark job on the demo table, then read its output back with pyiceberg"
 	@echo "                 (needs scala-cli)"
 	@echo "  demo-rest      Start the Iceberg REST catalog fixture ($(REST_FIXTURE)) on port $(REST_PORT), run a"
 	@echo "                 REST-backed demo config against it, then stop it (needs scala-cli)"
-	@echo "  demo-all       demo, demo-robotics and demo-agent, plus demo-spark and demo-rest when scala-cli is found"
+	@echo "  demo-all       demo, demo-robotics and demo-agent, plus demo-warehouse when dbt and the Excel reader are"
+	@echo "                 installed, and demo-spark and demo-rest when scala-cli is found"
 	@echo "  spark-test     Run the opt-in Spark integration tests (LDP_RUN_SPARK=1 pytest -m spark)"
 	@echo "  rest-test      Run the opt-in REST catalog integration tests (LDP_RUN_REST=1 pytest -m rest)"
 	@echo "  dbt-test       Run the tests that need the dbt extra (pytest -m dbt; offline, install .[dev,dbt] first)"
@@ -107,6 +113,10 @@ demo-robotics: $(DEMO_CONFIG)
 
 demo-agent: $(DEMO_CONFIG)
 	$(PY) examples/agent_client.py --config $(DEMO_CONFIG)
+
+# The restaurant example needs the dbt and excel extras. Without them run.py prints the install command and exits 1.
+demo-warehouse: $(DEMO_CONFIG)
+	$(PY) examples/restaurant/run.py --workdir $(WAREHOUSE_DIR) --layer warehouse
 
 # The Scala job reads demo.rides from the demo's SQLite catalog, prints revenue by city per day and the
 # snapshot history, and writes demo.rides_by_city_day, which pyiceberg then reads back.
@@ -179,6 +189,11 @@ demo-rest: $(DEMO_CONFIG) check-scala-cli
 demo-all:
 	$(MAKE) demo
 	$(MAKE) demo-robotics demo-agent
+	@if $(PY) -c "import dbt.cli.main, dbt.adapters.duckdb, openpyxl" 2>/dev/null; then \
+		$(MAKE) demo-warehouse; \
+	else \
+		echo '--> Skipping demo-warehouse: the dbt and excel extras are not installed. Install them: $(WAREHOUSE_HINT)'; \
+	fi
 	@if command -v "$(SCALA_CLI)" >/dev/null 2>&1; then \
 		$(MAKE) demo-spark demo-rest; \
 	else \

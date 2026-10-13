@@ -1,5 +1,6 @@
 """Helpers shared by test modules: a small lake, a dbt project writer and a dbt runner."""
 
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -143,6 +144,14 @@ def dbt_artifacts(*models, statuses=None, args=None):
     results = [{"unique_id": node["unique_id"], "status": (statuses or {}).get(node["name"], "success"),
                 "message": "OK"} for node in models]
     return manifest, {"args": {"which": "build", "empty": False, **(args or {})}, "results": results}
+
+
+def load_example_module(name: str, path: Path):
+    """Import ``path``, a script in ``examples/``, as a module called ``name`` without putting it on ``sys.path``."""
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def without_log_warnings(err: str) -> str:

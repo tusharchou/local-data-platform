@@ -1,0 +1,41 @@
+{
+  "identifier": "orders",
+  "who": "restaurant owner",
+  "what": "the orders of one batch, as exported, added to the raw orders",
+  "where": "landing/orders.csv",
+  "when": "every batch",
+  "how": "batch append",
+  "metadata": {
+    "source": {
+      "name": "orders",
+      "format": "CSV",
+      "path": "../landing/orders.csv"
+    },
+    "target": {
+      "name": "orders",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "raw",
+        "warehouse_path": "../warehouse"
+      },
+      "write_mode": "append",
+      "partition_by": [
+        {"column": "order_ts", "transform": "day"},
+        {"column": "restaurant_id", "transform": "identity"}
+      ]
+    },
+    "quality": {
+      "on_failure": "fail",
+      "checks": [
+        {"check": "row_count", "min": 1},
+        {"check": "not_null", "columns": ["order_id", "restaurant_id", "customer_id", "order_ts", "updated_at"]},
+        {"check": "accepted_values", "column": "channel", "values": ["dine_in", "takeaway", "delivery"]},
+        {"check": "range", "column": "total_amount", "min": 0},
+        {"check": "schema", "columns": {
+          "order_id": "string", "restaurant_id": "string", "customer_id": "string", "order_ts": "timestamp[s]",
+          "channel": "string", "total_amount": "double", "updated_at": "timestamp[s]"}}
+      ]
+    },
+    "observability": {"sinks": ["jsonl"]}
+  }
+}

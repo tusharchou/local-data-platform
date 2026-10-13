@@ -1,0 +1,22 @@
+{
+  "identifier": "restaurants_to_csv",
+  "who": "restaurant owner",
+  "what": "the restaurant list, from the restaurant system's Excel export",
+  "where": "landing/restaurants.xlsx",
+  "when": "whenever a new export is downloaded",
+  "how": "batch",
+  "metadata": {
+    "source": {
+      "name": "restaurants",
+      "format": "XLSX",
+      "path": "../landing/restaurants.xlsx",
+      "sheet": "Restaurants",
+      "header_row": 2
+    },
+    "target": {
+      "name": "restaurants",
+      "format": "CSV",
+      "path": "../landing/restaurants.csv"
+    }
+  }
+}

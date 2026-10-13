@@ -1,0 +1,15 @@
+name: restaurant
+version: "1.0.0"
+profile: restaurant
+model-paths: ["models"]
+test-paths: ["tests"]
+
+flags:
+  send_anonymous_usage_stats: false
+
+models:
+  restaurant:
+    staging:
+      +materialized: view
+    gold:
+      +materialized: table

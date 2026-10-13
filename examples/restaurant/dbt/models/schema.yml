@@ -1,0 +1,155 @@
+version: 2
+
+models:
+  - name: stg_restaurants
+    description: One row for each restaurant, with clearer column names.
+    columns:
+      - name: restaurant_id
+        description: The restaurant's key.
+        data_tests: [unique, not_null]
+      - name: restaurant_name
+        description: The name of the restaurant.
+      - name: city
+        description: The city the restaurant is in.
+      - name: cuisine
+        description: The kind of food it serves.
+      - name: created_at
+        description: When the restaurant opened.
+
+  - name: stg_customers
+    description: One row for each customer, with clearer column names.
+    columns:
+      - name: customer_id
+        description: The customer's key.
+        data_tests: [unique, not_null]
+      - name: customer_name
+        description: The customer's name.
+      - name: city
+        description: The customer's home city.
+      - name: signed_up_at
+        description: When the customer signed up.
+
+  - name: stg_orders
+    description: Every version of every order loaded so far. An order that changed after it was loaded appears more than once.
+    columns:
+      - name: order_id
+        description: The order's key. It is not unique here, because the raw orders keep every version.
+        data_tests: [not_null]
+      - name: restaurant_id
+        description: The restaurant that took the order.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_restaurants')
+                field: restaurant_id
+      - name: customer_id
+        description: The customer who placed the order.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_customers')
+                field: customer_id
+      - name: order_ts
+        description: When the order was placed.
+      - name: channel
+        description: How the order was served.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['dine_in', 'takeaway', 'delivery']
+      - name: total_amount
+        description: What the order cost, from its lines.
+      - name: updated_at
+        description: When the restaurant system last changed the order. The incremental load keys on it.
+
+  - name: fct_orders
+    description: >
+      One row for each order, the latest version of it. It is loaded incrementally: only orders that are new, or
+      changed, since the last build are processed, and a changed order replaces its earlier row. Published to the
+      silver namespace of the lakehouse.
+    columns:
+      - name: order_id
+        description: The order's key.
+        data_tests: [unique, not_null]
+      - name: restaurant_id
+        description: The restaurant that took the order.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_restaurants')
+                field: restaurant_id
+      - name: customer_id
+        description: The customer who placed the order.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_customers')
+                field: customer_id
+      - name: order_ts
+        description: When the order was placed.
+      - name: channel
+        description: How the order was served.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['dine_in', 'takeaway', 'delivery']
+      - name: total_amount
+        description: What the order cost, from its lines.
+      - name: updated_at
+        description: When the restaurant system last changed the order.
+
+  - name: customer_activity_monthly
+    description: One row for each customer and each month in which they ordered.
+    columns:
+      - name: customer_month_id
+        description: The customer and the month, as customer_id:YYYY-MM.
+        data_tests: [unique, not_null]
+      - name: customer_id
+        description: The customer.
+      - name: month
+        description: The first day of the month.
+      - name: orders
+        description: How many orders the customer placed in the month.
+      - name: revenue
+        description: What those orders cost.
+
+  - name: churn_by_month
+    description: >
+      Customer churn for each month, counted in the month a customer stops ordering. For month M, customers_at_start
+      is the number of customers with an order in month M minus 1, churned is the number of those customers with no
+      order in month M, and churn_rate is churned divided by customers_at_start, or null when customers_at_start is 0.
+      The first month has no row, because there is no month before it. Published to the gold namespace. The gold
+      layer (0.1.4) and the insights (0.1.7) reuse this definition.
+    columns:
+      - name: month
+        description: The first day of the month.
+        data_tests: [unique, not_null]
+      - name: customers_at_start
+        description: How many customers had an order in the month before.
+        data_tests: [not_null]
+      - name: churned
+        description: How many of them have no order in this month.
+        data_tests: [not_null]
+      - name: churn_rate
+        description: churned divided by customers_at_start, or null when there were none. Between 0 and 1.
+
+  - name: revenue_by_restaurant_day
+    description: Orders and revenue for each restaurant on each day it had an order. Published to the gold namespace.
+    columns:
+      - name: restaurant_day_id
+        description: The restaurant and the day, as restaurant_id:YYYY-MM-DD.
+        data_tests: [unique, not_null]
+      - name: restaurant_id
+        description: The restaurant.
+      - name: restaurant_name
+        description: The restaurant's name.
+      - name: day
+        description: The day.
+      - name: orders
+        description: How many orders the restaurant took that day.
+      - name: revenue
+        description: What those orders cost.
