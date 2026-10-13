@@ -181,7 +181,7 @@ def get_pipeline_class(source_format: Any, target_format: Any, engine: Any = Non
     raise PipelineNotFound(f"no pipeline is registered for {route}. Registered routes: {available}")
 
 
-def create_pipeline(config: Config, **kwargs: Any) -> Pipeline:
+def create_pipeline(config: Config, *, window: Any = None, **kwargs: Any) -> Pipeline:
     """Build the pipeline for a config.
 
     The route comes from ``config.source["format"]``, ``config.target["format"]``
@@ -189,6 +189,9 @@ def create_pipeline(config: Config, **kwargs: Any) -> Pipeline:
 
     Args:
         config: The dataset config, e.g. from :meth:`Config.from_json`.
+        window: The logical window to build the pipeline for: ``(start, end)``, ``"START/END"`` or a shortcut such
+            as ``"yesterday"``. A source path with ``{window_start:FORMAT}`` placeholders is read for it, and a
+            config that names a ``metadata.window.column`` keeps only its rows. See :class:`Pipeline`.
         **kwargs: Passed to the pipeline constructor, to override parts of the
             config: ``source``, ``target``, ``transforms``, ``checks``,
             ``on_failure`` or ``name``.
@@ -199,7 +202,8 @@ def create_pipeline(config: Config, **kwargs: Any) -> Pipeline:
     Raises:
         TypeError: If ``config`` is not a :class:`Config`.
         PipelineNotFound: If no pipeline is registered for the config's route.
-        ConfigError: If the config is incomplete for that pipeline.
+        ConfigError: If the config is incomplete for that pipeline, or its source path has window placeholders and
+            there is no window.
     """
     if not isinstance(config, Config):
         raise TypeError(f"create_pipeline() expects a local_data_platform.Config, got {type(config).__name__}; "
@@ -207,6 +211,8 @@ def create_pipeline(config: Config, **kwargs: Any) -> Pipeline:
     config.validate()
     cls = get_pipeline_class(config.source["format"], config.target["format"], config.source.get("engine"))
     logger.info("Config %s uses pipeline %s", config.identifier, cls.__name__)
+    if window is not None:
+        kwargs["window"] = window
     return cls(config, **kwargs)
 
 

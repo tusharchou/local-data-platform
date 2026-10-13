@@ -14,8 +14,9 @@ which the later milestones do for metrics, reports and profiles::
 
 ``spec_hash`` is the sha256 of the canonical JSON of the pipeline-relevant fields:
 ``apiVersion``, ``identifier``, ``when``, ``how`` and ``metadata`` except
-``observability`` (where events go doesn't change what a run does) and ``kind`` (a pipeline hashes the same
-with ``"kind": "Pipeline"`` as without it). Keys are
+``observability`` (where events go doesn't change what a run does), ``schedule`` (when a run starts doesn't change
+what it does, though ``window`` does, because its column picks the rows a run reads) and ``kind`` (a pipeline hashes
+the same with ``"kind": "Pipeline"`` as without it). Keys are
 sorted, there is no whitespace, formats are upper-case, write modes lower-case, the
 quality block is normalised to ``{"on_failure", "checks"}``, and local paths are
 made relative to the config's folder. The descriptive ``who``, ``what`` and
@@ -39,6 +40,7 @@ from pathlib import Path, PurePath
 from typing import Any
 
 from local_data_platform.exceptions import ConfigError, PipelineNotFound
+from local_data_platform.orchestration import windows
 
 API_VERSION = "ldp/v1"
 """The spec version this library reads and writes."""
@@ -53,7 +55,7 @@ TOP_LEVEL_KEYS = ("apiVersion", "kind", "identifier", "who", "what", "where", "w
 FORMATS = ("CSV", "PARQUET", "JSON", "ICEBERG", "DUCKDB", "XLSX")
 WRITE_MODES = ("append", "overwrite", "upsert")
 ON_FAILURE = ("fail", "warn")
-HASH_EXCLUDED_METADATA = ("observability",)
+HASH_EXCLUDED_METADATA = ("observability", "schedule")
 """``metadata`` keys that don't change what a run does, so :func:`spec_hash` ignores them."""
 
 _BUILTIN_CATALOG_TYPES = ("local", "sql", "rest", "glue")
@@ -212,13 +214,18 @@ def _to_utc(value: Any, what: str) -> dt.datetime:
     return moment.replace(tzinfo=_UTC) if moment.tzinfo is None else moment.astimezone(_UTC)
 
 
-def parse_window(window: Any) -> tuple[dt.datetime, dt.datetime] | None:
+def parse_window(window: Any, *, timezone: Any = None,
+                 now: dt.datetime | None = None) -> tuple[dt.datetime, dt.datetime] | None:
     """Parse a logical window into two UTC datetimes.
 
     Args:
         window: ``None``; a ``"START/END"`` ISO-8601 interval string; a
-            ``(start, end)`` pair; or ``{"start", "end"}``. Each bound is a datetime,
+            ``(start, end)`` pair; ``{"start", "end"}``; or one of the shortcuts ``yesterday``, ``last-week``
+            (the last full week from Monday to Monday) and ``last-month``. Each bound is a datetime,
             a date (midnight) or an ISO string. Naive values are read as UTC.
+        timezone: The time zone a shortcut counts its days in, as a name or a ``tzinfo``: UTC by default. A
+            config's ``metadata.window.timezone`` is what :func:`window_bounds` passes.
+        now: The current time, for the shortcuts. The clock by default.
 
     Returns:
         ``(start, end)`` in UTC, or ``None`` for no window.
@@ -229,9 +236,12 @@ def parse_window(window: Any) -> tuple[dt.datetime, dt.datetime] | None:
     if window is None:
         return None
     if isinstance(window, str):
+        if windows.is_shortcut(window):
+            return windows.shortcut_window(window, timezone, now)
         parts = window.split("/")
         if len(parts) != 2:
-            raise ConfigError(f"window {window!r} must be an ISO-8601 interval 'START/END'")
+            raise ConfigError(f"window {window!r} must be an ISO-8601 interval 'START/END', or one of "
+                              f"{', '.join(windows.SHORTCUTS)}")
         start, end = parts
     elif isinstance(window, Mapping):
         if set(window) != {"start", "end"}:
@@ -245,6 +255,27 @@ def parse_window(window: Any) -> tuple[dt.datetime, dt.datetime] | None:
     if bounds[1] <= bounds[0]:
         raise ConfigError(f"window end {bounds[1].isoformat()} must be after its start {bounds[0].isoformat()}")
     return bounds
+
+
+def window_bounds(config: Any, window: Any, *,
+                  now: dt.datetime | None = None) -> tuple[dt.datetime, dt.datetime] | None:
+    """Parse a window for a config, counting a shortcut such as ``yesterday`` in the config's time zone.
+
+    It is :func:`parse_window` with the time zone of the config's ``metadata.window``, so ``ldp plan``,
+    ``ldp run`` and :func:`idempotency_key` all read ``yesterday`` as the same days.
+
+    Args:
+        config: A spec dict, a :class:`~local_data_platform.Config`, or ``None`` for UTC.
+        window: Anything :func:`parse_window` accepts.
+        now: The current time, for the shortcuts.
+
+    Raises:
+        ConfigError: If the window is malformed, or the config's time zone is unknown.
+    """
+    timezone = None
+    if windows.is_shortcut(window) and config is not None:
+        timezone = windows.timezone_of(_spec_dict(config).get("metadata"))
+    return parse_window(window, timezone=timezone, now=now)
 
 
 def format_instant(moment: dt.datetime) -> str:
@@ -288,8 +319,8 @@ def idempotency_key(config: Any, window: Any = None, *, table_uuid: str | None =
 
     Args:
         config: A spec dict or a :class:`~local_data_platform.Config`.
-        window: The logical window, in any form :func:`parse_window` accepts, or
-            ``None`` for a run that owns the whole table.
+        window: The logical window, in any form :func:`parse_window` accepts (a shortcut such as ``yesterday`` is
+            counted in the config's time zone), or ``None`` for a run that owns the whole table.
         table_uuid: The target Iceberg table's UUID, if known.
         base_dir: Folder local paths are made relative to (default: the config's).
 
@@ -304,7 +335,7 @@ def idempotency_key(config: Any, window: Any = None, *, table_uuid: str | None =
     if not pipeline or not isinstance(pipeline, str):
         raise ConfigError("the spec needs an 'identifier' to derive an idempotency key")
     target = str(table_uuid) if table_uuid else target_identity(config, base_dir=base_dir)
-    bounds = parse_window(window)
+    bounds = window_bounds(config, window)
     start, end = (format_instant(bounds[0]), format_instant(bounds[1])) if bounds else ("", "")
     return hashlib.sha256(canonical_json([API_VERSION, "idempotency", pipeline, target, start, end])).hexdigest()
 
@@ -483,10 +514,18 @@ def json_schema() -> dict[str, Any]:
                 "type": "object",
                 "required": ["source", "target"],
                 "properties": {
-                    "source": {"$ref": "#/$defs/block"},
+                    "source": {"$ref": "#/$defs/source"},
                     "target": {"$ref": "#/$defs/target"},
                     "quality": {"$ref": "#/$defs/quality"},
                     "observability": {"$ref": "#/$defs/observability"},
+                    "schedule": {
+                        **non_empty,
+                        "description": "When the config runs: a 5-field cron expression, or @hourly, @daily, @weekly "
+                                       "or @monthly. Without it, a 'when' of hourly, daily, weekly or monthly means "
+                                       "the alias. Editing it does not change the spec hash.",
+                        "examples": ["@daily", "5 2 * * *"],
+                    },
+                    "window": {"$ref": "#/$defs/window"},
                 },
             },
             "format": {"type": "string", "enum": formats},
@@ -518,6 +557,27 @@ def json_schema() -> dict[str, Any]:
                     {"if": {"properties": {"format": {"enum": ["DUCKDB", "duckdb"]}}, "required": ["format"]},
                      "then": {"oneOf": [{"required": ["relation"], "not": {"required": ["sql"]}},
                                         {"required": ["sql"], "not": {"required": ["relation"]}}]}},
+                ],
+            },
+            "source": {
+                "allOf": [{"$ref": "#/$defs/block"}],
+                "properties": {
+                    "path": {**non_empty,
+                             "description": "Where the source is. It may hold {window_start:FORMAT} and "
+                                            "{window_end:FORMAT}, where FORMAT is a Python strftime format, e.g. "
+                                            "drops/orders_{window_start:%Y-%m-%d}.csv. A run reads the path of its "
+                                            "window, and a run without a window fails."},
+                },
+            },
+            "window": {
+                "description": "How the runs of a schedule are windowed: 'none', or the size of a window, the date or "
+                               "timestamp column that selects the rows of a window, and the time zone its days are "
+                               "counted in (UTC by default).",
+                "oneOf": [
+                    {"const": "none"},
+                    {"type": "object", "required": ["size"], "additionalProperties": False,
+                     "properties": {"size": {"enum": list(windows.WINDOW_SIZES)}, "column": non_empty,
+                                    "timezone": {**non_empty, "examples": ["UTC", "Europe/Paris"]}}},
                 ],
             },
             "target": {
@@ -778,6 +838,35 @@ def _check_quality(problems: _Problems, quality: Any) -> None:
             problems.add(f"{where}.checks[{index}]", str(exc).replace("quality check #1", "check", 1))
 
 
+def _check_schedule_and_window(problems: _Problems, metadata: Mapping[str, Any]) -> None:
+    """Check ``metadata.schedule``, ``metadata.window`` and the window placeholders of the source path."""
+    if metadata.get("schedule") is not None:
+        try:
+            windows.parse_schedule(metadata["schedule"])
+        except ConfigError as exc:
+            problems.add("metadata.schedule", str(exc))
+    for path, message in windows.window_problems(metadata.get("window")):
+        problems.add(f"metadata.window{path}", message)
+    source = metadata.get("source")
+    for message in windows.placeholder_problems(source.get("path") if isinstance(source, Mapping) else None):
+        problems.add("metadata.source.path", message)
+    _check_placeholder_places(problems, metadata, "metadata")
+
+
+def _check_placeholder_places(problems: _Problems, value: Any, where: str) -> None:
+    """A window placeholder works only in ``metadata.source.path``, so flag one anywhere else."""
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if f"{where}.{key}" != "metadata.source.path":
+                _check_placeholder_places(problems, child, f"{where}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            _check_placeholder_places(problems, child, f"{where}[{index}]")
+    elif windows.mentions_placeholder(value):
+        problems.add(where, "has a window placeholder, which works only in metadata.source.path; "
+                            "to select the rows of a window, set metadata.window.column")
+
+
 def _check_secrets(problems: _Problems, value: Any, where: str, key: str = "") -> None:
     if isinstance(value, Mapping):
         for child_key, child in value.items():
@@ -841,6 +930,7 @@ def _validate_pipeline(spec: Mapping[str, Any]) -> list[ConfigError]:
         _check_block(problems, metadata.get("source"), "source")
         _check_block(problems, metadata.get("target"), "target")
         _check_quality(problems, metadata.get("quality"))
+        _check_schedule_and_window(problems, metadata)
         from local_data_platform.events import sink_specs
 
         try:
@@ -950,12 +1040,18 @@ def plan(config: Any, *, window: Any = None, base_dir: str | os.PathLike | None 
             or the config's ``base_dir``).
 
     Returns:
-        ``{"config", "identifier", "kind", "valid", "errors", "api_version", "spec_hash",
+        ``{"config", "identifier", "kind", "valid", "errors", "notes", "api_version", "spec_hash",
         "route", "pipeline", "target", "write_mode", "catalog_type", "checks",
-        "on_failure", "sinks", "window", "idempotency_key"}``. ``errors`` lists
-        messages; the other fields are ``None`` when they can't be worked out. A file of another kind than
-        ``Pipeline`` has no route, target or hash, and the kind adds what it reports, such as the ``tasks`` of
-        a ``Workflow``.
+        "on_failure", "sinks", "schedule", "schedule_from", "window_size", "window_column", "timezone",
+        "source_path", "source_path_template", "window", "idempotency_key"}``. ``errors`` lists
+        messages and ``notes`` lists things worth knowing that are not errors, such as a ``when`` text that is
+        no schedule. ``schedule`` is the config's ``metadata.schedule`` or the one its ``when`` means (and
+        ``schedule_from`` says which); ``window_size``, ``window_column`` and ``timezone`` come from
+        ``metadata.window``; ``source_path`` is the source path, filled in for ``window`` when it has window
+        placeholders, and ``source_path_template`` is the path as written when it has some. The other fields are
+        ``None`` when they can't be worked out. ``window`` may be one of the shortcuts ``yesterday``, ``last-week``
+        and ``last-month``, counted in the config's time zone. A file of another kind than ``Pipeline`` has no
+        route, target or hash, and the kind adds what it reports, such as the ``tasks`` of a ``Workflow``.
     """
     label = None
     if isinstance(config, (str, os.PathLike)):
@@ -969,10 +1065,12 @@ def plan(config: Any, *, window: Any = None, base_dir: str | os.PathLike | None 
         data, errors = config, []
         base = _base_dir(config, base_dir)
     result: dict[str, Any] = {
-        "config": label, "identifier": None, "kind": None, "valid": False, "errors": [],
+        "config": label, "identifier": None, "kind": None, "valid": False, "errors": [], "notes": [],
         "api_version": API_VERSION,
         "spec_hash": None, "route": None, "pipeline": None, "target": None, "write_mode": None,
-        "catalog_type": None, "checks": 0, "on_failure": None, "sinks": [], "window": None, "idempotency_key": None,
+        "catalog_type": None, "checks": 0, "on_failure": None, "sinks": [], "schedule": None,
+        "schedule_from": None, "window_size": None, "window_column": None, "timezone": None, "source_path": None,
+        "source_path_template": None, "window": None, "idempotency_key": None,
     }
     if not errors:
         errors = validate_spec(data)
@@ -1009,16 +1107,19 @@ def _describe(result: dict[str, Any], spec: Mapping[str, Any], base: Path | None
         result["pipeline"] = get_pipeline_class(*route).__name__
     except PipelineNotFound as exc:
         errors.append(ConfigError(str(exc)))
-    if route.source_format == "DUCKDB":
-        from local_data_platform.paths import resolve_path
-
-        database = resolve_path(source["path"], base)
+    window_error: ConfigError | None = None
+    bounds = None
+    try:
+        bounds = window_bounds(spec, window)
+    except ConfigError as exc:
+        window_error = exc
+    where = _describe_source_path(result, spec, base, bounds, route.source_format in ("DUCKDB", "XLSX"))
+    if route.source_format == "DUCKDB" and where is not None:
+        database = where
         if not database.is_file():
             errors.append(ConfigError(f"metadata.source.path: the DuckDB file {database} does not exist"))
-    if route.source_format == "XLSX":
-        from local_data_platform.paths import resolve_path
-
-        workbook = resolve_path(source["path"], base)
+    if route.source_format == "XLSX" and where is not None:
+        workbook = where
         if not workbook.is_file():
             errors.append(ConfigError(f"metadata.source.path: the Excel file {workbook} does not exist"))
     if str(target["format"]).strip().upper() == "ICEBERG":
@@ -1034,14 +1135,69 @@ def _describe(result: dict[str, Any], spec: Mapping[str, Any], base: Path | None
     result["checks"] = len(quality["checks"])
     result["on_failure"] = quality["on_failure"]
     result["sinks"] = [item["type"] for item in sink_specs(metadata)]
-    try:
-        bounds = parse_window(window)
-        if bounds is not None:
-            result["window"] = f"{format_instant(bounds[0])}/{format_instant(bounds[1])}"
-            result["idempotency_key"] = idempotency_key(spec, bounds, base_dir=base)
-    except ConfigError as exc:
-        errors.append(exc)
+    errors.extend(_describe_schedule(result, spec))
+    if window_error is not None:
+        errors.append(window_error)
+    elif bounds is not None:
+        result["window"] = f"{format_instant(bounds[0])}/{format_instant(bounds[1])}"
+        result["idempotency_key"] = idempotency_key(spec, bounds, base_dir=base)
     return errors
+
+
+def _describe_source_path(result: dict[str, Any], spec: Mapping[str, Any], base: Path | None,
+                          bounds: tuple[dt.datetime, dt.datetime] | None, must_exist: bool) -> Path | None:
+    """Fill in ``source_path`` and return the resolved local path to check, or ``None`` when there is none to check.
+
+    A plain path is resolved only when the source must exist (a DuckDB file or a workbook). A path with window
+    placeholders is resolved for the window when there is one. Without a window it is shown as written, there is no
+    file to check, and a note says so.
+    """
+    from local_data_platform.paths import resolve_path
+
+    path = spec["metadata"]["source"].get("path")
+    result["source_path"] = path
+    if not isinstance(path, str):
+        return None
+    if not windows.placeholders(path):
+        return resolve_path(path, base) if must_exist else None
+    result["source_path_template"] = path
+    if bounds is None:
+        result["notes"].append("the source path has a window placeholder, so it is shown as written; "
+                               "pass --window to see the path of one window")
+        return None
+    result["source_path"] = windows.resolve_placeholders(path, bounds, windows.timezone_of(spec["metadata"]))
+    if "://" in result["source_path"]:
+        return None
+    location = resolve_path(result["source_path"], base)
+    if not location.exists():
+        result["notes"].append(f"the source file {location} does not exist yet")
+    return location
+
+
+def _describe_schedule(result: dict[str, Any], spec: Mapping[str, Any]) -> list[ConfigError]:
+    """Fill in the schedule and the window declaration, and return the one error a schedule can cause."""
+    metadata, when = spec["metadata"], spec.get("when")
+    schedule = windows.effective_schedule(metadata, when)
+    if schedule is not None:
+        result["schedule"], result["schedule_from"] = schedule.expression, schedule.source
+    note = windows.ignored_when(metadata, when)
+    if note:
+        result["notes"].append(note)
+    declared = windows.parse_window_spec(metadata.get("window"))
+    if declared is not None:
+        result["window_size"], result["window_column"], result["timezone"] = (
+            declared.size, declared.column, declared.timezone)
+    if windows.lacks_window_selection(metadata, when):
+        return [ConfigError(
+            "metadata: this config has a schedule and appends, but nothing selects the rows of a window, so every "
+            "window would load the same rows again. Put {window_start:FORMAT} in metadata.source.path, set "
+            "metadata.window.column, or change write_mode")]
+    templated = bool(windows.placeholders(metadata["source"].get("path") or ""))
+    has_column = declared is not None and declared.column is not None
+    if schedule is not None and templated and not has_column and result["write_mode"] == "overwrite":
+        result["notes"].append("write_mode overwrite replaces the whole table with the rows of each window; "
+                               "set metadata.window.column to replace only the rows of the window")
+    return []
 
 
 # ---------------------------------------------------------------------- CLI: ldp schema, ldp plan
@@ -1115,11 +1271,22 @@ def _print_plan(item: Mapping[str, Any]) -> None:
         lines.append(("catalog", item["catalog_type"]))
     lines.append(("quality", f"{item['checks']} checks, on_failure={item['on_failure']}"))
     lines.append(("sinks", ", ".join(item["sinks"]) or "none (events are dropped)"))
+    if item["schedule"]:
+        lines.append(("schedule", f"{item['schedule']} (from {item['schedule_from']})"))
+    if item["window_size"]:
+        lines.append(("window_size", item["window_size"]))
+        if item["window_column"]:
+            lines.append(("window_column", item["window_column"]))
+        lines.append(("timezone", item["timezone"]))
+    if item["source_path_template"]:
+        lines.append(("source_path", item["source_path"]))
     if item["window"]:
         lines += [("window", item["window"]), ("idempotency_key", item["idempotency_key"])]
     width = max(len(name) for name, _ in lines)
     for name, value in lines:
         print(f"{name.ljust(width)}  {value}", file=sys.stdout)
+    for note in item["notes"]:
+        print(f"note: {note}", file=sys.stdout)
 
 
 def add_cli(subparsers: Any, parents: Sequence[argparse.ArgumentParser] = ()) -> None:
@@ -1143,8 +1310,10 @@ def add_cli(subparsers: Any, parents: Sequence[argparse.ArgumentParser] = ()) ->
                     "its spec hash, route, pipeline, target and sinks. Each file is validated as its kind, so a "
                     "workflow file in the folder is checked as a workflow. Exits with 1 if any file is invalid.")
     plan_parser.add_argument("config", metavar="CONFIG", help="a JSON dataset config, or a folder of *.json files")
-    plan_parser.add_argument("--window", metavar="START/END",
-                             help="a logical window (ISO-8601 interval); prints its idempotency key")
+    plan_parser.add_argument("--window", metavar="WINDOW",
+                             help="a logical window: an ISO-8601 interval START/END, or yesterday, last-week or "
+                                  "last-month in the time zone of the config. Prints its idempotency key, and the "
+                                  "source path of the window")
     plan_parser.add_argument("--json", action="store_true", help="print the plan as JSON")
     plan_parser.set_defaults(handler=_cmd_plan)
 
@@ -1178,4 +1347,5 @@ __all__ = [
     "spec_hash",
     "target_identity",
     "validate_spec",
+    "window_bounds",
 ]
