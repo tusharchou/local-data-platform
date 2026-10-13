@@ -81,7 +81,10 @@ A write goes through these steps:
    it is there, the write already happened: the result has `skipped_duplicate=True` and nothing is
    written. If the walk hits `max_search_depth`, or a parent that was expired, before it reaches
    the horizon or the first snapshot, it can't prove the key is absent, so it raises
-   `CommitSearchExhausted` instead of risking a second effect.
+   `CommitSearchExhausted` instead of risking a second effect. This is the search of the publish loop, and
+   its two bounds are right for a rival that publishes the same key at the same moment. A caller that
+   must not read its source twice asks `find_published` first, which has no bound but the history the table
+   still holds, see [Long backfills and late re-runs](#long-backfills-and-late-re-runs).
 4. **Stage.** The write goes to a private branch, `ldp_r<run id>_a<attempt>_<n>`, created at the base
    snapshot, with the schema union in the same transaction as the data.
 5. **Audit.** `write_once(..., audit=)` can check the staged snapshot. A failed audit raises
@@ -105,7 +108,7 @@ tries again with full-jitter backoff:
 | `upsert` | Recomputed against the new `main`'s rows, never rebased blindly |
 
 `CommitPolicy` sets the limits: `max_publish_attempts=6`, `base_delay_s=0.2`, `max_delay_s=8.0`,
-`deadline_s=300.0` and `max_search_depth=500`. Running out raises `CommitConflict` with
+`deadline_s=300.0` and `max_search_depth=500`. `Iceberg.put`, `Pipeline.run` and `run_config` all take `policy=`. Running out raises `CommitConflict` with
 `retriable=True`; the caller may retry as `attempt + 1`. A fenced attempt raises `CommitConflict`
 with `retriable=False` and must stop.
 
@@ -175,10 +178,51 @@ so to replace a day that changed at the source, run it with a key of your own:
 ldp run orders.json --window 2026-08-02/2026-08-03 --idempotency-key orders-2026-08-02-v2
 ```
 
+### Long backfills and late re-runs
+
+A staged run looks for its idempotency key twice, and the two searches answer different questions.
+
+**Before it reads its source,** the run asks the table whether the key is on `main` anywhere in the history that the
+table still holds, with `find_published`. There is no time limit and no limit on the number of snapshots. If the key is
+there, the run skips. Its result is `skipped_duplicate` with the snapshot that carries the key, `rows_read` is 0, and the
+source is never opened. So a window that ran 8 days ago, or 600 commits ago, is skipped as surely as one that ran a
+minute ago, for as long as its snapshot is in the table. `ldp maintain --expire` keeps every keyed snapshot for the
+idempotency horizon, 7 days by default, and may expire it after that.
+
+**Inside the publish loop,** `find_commit` looks again before each publish, back to `search_since_ms` and over at most
+`max_search_depth` snapshots. It catches a rival that publishes the same key between the first search and the publish,
+and a rival can only have committed recently. The default bounds are 7 days and 500 snapshots, and a long backfill
+exceeds them. Every snapshot of the batch is newer than 7 days, so the walk never reaches the time bound, and the
+501st daily window of a batch walked 500 snapshots without reaching the start of the table and refused to publish
+rather than risk a second effect. `etl.batch_search` gives a batch bounds that fit it:
+
+```python
+from local_data_platform.etl import batch_search, run_config
+
+windows = [f"2026-08-{day:02d}/2026-08-{day + 1:02d}" for day in range(1, 29)]
+since_ms, policy = batch_search(len(windows))
+for window in windows:
+    run_config("orders.json", window=window, policy=policy, search_since_ms=since_ms)
+```
+
+`since_ms` is the start of the batch less 10 minutes, for clock skew between machines. `policy` is the default policy
+with a `max_search_depth` that also holds every snapshot the batch can add, 2 for each window (an `overwrite` or an
+`upsert` adds a delete and an append) and one for the first write of a new table. The key of a window that ran before the
+batch is found by the first search, so the second search only has to cover the batch itself. A second run of the batch
+skips every window. A single run that is not part of a batch needs none of this, unless its table gets more than 500
+snapshots in 7 days. Then pass `policy=CommitPolicy(max_search_depth=...)` or `search_since_ms=`.
+
+**A key that is gone.** The first search is no proof that a window never ran. If the snapshot of its first publish expired,
+its key is gone and the window would load again. When the key is not there and the window is older than every window that
+the table still holds a key for, the run logs a warning and carries on. The warning names `ldp backfill --replace`, which
+replaces a window instead of adding to it. Until that command exists, redo the window under a key of your own, with a
+window column and the write mode `overwrite`, as in [What a window reads](#what-a-window-reads).
+
 ## What it guarantees
 
-- **At most one effect on `main` per idempotency key**, as long as the key's snapshot is within the
-  search horizon. With retries, that is effectively once.
+- **At most one effect on `main` per idempotency key**, as long as the key's snapshot is still in the
+  table. A run looks for its key in the whole retained history before it reads its source, and the
+  publish loop looks again over the recent history. With retries, that is effectively once.
 - **No lost updates between writers.** Every publish asserts the base it was computed from.
 - **Not end-to-end exactly once.** Rows a producer sent twice upstream are written twice, unless
   `upsert` on a key removes them.
@@ -202,6 +246,11 @@ staged and direct mode both work on every supported pyiceberg.
   changes, the source path placeholders, the rows of a window and the replacement of one day, in each time zone, the
   freshness check at the end of the window, and the three-days probe, where three daily windows over one file write 3 rows
   and not 9.
+- `tests/test_commit.py` and `tests/test_etl.py` cover the key in the whole retained history. A window that ran 8 days
+  ago is skipped and its table does not change, where it used to publish again and go from 4 rows to 6. A skipped run does
+  not read its source and emits three events. A batch of more windows than the search depth fails closed with the default
+  bounds, publishes every window with `batch_search`, and publishes none the second time. The `policy` of `run_config`
+  reaches the publish loop, and a window older than every held key warns.
 - `tests/test_upsert_race.py` runs N processes upserting the same keys into one table, three ways.
   Raw pyiceberg `Table.upsert` duplicates keys: pyiceberg's commit retry rebases each loser's
   insert onto the new head, so the race is real. Direct mode on a `local` catalog is serialised by

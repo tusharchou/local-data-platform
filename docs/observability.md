@@ -17,7 +17,10 @@ run.started ─► run.extracted ─► quality.evaluated ─┬─► run.publi
 
 - A run that fails before its checks goes straight from its last step to `run.failed`.
 - `run.skipped_duplicate` happens only in staged mode, when the run's idempotency key is already
-  on `main` (see [Exactly-once runs](#exactly-once-runs-and-idempotency-keys)).
+  on `main` (see [Exactly-once runs](#exactly-once-runs-and-idempotency-keys)). A staged run looks for its key in
+  the whole retained history of the table before it reads its source, so a run that finds it emits `run.started`,
+  `run.skipped_duplicate` and `run.finished` and nothing else, with no `run.extracted` and no `quality.evaluated`.
+  Its `run.finished` has no `rows_read`, and `PipelineResult.rows_read` is 0.
 - `run.blocked_quality` means a check failed with `on_failure: "fail"`. The pipeline still raises
   `DataQualityError`, as it does without run events, and writes nothing.
 - `run.finished` always comes last and carries the final `status`: `published`,
@@ -50,7 +53,7 @@ depends on the type:
 | `quality.evaluated` | `rows`, `schema`, `null_counts` per column, `on_failure`, `passed`, `checks_run`, `checks_failed`, and `results`: one entry per check with `name`, `column`, `passed`, `failing_rows`, `details` and numeric `metrics` |
 | `run.published`, `run.skipped_duplicate` | `rows_written`, `snapshot_id`, `idempotency_key`, `write` (the `WriteResult`), `snapshot_summary` |
 | `run.blocked_quality` | `checks_failed`, `failures` (check names), `on_failure` |
-| `run.failed` | `stage` (`extract`, `transform`, `validate`, `write`), `error_type`, `message` |
+| `run.failed` | `stage` (`search`, `extract`, `transform`, `validate`, `write`), `error_type`, `message` |
 | `run.finished` | `status`, `duration_s`, `rows_read`, `rows_written`, `published_snapshot_id`, `idempotency_key`, `quality_passed` |
 
 ### What never goes into an event
@@ -236,6 +239,16 @@ again = run_config("rides.json", window="2026-09-01/2026-09-02")
 assert again.status == "skipped_duplicate" and again.published_snapshot_id == first.published_snapshot_id
 ```
 
-A local run has no run ledger, so it looks for its key across the whole idempotency horizon
-(7 days) of `main`'s history. `run_config(..., idempotency_key="…")` uses a key from an orchestrator
-instead of deriving one.
+A local run has no run ledger, so a staged run looks for its key twice. Before it reads its source, it looks in the
+**whole retained history** of `main`, with no time limit and no limit on the number of snapshots. A window that ran
+8 days ago, or 600 commits ago, is found and skipped without being read, for as long as the table still has the
+snapshot of its first publish. `ldp maintain --expire` keeps every keyed snapshot for the idempotency horizon
+(7 days by default) and may expire it after that. Then the publish loop looks again, back to `search_since_ms`
+(7 days by default) and over at most `max_search_depth` snapshots (500 by default), to catch another writer that
+publishes the same key at the same moment. When the key is not found and the window is older than every window that the
+table still holds a key for, the run logs a warning that the key may have expired, because loading the window again
+would duplicate its rows.
+
+`run_config(..., idempotency_key="…")` uses a key from an orchestrator instead of deriving one. A batch of runs, such as
+a backfill of two years of days, uses `etl.batch_search(len(windows))` for the two bounds of the publish loop, see
+[Exactly-once writes](exactly_once.md#long-backfills-and-late-re-runs).

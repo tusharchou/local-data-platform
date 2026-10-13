@@ -184,7 +184,9 @@ ldp demo --workdir /tmp/ldp_demo                 # also --rows N (default 1000) 
 With `--window` or `--idempotency-key` a run is staged and exactly once. It prints its window, its
 idempotency key, its run id and attempt, its status (`published` or `skipped_duplicate`) and the snapshot that holds
 its rows, and running it again for the same window finds that snapshot and writes nothing. `ldp plan CONFIG --window W`
-prints the same key, and `--idempotency-key auto` asks for it. A retry reuses the run id with the next attempt number,
+prints the same key, and `--idempotency-key auto` asks for it. The key is looked for in the whole history that the table
+still holds, before the source is read, so a window that ran weeks ago is skipped without being read too. A retry
+reuses the run id with the next attempt number,
 and the new attempt fences the older ones, so a staged branch that an earlier attempt left behind never reaches `main`.
 `--attempt` needs `--run-id`, and both need a window or a key. Without these options `ldp run` writes directly, as it
 always did. A window is `START/END`, or `yesterday`, `last-week` (the last full Monday-to-Monday week) or `last-month`,

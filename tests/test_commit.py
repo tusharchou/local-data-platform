@@ -736,3 +736,97 @@ def test_staged_upsert_batch_missing_a_table_column_is_a_config_error_and_leaves
     assert snapshot_count(seeded) == before
     assert staged_branches(seeded.table()) == {}
     assert state(seeded) == {1: "v1", 2: "v2", 3: "v3"}
+
+
+# --------------------------------------------------------------------------- a key in the whole retained history
+
+
+def window(day: int) -> tuple[dt.datetime, dt.datetime]:
+    """One day of August 2026, as a logical window."""
+    return (dt.datetime(2026, 8, day, tzinfo=dt.timezone.utc), dt.datetime(2026, 8, day + 1, tzinfo=dt.timezone.utc))
+
+
+def test_find_published_finds_a_key_that_find_commit_cannot_reach_by_depth_or_by_time(table):
+    for i in range(6):
+        table.put(rows([i]), mode="append", commit=ctx(f"K{i}"))
+    pyiceberg_table = table.table()
+    head = pyiceberg_table.current_snapshot()
+    first = ldp_snapshots(table, "K0")[0]["snapshot_id"]
+
+    with pytest.raises(CommitSearchExhausted, match="max_search_depth"):  # the walk of the publish loop gives up
+        find_commit(pyiceberg_table, "K0", since_ms=0, max_depth=3)
+    # or its time bound ends it at the head, and K0 is reported absent although it is on main
+    assert find_commit(pyiceberg_table, "K0", since_ms=head.timestamp_ms + 1) is None
+
+    assert commit.find_published(pyiceberg_table, "K0").snapshot_id == first
+    assert commit.find_published(pyiceberg_table, "K5").snapshot_id == head.snapshot_id
+    assert commit.find_published(pyiceberg_table, "absent") is None
+
+
+def test_find_published_gives_the_newest_snapshot_of_a_publish_that_added_two(seeded):
+    seeded.put(rows([7]), mode="overwrite", commit=ctx("OW"))
+    pyiceberg_table = seeded.table()
+    carrying = commit.commit_log(pyiceberg_table, key="OW")
+
+    assert len(carrying) == 2 and {row["operation"] for row in carrying} == {"delete", "append"}
+    assert commit.find_published(pyiceberg_table, "OW").snapshot_id == carrying[0]["snapshot_id"]
+    assert carrying[0]["snapshot_id"] == pyiceberg_table.current_snapshot().snapshot_id
+
+
+def test_find_published_finds_nothing_in_a_table_with_no_snapshot_or_only_the_init_snapshot(catalog_config):
+    empty = Iceberg("empty", catalog_config)
+    created, _ = empty._load_or_create(rows([1]).schema)
+    assert created.current_snapshot() is None
+    assert commit.find_published(created, "K") is None and commit.oldest_keyed_window(created) is None
+
+    ensure_base(created)
+    assert commit.find_published(empty.table(), "K") is None and commit.oldest_keyed_window(empty.table()) is None
+
+
+def test_already_published_is_the_result_of_a_duplicate_found_before_anything_is_staged(seeded):
+    pyiceberg_table = seeded.table()
+    found = commit.already_published(pyiceberg_table, ctx("seed"), "append")
+
+    assert isinstance(found, WriteResult) and found.skipped_duplicate is True
+    assert (found.attempts, found.rows_written, found.mode, found.idempotency_key) == (0, 0, "append", "seed")
+    assert found.snapshot_id == pyiceberg_table.current_snapshot().snapshot_id
+    assert found.rows_before == found.rows_after == 3
+    assert commit.already_published(pyiceberg_table, ctx("absent"), "append") is None
+    assert seeded.published(ctx("seed")).table_identifier == seeded.identifier
+    assert seeded.published(ctx("absent")) is None
+    assert Iceberg("missing", seeded.catalog_spec).published(ctx("seed")) is None  # a table that does not exist yet
+
+
+def test_the_oldest_keyed_window_is_the_one_that_starts_first_whatever_the_order_of_the_publishes(table):
+    for day, key in ((5, "k5"), (3, "k3"), (4, "k4")):
+        table.put(rows([day]), mode="append",
+                  commit=CommitContext.create(key, logical_window=window(day)))
+    table.put(rows([9]), mode="append", commit=ctx("without-a-window"))
+
+    assert commit.oldest_keyed_window(table.table()) == window(3)
+
+
+def test_a_window_written_without_a_time_zone_is_read_as_utc(table):
+    naive = (dt.datetime(2026, 8, 3), dt.datetime(2026, 8, 4))
+    table.put(rows([3]), mode="append", commit=CommitContext.create("k3", logical_window=naive))
+
+    start, end = commit.oldest_keyed_window(table.table())
+
+    assert (start, end) == window(3) and start.tzinfo is not None
+
+
+def test_a_snapshot_with_an_unreadable_window_is_left_out_of_the_oldest_window(table):
+    table.put(rows([1]), mode="append", commit=CommitContext.create("k4", logical_window=window(4)))
+    table.table().append(rows([2]).select(["id", "value", "day"]),
+                         snapshot_properties={"ldp.idempotency-key": "bad", "ldp.logical-window": "not-a-window"})
+
+    assert commit.oldest_keyed_window(table.table()) == window(4)
+    assert commit.find_published(table.table(), "bad") is not None
+
+
+def test_commit_log_still_lists_each_keyed_snapshot_newest_first(table):
+    for i in range(3):
+        table.put(rows([i]), mode="append", commit=ctx(f"K{i}"))
+    log = commit.commit_log(table.table())
+    assert [row["idempotency_key"] for row in log] == ["K2", "K1", "K0"]
+    assert [row["idempotency_key"] for row in commit.commit_log(table.table(), key="K1")] == ["K1"]
