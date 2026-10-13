@@ -10,20 +10,23 @@ It's for learning how a lakehouse works, for building and testing pipelines loca
 for cloud infrastructure, and for giving agents and notebooks safe, reproducible access to the
 tables you build.
 
-> **Status.** This is version 0.1.1, released from PR #117, the first release on PyPI since
-> 0.1.0. It carries the hardening work (contract in
-> [`docs/design/v0_1_1.md`](docs/design/v0_1_1.md)) and the platform work ("multi-writer, any
-> catalog, object storage, agent-ready", contract in
+> **Status.** This is version 0.1.2, the Warehousing milestone. It adds `ldp dbt`, which runs a dbt
+> project over your Iceberg tables and publishes the models you mark back to Iceberg (see
+> [Transform with dbt](#transform-with-dbt)), the `DUCKDB` and `XLSX` source formats, time travel and
+> folders of tables in `ldp query`, retries for concurrent appends, and a restaurant example with a
+> [guide](docs/warehousing.md). Version 0.1.1 was the first release on PyPI since 0.1.0. It carries
+> the hardening work (contract in [`docs/design/v0_1_1.md`](docs/design/v0_1_1.md)) and the platform
+> work ("multi-writer, any catalog, object storage, agent-ready", contract in
 > [`docs/design/v0_1_1_platform.md`](docs/design/v0_1_1_platform.md)), which works from Python and
-> through the [platform `ldp` commands](#platform-commands). From now on the version number follows
-> the milestones in the [roadmap](docs/roadmap.md).
+> through the [platform `ldp` commands](#platform-commands). The version number follows the
+> milestones in the [roadmap](docs/roadmap.md).
 
 ## Quickstart
 
 `ldp` needs Python 3.12 or newer. Install it from PyPI, preferably in a virtual environment:
 
 ```bash
-pip install "local-data-platform[duckdb]>=0.1.1"
+pip install "local-data-platform[duckdb]>=0.1.2"
 
 ldp demo --workdir ldp_demo
 ```
@@ -699,15 +702,21 @@ in each release, and the [contributing guide](docs/contributing.md) to get invol
   are appended when it stops, so a server that is killed leaves them only in the JSONL audit file.
 - **No compaction.** Maintenance expires snapshots and finds orphans; it doesn't rewrite data files.
 - **BigQuery is read-only.** It can be a source, not a target.
+- **`ldp dbt` publishes one model at a time.** Nothing is published when dbt fails, but the writes of a
+  successful build are separate commits, so a write that fails, such as a blocked quality check or a model
+  with no rows, leaves the models before it published. A model published with an upsert that gains or loses
+  a column needs one `ldp run CONFIG --mode overwrite`.
+- **The restaurant example is in the repo, not in the package.** `pip install` does not include
+  `examples/`, so the warehousing guide and `make demo-warehouse` need a clone.
 
 ## Roadmap
 
 From 0.1.1 on, the package version equals the milestone number. Each milestone adds the next layer
-of a data platform, and every layer runs on a laptop first:
+of a data platform, and every layer runs on a laptop first. 0.1.2 Warehousing is released, and these
+are the milestones after it:
 
 | Version | Milestone | What it adds |
 |---|---|---|
-| 0.1.2 | Warehousing: DuckDB, Iceberg, DBT | dbt models over Iceberg tables, published back to Iceberg, plus Excel input |
 | 0.1.3 | Orchestration | Windows, backfills, retries and a laptop scheduler, plus an Airflow operator |
 | 0.1.4 | Self Serving Gold Layer | Gold tables with owners and docs, releases, metrics, a catalog and exports |
 | 0.1.5 | Monitoring | SLAs, freshness, volume, schema and metric monitors, alerts and `ldp status` |

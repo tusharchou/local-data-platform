@@ -8,7 +8,7 @@ own data. You need Python 3.12 or newer and nothing else: no server, no cloud ac
 Install `local-data-platform` from PyPI, preferably in a virtual environment:
 
 ```bash
-pip install "local-data-platform[duckdb]>=0.1.1"
+pip install "local-data-platform[duckdb]>=0.1.2"
 ldp --version
 ```
 
@@ -246,5 +246,5 @@ their own `ldp` subcommands (`ldp --help` lists them).
   [`examples/`](https://github.com/tusharchou/local-data-platform/tree/main/examples): NEAR
   blockchain transactions and NYC yellow-taxi trips.
 - Read the [changelog](https://github.com/tusharchou/local-data-platform/blob/main/CHANGELOG.md)
-  for what changed in 0.1.1, and the [roadmap](roadmap.md) for what each later version adds.
+  for what changed in each release, and the [roadmap](roadmap.md) for what each later version adds.
 - Browse the [API docs](api.md).

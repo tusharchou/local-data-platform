@@ -4,7 +4,7 @@ Local Data Platform aims to be a full data platform in a box. Each milestone add
 
 One dataset makes the whole journey. `examples/restaurant` starts in 0.1.2 as the sales, customers, menus and reviews of a small restaurant group. Every later milestone extends the same example, so you can follow the same rows from a raw file to a dashboard and a plain-English answer.
 
-**Version numbers.** From 0.1.1 on, the package version equals the milestone number. 0.1.1 is the current release, made from PR #117. Milestone 0.1.2 ships as package 0.1.2, and so on up to 0.2.0 Cloud Integration. APIs deprecated in 0.1.1 are removed in 0.2.0.
+**Version numbers.** From 0.1.1 on, the package version equals the milestone number. 0.1.2 is the current release, and 0.1.1 was made from PR #117. Milestone 0.1.3 ships as package 0.1.3, and so on up to 0.2.0 Cloud Integration. APIs deprecated in 0.1.1 are removed in 0.2.0.
 
 **Sizes.** Sizes are estimates in engineer-days for one engineer working with an AI assistant, before review cycles. A small issue (S) is 1.5 days, a medium one (M) is 5 days and a large one (L) is 11 days. The whole plan comes to about 288 engineer-days.
 
@@ -12,8 +12,8 @@ One dataset makes the whole journey. `examples/restaurant` starts in 0.1.2 as th
 
 | Milestone | What it adds | Demo | Size (days) | Status |
 |---|---|---|---|---|
-| 0.1.1 | Today's platform on PyPI, renumbered from 0.2.0 | `ldp demo` | 1.5 | Releasing |
-| 0.1.2 Warehousing: DuckDB, Iceberg, DBT | dbt models over Iceberg tables, published back to Iceberg, plus Excel input | `make demo-warehouse` | 33.5 | Planned |
+| 0.1.1 | Today's platform on PyPI, renumbered from 0.2.0 | `ldp demo` | 1.5 | Released |
+| 0.1.2 Warehousing: DuckDB, Iceberg, DBT | dbt models over Iceberg tables, published back to Iceberg, plus Excel input | `make demo-warehouse` | 33.5 | Released |
 | 0.1.3 Orchestration | Windows, backfills, retries and a laptop scheduler, plus an Airflow operator | `make demo-orchestration` | 34 | Planned |
 | 0.1.4 Self Serving Gold Layer | Gold tables with owners and docs, releases, metrics, a catalog and exports | `make demo-gold` | 31 | Planned |
 | 0.1.5 Monitoring | SLAs, freshness, volume, schema and metric monitors, alerts and `ldp status` | `make demo-monitor` | 25.5 | Planned |
@@ -38,7 +38,7 @@ Each of these is built once, in the milestone shown, and reused by every milesto
 - **One dbt CI job** (0.1.2). dbt stays out of the `dev` extra. A later test that needs dbt carries the `dbt` marker and runs in that job, and every demo prints a skip line when dbt is not installed.
 - **One guide format.** Each milestone writes its guide as a Learn chapter on `examples/restaurant`, so 0.1.9 moves the guides into `docs/learn/` instead of rewriting them.
 
-## 0.1.1, the current release
+## 0.1.1, released
 
 PR #117 carries the platform built so far. That includes Iceberg tables in a local catalog with append, overwrite and upsert, partitioning, quality gates, exactly-once staged publishing, run events and OpenLineage, DuckDB queries, pinned datasets, maintenance, the read-only MCP server for agents and `ldp demo`. It ships as 0.1.1, the closed milestone whose four items it completes, so that PyPI version order follows this roadmap. The release issue renumbers the code, tightens the packaging tests and the tag check in `publish.yml`, and corrects the docs about concurrent appends (fixed in 0.1.2, #88). It closes #15.
 
@@ -48,6 +48,8 @@ ldp demo
 ```
 
 ## 0.1.2 Warehousing: DuckDB, Iceberg, DBT
+
+Released as 0.1.2.
 
 **Goal.** Make the laptop lakehouse a warehouse people can model in. dbt models run over LDP's Iceberg tables in DuckDB and get tested and documented, and the models a user marks are published back to Iceberg as versioned tables with time travel. Excel files become a source, monthly customer churn is the worked example and concurrent appends become safe.
 
