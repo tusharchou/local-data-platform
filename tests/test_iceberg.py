@@ -91,6 +91,57 @@ def test_namespace_uses_public_create_namespace_if_not_exists(catalog_config, mo
     assert "os.environ" not in source
 
 
+class _RacingCatalog:
+    """A catalog whose namespace is created by another process between the check and the insert."""
+
+    name = "racing"
+
+    def __init__(self, exists_afterwards: bool):
+        self.exists_afterwards = exists_afterwards
+        self.created = 0
+
+    def create_namespace_if_not_exists(self, namespace, *args, **kwargs):
+        from sqlalchemy.exc import IntegrityError
+
+        self.created += 1
+        raise IntegrityError("INSERT INTO iceberg_namespace_properties ...", {},
+                             Exception("UNIQUE constraint failed: iceberg_namespace_properties.catalog_name"))
+
+    def namespace_exists(self, namespace):
+        return self.exists_afterwards
+
+
+def _bare_iceberg(catalog) -> Iceberg:
+    table = Iceberg.__new__(Iceberg)  # skip __init__: only _ensure_namespace is under test
+    table.catalog, table.namespace = catalog, "ns"
+    return table
+
+
+def test_a_namespace_that_another_process_created_at_the_same_moment_is_not_an_error(caplog):
+    catalog = _RacingCatalog(exists_afterwards=True)
+
+    with caplog.at_level(logging.DEBUG, logger="local_data_platform"):
+        _bare_iceberg(catalog)._ensure_namespace()
+
+    assert catalog.created == 1 and "Could not create namespace" not in caplog.text
+    assert "Namespace ns was created by another process" in caplog.text
+
+
+def test_a_namespace_that_cannot_be_created_and_is_not_there_warns_for_a_remote_catalog_and_raises_for_a_local_one(
+        caplog):
+    from sqlalchemy.exc import IntegrityError
+
+    with caplog.at_level(logging.WARNING, logger="local_data_platform"):
+        _bare_iceberg(_RacingCatalog(exists_afterwards=False))._ensure_namespace()
+    assert "Could not create namespace ns in catalog racing (IntegrityError" in caplog.text
+
+    local = LocalIcebergCatalog.__new__(LocalIcebergCatalog)  # an instance of the class, with no database behind it
+    local.create_namespace_if_not_exists = _RacingCatalog(False).create_namespace_if_not_exists
+    local.namespace_exists = lambda namespace: False
+    with pytest.raises(IntegrityError):
+        _bare_iceberg(local)._ensure_namespace()
+
+
 def test_legacy_catalog_kwarg_is_an_alias(catalog_config, sample_table):
     legacy = Iceberg(name="rides", catalog=catalog_config)
     legacy.put(sample_table)

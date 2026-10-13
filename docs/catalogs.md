@@ -47,6 +47,9 @@ Details per type:
   layout Java's `JdbcCatalog` reads with `jdbc.schema-version=V1`, so Spark can share the catalog
   when it uses the same name. Without `name`, the catalog is named after its namespace, so a
   `local` catalog's SQLite file also opens as `{"type": "sql", "uri": "sqlite:///<warehouse>/<identifier>_catalog.db", "identifier": "<identifier>", ...}`.
+  Building a `sql` or `local` catalog creates its tables when they are missing, and two processes that open a new
+  catalog at the same moment, as a scheduler does when it starts two runs at once, both work: the one that loses
+  the race builds the catalog again, and the namespace is created by whichever gets there first.
 - **`rest`.** Building the catalog calls the server's `GET /v1/config`, so a wrong `uri` fails
   straight away. `warehouse` goes to the server unchanged, because many REST catalogs expect a
   catalog name there rather than a path. `name` defaults to `rest` and is only a local label.
