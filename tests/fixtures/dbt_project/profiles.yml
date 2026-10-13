@@ -1,0 +1,9 @@
+shop:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: target/ldp_build.duckdb
+      threads: 1
+      settings:
+        autoinstall_known_extensions: false

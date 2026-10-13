@@ -60,6 +60,7 @@ MODULE_COMMANDS = (
     ("local_data_platform.maintenance.cli", ("maintain",)),
     ("local_data_platform.engine.spark", ("spark",)),
     ("local_data_platform.mcp_server.cli", ("mcp",)),
+    ("local_data_platform.dbt_layer.cli", ("dbt",)),
 )
 """``(module, commands)``: each module's ``add_cli(subparsers, parents=...)`` registers its commands."""
 

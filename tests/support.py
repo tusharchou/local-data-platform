@@ -125,6 +125,48 @@ def write_dbt_project(folder: Path, models: dict[str, str], *, schema_yml: str |
     return folder
 
 
+def dbt_model(name, *, materialized="table", unique_key=None, meta=None, schema="main", alias=None, description="",
+              depends_on=()):
+    """A model node as dbt 1.12 writes it to ``manifest.json``."""
+    return {
+        "unique_id": f"model.shop.{name}", "resource_type": "model", "name": name, "alias": alias or name,
+        "schema": schema, "description": description,
+        "config": {"materialized": materialized, "unique_key": unique_key, "meta": dict(meta or {})},
+        "meta": dict(meta or {}),
+        "depends_on": {"macros": [], "nodes": [f"model.shop.{parent}" for parent in depends_on]},
+    }
+
+
+def dbt_artifacts(*models, statuses=None, args=None):
+    """``(manifest, run_results)`` for ``models``; every model succeeded unless ``statuses`` says otherwise."""
+    manifest = {"metadata": {"project_name": "shop"}, "nodes": {node["unique_id"]: node for node in models}}
+    results = [{"unique_id": node["unique_id"], "status": (statuses or {}).get(node["name"], "success"),
+                "message": "OK"} for node in models]
+    return manifest, {"args": {"which": "build", "empty": False, **(args or {})}, "results": results}
+
+
+def without_log_warnings(err: str) -> str:
+    """``err`` without the log lines ``ldp`` writes to stderr, which depend on the machine.
+
+    Without DuckDB's iceberg extension, registering sources in auto mode logs a warning that says how to install it,
+    and an exact comparison of what ``ldp`` printed must not depend on whether the extension is installed.
+    """
+    return "".join(line for line in err.splitlines(keepends=True) if not line.startswith("WARNING "))
+
+
+FIXTURE_PROJECT = Path(__file__).parent / "fixtures" / "dbt_project"
+
+
+def copy_fixture_project(destination: Path) -> Path:
+    """Copy ``tests/fixtures/dbt_project`` to ``destination``.
+
+    The project reads the lake in ``../lake`` (made with :func:`build_lake` on ``destination.parent / "lake"``)
+    and publishes to the same lake: ``orders`` becomes ``silver.fct_orders`` and ``gold.gold_totals``.
+    """
+    shutil.copytree(FIXTURE_PROJECT, destination)
+    return destination
+
+
 def dbt_executable() -> str:
     """The dbt next to the Python interpreter, as ``ldp dbt`` looks for it."""
     found = shutil.which("dbt", path=str(Path(sys.executable).parent))

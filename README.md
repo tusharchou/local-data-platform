@@ -76,7 +76,7 @@ More demos, each one a `make` target (see [Development](#development)):
 | `glue` | `pyiceberg[glue]` (boto3) | The AWS Glue catalog |
 | `bigquery` | Google Cloud BigQuery client | BigQuery as a source |
 | `spark` | PySpark | The experimental `SparkEngine`, which also needs a JDK 17+ |
-| `dbt` | dbt-core, the dbt-duckdb adapter and DuckDB | Running dbt on DuckDB. `ldp dbt` for your Iceberg tables is the next item of 0.1.2 (see the [roadmap](docs/roadmap.md)), and the tests marked `dbt` need it today |
+| `dbt` | dbt-core, the dbt-duckdb adapter and DuckDB | `ldp dbt`, which runs a dbt project over your Iceberg tables and publishes the models you mark back to Iceberg ([how it works](docs/design/warehousing.md)), and the tests marked `dbt` |
 | `dev` | pytest, flake8, build, DuckDB, `moto[server]`, the MCP SDK | Working on the library |
 | `docs` | MkDocs and plugins | Building the docs |
 
@@ -190,6 +190,7 @@ call:
 | `ldp datasets pin\|list\|export` | Pin, list and export dataset versions | `datasets.pin`, `list_versions`, `export` |
 | `ldp maintain CONFIG [--expire DAYS] [--orphans] [--apply]` | Expire snapshots and find orphan files; a dry run unless `--apply` | `maintenance.expire_snapshots`, `find_orphans`, `remove_orphans` |
 | `ldp mcp --config CONFIG ...` | Serve tables to an agent over MCP (stdio) | `python -m local_data_platform.mcp_server ...`, same options |
+| `ldp dbt init\|build\|test\|docs\|exec PROJECT_DIR` | Run a dbt project over your Iceberg tables; `build` writes the models marked `ldp_publish` back to Iceberg (needs the `dbt` extra) | `dbt_layer.register_sources(...)`, `dbt_layer.publish.plan_publish(...)` and `publish(...)` |
 | `ldp spark CONFIG` | Run the Scala Spark job on a config's table (needs scala-cli) | `engine.spark.ScalaSparkJob` |
 
 ## Config schema
@@ -217,7 +218,7 @@ example of every check, is in the [v0.1.1 hardening contract](docs/design/v0_1_1
 
 A `DUCKDB` source reads one table, or the result of one query, from a DuckDB database file and
 publishes it to Iceberg like any other source, with the same quality checks, run events and
-snapshots. It is how tables built with SQL (or with dbt, in the next item of 0.1.2) reach the lakehouse:
+snapshots. It is how tables built with SQL (or with dbt, through `ldp dbt`) reach the lakehouse:
 
 ```json
 {

@@ -1,0 +1,14 @@
+version: 2
+
+models:
+  - name: stg_orders
+    columns:
+      - name: order_id
+        data_tests: [not_null]
+  - name: fct_orders
+    description: One row per order.
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+  - name: gold_totals
+    description: Orders and revenue across all orders.
