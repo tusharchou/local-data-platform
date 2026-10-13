@@ -14,7 +14,8 @@ python examples/restaurant/run.py --workdir ldp_demo/restaurant --layer warehous
 This is the `warehouse` layer. It is the first layer of an example that the later milestones of the
 [roadmap](../../docs/roadmap.md) extend, so the same restaurants, customers and orders go through each layer.
 `--layer` runs one layer, and the layers before it when their output is missing. Without the `dbt` or the `excel`
-extra, `run.py` says which one to install and exits with 1. The design is in [PRD.md](PRD.md).
+extra, `run.py` says which one to install and exits with 1. The design is in [PRD.md](PRD.md), and the
+[warehousing guide](../../docs/warehousing.md) does the same steps by hand with the `ldp` commands.
 
 ## What happens
 

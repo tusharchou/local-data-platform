@@ -16,6 +16,7 @@ nav:
       - "MCP server for agents": agents.md
       - "Robot-episode datasets": robotics.md
       - "Spark (experimental)": spark.md
+      - "Warehousing with Excel, CSV and dbt": warehousing.md
   - Design:
       - "v0.1.1 hardening contract": design/v0_1_1.md
       - "v0.1.1 platform contract": design/v0_1_1_platform.md

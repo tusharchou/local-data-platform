@@ -6,7 +6,35 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
-Work towards 0.1.2 Warehousing, see `docs/roadmap.md`.
+Work towards 0.1.2 Warehousing, see `docs/roadmap.md`. dbt models run over LDP's Iceberg tables in DuckDB and get
+tested and documented, and the models you mark are published back to Iceberg as versioned tables. Excel files
+become a source, monthly customer churn is the worked example, and concurrent appends are safe on pyiceberg 0.11.
+The guide is `docs/warehousing.md`.
+
+### Added
+
+- `ldp dbt` runs a dbt project over LDP's Iceberg tables and publishes the models marked `ldp_publish` back to
+  Iceberg (#45, #57). `init` writes a project that builds as soon as its sources exist. `build` registers the
+  sources, runs dbt and publishes after a successful build. `test` and `docs` register the sources and publish
+  nothing, and `exec` runs any other dbt command. Nothing is published unless dbt exited with 0, so a failing model
+  or data test publishes nothing. Table and view models overwrite, and incremental models with a `unique_key`
+  upsert. `dbt_layer.register_sources` makes every Iceberg table that LDP knows about a dbt source in a DuckDB build
+  file, as a view over the table's current snapshot, or as a copy when DuckDB's `iceberg` extension is not
+  installed. The design is in `docs/design/warehousing.md`.
+- The `dbt` extra (dbt-core 1.12 with dbt-duckdb 1.11), the `dbt` pytest marker, a `dbt` CI job and
+  `make dbt-test` (#57). dbt is not part of the `dev` extra.
+- The `DUCKDB` source format and the `DuckDBToIceberg` route, which publish a DuckDB table, or the result of one
+  `SELECT` query, to Iceberg with the same quality checks, run events and snapshots as any other source.
+- The `XLSX` source format, which reads one sheet of an Excel workbook into a CSV file (`ExcelToCSV`) or an Iceberg
+  table (`ExcelToIceberg`), and the `excel` extra (#48). `sheet` and `header_row` pick the sheet and the row that
+  holds the column names.
+- `ldp query` reads an older version of a table with `--snapshot` and `--as-of`, and joins the tables of a folder of
+  configs or of several configs. `local_data_platform.lake.open_lake` does the same from Python.
+- The restaurant example in `examples/restaurant`, with monthly customer churn in dbt, a batch of late orders and
+  time travel (#47), and `make demo-warehouse`, which runs it offline in about 25 seconds. A customer churns in the
+  month they stop ordering.
+- The warehousing guide, `docs/warehousing.md`, whose commands run in the test suite through the shared block runner
+  in `tests/docs_runner.py`, and a "Transform with dbt" section in the README.
 
 ### Fixed
 

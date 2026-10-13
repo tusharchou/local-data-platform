@@ -458,6 +458,34 @@ with open_lake("config/raw.orders.json", as_of="2026-07-31 23:59:59") as lake:  
 and `choose_engine` picks DuckDB below 50 GiB by default, and PySpark above that when it's
 installed. No pipeline calls the router yet.
 
+## Transform with dbt
+
+`ldp dbt` runs a [dbt](https://www.getdbt.com/) project over your Iceberg tables and writes the models you mark back
+to Iceberg, so what dbt builds is versioned, can be read as it was, and is there for `ldp query`, `ldp runs` and
+`ldp mcp` like any other table. It needs the `dbt` extra, and the `excel` extra when a source is an Excel sheet.
+
+```bash
+pip install "local-data-platform[dbt,excel]"
+ldp dbt init my_project --sources config --warehouse warehouse   # a project that builds as soon as its sources exist
+ldp dbt build my_project             # register the sources, run dbt, then publish the models marked ldp_publish
+ldp dbt test my_project              # register the sources and run the data tests, and publish nothing
+ldp dbt docs my_project --serve      # generate the dbt docs and serve them on http://127.0.0.1:8080
+ldp dbt exec my_project compile      # any other dbt command, with the sources registered
+```
+
+Before dbt runs, every Iceberg table that the configs in `--sources` describe becomes a source in a DuckDB file inside
+the project, so a model reads it with `{{ source('raw', 'orders') }}`. After a build in which every model and every
+data test passed, each model whose config has `meta={'ldp_publish': true}` is written to Iceberg through the
+[`DUCKDB` source](#a-duckdb-file-as-a-source), with the same quality checks, run events and snapshots as any other load.
+A table or view model overwrites its table, and an incremental model with a `unique_key` upserts on it. Nothing is
+published when dbt fails. Everything after the project folder goes to dbt unchanged, and the options of `ldp dbt`
+itself go before it.
+
+- The [warehousing guide](docs/warehousing.md) walks through it on a restaurant chain's Excel and CSV exports, from
+  the raw tables to tested models, churn, an incremental load and time travel. `make demo-warehouse` runs the same
+  example offline in about 25 seconds.
+- [How `ldp dbt` works](docs/design/warehousing.md) has the contract, including the meta keys and the schema rules.
+
 ## MCP server for agents
 
 `local_data_platform.mcp_server` serves your tables to an AI agent over the Model Context Protocol,
