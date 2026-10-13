@@ -13,6 +13,7 @@ from typing import Any
 
 from .exceptions import ConfigError
 from .paths import resolve_path
+from .spec import API_VERSION, DEFAULT_KIND, kind_of
 
 REQUIRED_METADATA_KEYS = ("source", "target")
 
@@ -23,6 +24,8 @@ class Config:
 
     ``base_dir`` is the folder relative paths resolve against. ``Config.from_json``
     sets it to the config file's folder; when built by hand it defaults to the cwd.
+    ``api_version`` is the config's ``apiVersion``, when it has one, and ``kind`` is
+    ``Pipeline``, the only kind that is a dataset config.
     """
 
     identifier: str
@@ -33,18 +36,34 @@ class Config:
     how: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     base_dir: Path | None = None
+    api_version: str | None = None
+    kind: str = DEFAULT_KIND
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], base_dir: str | os.PathLike | None = None) -> "Config":
+        """Build a config from a dict.
+
+        Raises:
+            ConfigError: If the dict is not a dataset config. That includes a file of another kind, such as a
+                ``Workflow``, a ``kind`` that is not written exactly as the registry has it, an ``apiVersion``
+                other than ``ldp/v1``, unknown top-level keys, and a missing or incomplete ``metadata``.
+        """
         if not isinstance(data, dict):
             raise ConfigError(f"config must be a JSON object, got {type(data).__name__}")
         if "identifier" not in data:
             raise ConfigError("config is missing required key 'identifier'")
-        known = {"identifier", "who", "what", "where", "when", "how", "metadata"}
+        kind = kind_of(data)
+        if kind != DEFAULT_KIND:
+            raise ConfigError(f"{data['identifier']!r} is a {kind}, not a dataset config (kind {DEFAULT_KIND})")
+        known = {"identifier", "who", "what", "where", "when", "how", "metadata", "apiVersion", "kind"}
         unknown = set(data) - known
         if unknown:
             raise ConfigError(f"config has unknown top-level keys: {sorted(unknown)}")
-        config = cls(**data, base_dir=Path(base_dir) if base_dir else None)
+        api_version = data.get("apiVersion")
+        if api_version is not None and api_version != API_VERSION:
+            raise ConfigError(f"config apiVersion must be {API_VERSION!r}, got {api_version!r}")
+        fields = {key: value for key, value in data.items() if key not in ("apiVersion", "kind")}
+        config = cls(**fields, base_dir=Path(base_dir) if base_dir else None, api_version=api_version, kind=kind)
         config.validate()
         return config
 

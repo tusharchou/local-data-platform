@@ -22,10 +22,13 @@ import pytest
 
 from local_data_platform import Config
 from local_data_platform.format.iceberg import Iceberg
+from local_data_platform.spec import DEFAULT_KIND, kind_of_file
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = REPO_ROOT / "examples"
-CONFIGS = sorted(EXAMPLES.glob("**/config/*.json"))
+# Dataset configs only: a folder of configs may hold files of other kinds, such as workflows. A file whose kind cannot
+# be read stays in the list, so the tests below report it.
+CONFIGS = sorted(path for path in EXAMPLES.glob("**/config/*.json") if kind_of_file(path) in (DEFAULT_KIND, None))
 SCRIPTS = sorted(EXAMPLES.glob("**/reports/*.py"))
 DOCS_WITH_CODE = [
     REPO_ROOT / "README.md",

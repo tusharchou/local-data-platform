@@ -193,7 +193,7 @@ docker run -p 5000:5000 marquezproject/marquez   # then use "url": "http://local
 ldp runs rides.json                    # one line per run, newest first (--limit N, default 20)
 ldp runs rides.json --run RUN_ID       # every event of one run (--events shows events for all runs)
 ldp runs .ldp/events.jsonl             # a JSONL events file works too
-ldp schema                             # the ldp/v1 JSON Schema
+ldp schema                             # the ldp/v1 JSON Schema (--kind Workflow for another kind of file)
 ldp plan rides.json --window 2026-09-01/2026-09-02   # validate, then print the plan (--json for JSON)
 ```
 
@@ -217,7 +217,8 @@ yet. `spec.plan` reads nothing but the config.
 `spec.py` gives every spec two stable fingerprints:
 
 - `spec_hash(config)` is the sha256 of the canonical JSON of the pipeline-relevant fields
-  (`apiVersion`, `identifier`, `when`, `how` and `metadata` except `observability`). Key order,
+  (`apiVersion`, `identifier`, `when`, `how` and `metadata` except `observability`, and not `kind`, so a
+  config hashes the same with and without `"kind": "Pipeline"`). Key order,
   whitespace, format case, the list or object form of `quality`, and where the project is checked
   out don't change it. It is recorded as the `ldp.spec-hash` snapshot property.
 - `idempotency_key(config, window)` hashes the pipeline, the target table and the logical window,

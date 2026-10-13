@@ -10,7 +10,8 @@ Commands::
     ldp demo [--workdir DIR] [--rows N] [--seed N]
 
     ldp catalog test SPEC                  (catalog.provider)
-    ldp schema | ldp plan CONFIG           (spec)
+    ldp schema [--kind KIND]               (spec)
+    ldp plan CONFIG                        (spec)
     ldp runs CONFIG                        (events)
     ldp commits CONFIG                     (format.iceberg.commit)
     ldp datasets pin|list|export ...       (datasets)
