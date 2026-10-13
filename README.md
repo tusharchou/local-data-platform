@@ -166,6 +166,9 @@ ldp run rides.json --mode overwrite              # override the config's write_m
 ldp snapshots rides.json                         # list the target table's snapshots
 ldp query rides.json "SELECT count(*) FROM rides"   # SQL over the target, named after target.name
 ldp query rides.json "SELECT * FROM rides" --max-rows 20   # print at most 20 rows (default 100)
+ldp query rides.json "SELECT count(*) FROM rides" --snapshot 4437   # an older snapshot, from ldp snapshots
+ldp query rides.json "SELECT count(*) FROM rides" --as-of "2026-07-31 23:59:59"   # the newest snapshot at or before that time (UTC)
+ldp query config/ "SELECT o.id FROM raw.orders o JOIN raw.customers c ON c.id = o.id"   # a folder of configs: every table, joinable
 ldp demo --workdir /tmp/ldp_demo                 # also --rows N (default 1000) and --seed N (default 42)
 ```
 
@@ -431,6 +434,21 @@ with DuckDBEngine() as duck:
     duck.register_iceberg(table, "rides_in_memory", native=False)
     print(duck.query("SELECT count(*) FROM rides").to_pylist())
     print(duck.snapshots("rides"))                             # from iceberg_snapshots
+```
+
+`open_lake(path)` registers every Iceberg table that some dataset configs name, so SQL can join them. `path` is a
+config file, a folder of configs, or a list of them, and `ldp query` uses it when it is given a folder or more than
+one config. Each table is a view named `namespace.table` and, when no other table has the same name, a view with the
+bare name. `snapshot_id=` or `as_of=` read one table as it was, and refuse a lake of several. Nothing is written and
+nothing is downloaded, and the MCP SDK is not needed.
+
+```python
+from local_data_platform.lake import open_lake
+
+with open_lake("config") as lake:
+    lake.query("SELECT o.id, c.label FROM raw.orders o JOIN raw.customers c ON c.id = o.id")
+with open_lake("config/raw.orders.json", as_of="2026-07-31 23:59:59") as lake:   # UTC unless it has an offset
+    lake.query("SELECT count(*) FROM orders")
 ```
 
 `attach_rest(name, uri, warehouse, token_env=None)` attaches a whole REST catalog to DuckDB.

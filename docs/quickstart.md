@@ -118,6 +118,11 @@ ldp query my_project/rides.json "SELECT city, count(*) AS rides FROM rides GROUP
 100 rows (`--max-rows N` changes that). `ldp snapshots` and `ldp query` only read: on a `local`
 catalog, before the first `ldp run`, they fail with "does not exist" and create nothing.
 
+Every `ldp run` that changes the table adds a snapshot, and `ldp query` can read an older one with
+`--snapshot ID` (the ids are in the `ldp snapshots` list), or `--as-of "2026-07-31 23:59:59"` for the newest
+snapshot committed at or before that time, in UTC unless the time has an offset. Give `ldp query` a folder of
+configs, or several configs, and it registers all their tables as `namespace.table`, so SQL can join them.
+
 ### Choose a write mode
 
 | `write_mode` | Behaviour | Use it when |

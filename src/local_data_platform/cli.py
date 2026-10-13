@@ -6,7 +6,7 @@ Commands::
     ldp run CONFIG [--mode {append,overwrite,upsert}]
     ldp pipelines
     ldp snapshots CONFIG
-    ldp query CONFIG SQL [--max-rows N]
+    ldp query CONFIG [CONFIG ...] SQL [--max-rows N] [--snapshot ID | --as-of TIME]
     ldp demo [--workdir DIR] [--rows N] [--seed N]
 
     ldp catalog test SPEC                  (catalog.provider)
@@ -17,6 +17,7 @@ Commands::
     ldp maintain CONFIG                    (maintenance)
     ldp spark CONFIG                       (engine.spark)
     ldp mcp --config DIR_OR_FILE           (mcp_server)
+    ldp dbt init|build|test|docs|exec ...  (dbt_layer.cli)
 
 The commands in the second group are added by the ``add_cli`` function of the module named
 next to them (``docs/design/v0_1_1_platform.md`` C9).
@@ -34,6 +35,7 @@ import datetime as dt
 import importlib
 import logging
 import math
+import os
 import sys
 import traceback
 from collections.abc import Sequence
@@ -218,14 +220,27 @@ def _int_or_none(value: Any) -> int | None:
 
 
 def _cmd_query(args: argparse.Namespace) -> int:
+    from local_data_platform import lake
     from local_data_platform.engine.duckdb import DuckDBEngine
     from local_data_platform.etl import load_config
 
-    config = load_config(args.config)
-    table, alias = _iceberg_table(config, must_exist=True)
-    with DuckDBEngine() as duck:
-        duck.register_iceberg(table, alias)
-        result = duck.query(args.sql)
+    if len(args.config) == 1 and not os.path.isdir(args.config[0]):
+        # One config file: its Iceberg table, named after target.name.
+        config = load_config(args.config[0])
+        table, alias = _iceberg_table(config, must_exist=True)
+        snapshot = None
+        if args.snapshot is not None or args.as_of is not None:
+            snapshot = lake.pick_snapshot([(item["snapshot_id"], item["timestamp_ms"]) for item in table.snapshots()],
+                                          snapshot_id=args.snapshot, as_of=args.as_of, table=table.identifier)
+        with DuckDBEngine() as duck:
+            try:
+                duck.register_iceberg(table, alias, snapshot_id=snapshot)
+            except ValueError as error:  # an unknown snapshot id; the message lists the ones that exist
+                raise ConfigError(str(error)) from error
+            result = duck.query(args.sql)
+    else:
+        with lake.open_lake(args.config, snapshot_id=args.snapshot, as_of=args.as_of) as duck:
+            result = duck.query(args.sql)
     _print(format_table(result, max_rows=args.max_rows))
     return 0
 
@@ -248,6 +263,15 @@ def _positive_int(text: str) -> int:
     if value < 1:
         raise argparse.ArgumentTypeError(f"expected a number of at least 1, got {value}")
     return value
+
+
+def _moment(text: str) -> dt.datetime:
+    from local_data_platform.lake import parse_moment
+
+    try:
+        return parse_moment(text)
+    except ConfigError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
 
 
 def build_parser(*, module_commands: bool = True) -> argparse.ArgumentParser:
@@ -286,13 +310,24 @@ def build_parser(*, module_commands: bool = True) -> argparse.ArgumentParser:
     snapshots.set_defaults(handler=_cmd_snapshots)
 
     query = commands.add_parser(
-        "query", parents=[common], help="run SQL over a config's Iceberg table with DuckDB",
-        description="Register the config's Iceberg target (or source) under its name and run SQL over it. "
-                    'Needs the duckdb extra: pip install "local-data-platform[duckdb]".')
-    query.add_argument("config", metavar="CONFIG", help="path to a JSON dataset config")
-    query.add_argument("sql", metavar="SQL", help="the SQL to run; the table is named after target.name")
+        "query", parents=[common], help="run SQL over Iceberg tables with DuckDB",
+        description="Register the Iceberg tables of one or more configs and run SQL over them. With one config "
+                    "file, the table is named after target.name. With a folder of configs, or several configs, "
+                    "every table is registered as namespace.table, and by its bare name when that is unique, so "
+                    "SQL can join them. --snapshot and --as-of read an older version of one table. "
+                    'Needs the duckdb extra: pip install "local-data-platform[duckdb]".',
+        epilog="Put the options before the first CONFIG or after SQL.")
+    query.add_argument("config", metavar="CONFIG", nargs="+",
+                       help="a JSON dataset config, or a folder of them; give several to query their tables together")
+    query.add_argument("sql", metavar="SQL", help="the SQL to run")
     query.add_argument("--max-rows", type=_positive_int, default=DEFAULT_MAX_ROWS,
                        help=f"print at most this many rows (default {DEFAULT_MAX_ROWS})")
+    when = query.add_mutually_exclusive_group()
+    when.add_argument("--snapshot", type=int, metavar="SNAPSHOT_ID",
+                      help="read this snapshot instead of the current one (ldp snapshots lists them)")
+    when.add_argument("--as-of", type=_moment, metavar="TIME",
+                      help="read the newest snapshot committed at or before TIME, such as '2026-07-31 23:59:59' "
+                           "(UTC unless it has an offset; a date alone is midnight)")
     query.set_defaults(handler=_cmd_query)
 
     demo = commands.add_parser("demo", parents=[common], help="run the offline end-to-end demo",
