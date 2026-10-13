@@ -504,6 +504,32 @@ def test_a_lost_publish_response_is_recognised_as_our_own_publish(seeded, monkey
     assert len(ldp_snapshots(seeded, "L")) == 1
 
 
+def test_a_rival_that_publishes_the_key_between_our_search_and_our_staging_is_not_published_twice(seeded, monkeypatch):
+    """The key is searched on one version of the table, so the write is staged on that version and on no newer one.
+
+    If the staging reloaded the table, a writer that published the same key right after our search came back empty would
+    move ``main``, we would stage on top of its snapshot, and our publish would pass: the key on ``main`` twice.
+    """
+    real_search = commit.find_commit
+    rival = {"published": False}
+
+    def search_then_the_rival_publishes(table, key, **kwargs):
+        found = real_search(table, key, **kwargs)
+        if found is None and not rival["published"]:
+            rival["published"] = True
+            seeded.put(rows([7], tag="rival"), mode="append", commit=ctx("T"), policy=FAST)
+        return found
+
+    monkeypatch.setattr(commit, "find_commit", search_then_the_rival_publishes)
+
+    ours = seeded.put(rows([8], tag="ours"), mode="append", commit=ctx("T"), policy=FAST)
+
+    assert rival["published"] and ours.skipped_duplicate
+    assert len(ldp_snapshots(seeded, "T")) == 1
+    assert sorted(state(seeded)) == [1, 2, 3, 7]  # the rival's row once, and not ours on top of it
+    assert staged_branches(seeded.table()) == {}
+
+
 # --------------------------------------------------------------------------- fencing (SaaS §7.8)
 
 

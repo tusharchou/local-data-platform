@@ -362,14 +362,26 @@ class Iceberg(Format):
         return f"Iceberg(identifier={self.identifier!r}, warehouse={location!r})"
 
     def _ensure_namespace(self) -> None:
-        if isinstance(self.catalog, LocalIcebergCatalog):
-            self.catalog.create_namespace_if_not_exists(self.namespace)
-            return
         try:
             self.catalog.create_namespace_if_not_exists(self.namespace)
-        except Exception as exc:  # noqa: BLE001 - a read-only principal may still load and write tables
+        except Exception as exc:  # noqa: BLE001 - see below
+            if self._namespace_is_there():
+                # Another process created it at the same moment: pyiceberg's SQL catalog checks and then inserts, so
+                # the slower insert fails on the row that the faster one added. The namespace is there, which is all
+                # that was needed.
+                logger.debug("Namespace %s was created by another process", self.namespace)
+                return
+            if isinstance(self.catalog, LocalIcebergCatalog):
+                raise
+            # A read-only principal may still load and write tables.
             logger.warning("Could not create namespace %s in catalog %s (%s: %s); continuing",
                            self.namespace, getattr(self.catalog, "name", "?"), type(exc).__name__, exc)
+
+    def _namespace_is_there(self) -> bool:
+        try:
+            return bool(self.catalog.namespace_exists(self.namespace))
+        except Exception:  # noqa: BLE001 - if it cannot be told, the original error is the one to report
+            return False
 
     # ------------------------------------------------------------------ config
 

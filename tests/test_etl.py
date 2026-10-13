@@ -10,8 +10,10 @@ import pytest
 
 from local_data_platform import Config
 from local_data_platform.etl import load_config, run_config
+from local_data_platform.events import MemorySink, uuid7
 from local_data_platform.exceptions import ConfigError, DataQualityError, PipelineNotFound
 from local_data_platform.format.iceberg import Iceberg
+from local_data_platform.format.iceberg.commit import CommitContext
 from local_data_platform.pipeline import PipelineResult
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -74,6 +76,64 @@ def test_a_failing_check_raises_and_writes_nothing(tmp_path, sample_table):
     with pytest.raises(DataQualityError, match="row_count"):
         run_config(path)
     assert not Iceberg("rides", {"identifier": "ns", "warehouse_path": "wh"}, base_dir=tmp_path).exists()
+
+
+WINDOW = "2026-09-01/2026-09-02"
+
+
+def test_run_config_takes_a_run_id_and_an_attempt_for_a_staged_run(config_path):
+    run = uuid7()
+    sink = MemorySink()
+
+    result = run_config(config_path, window=WINDOW, run_id=run, attempt=2, sink=sink)
+
+    assert (result.run_id, result.status, result.rows_written) == (run, "published", 6)
+    summary = Iceberg("rides", {"identifier": "ns", "warehouse_path": "wh"}, base_dir=config_path.parent) \
+        .table().current_snapshot().summary
+    assert summary["ldp.run-id"] == run and summary["ldp.attempt"] == "2"
+    assert {(event.run_id, event.attempt) for event in sink.events} == {(run, 2)}
+
+
+def test_a_retry_with_the_same_window_skips_what_the_first_attempt_published(config_path):
+    run = uuid7()
+    first = run_config(config_path, window=WINDOW, run_id=run)
+
+    retry = run_config(config_path, window=WINDOW, run_id=run, attempt=2)
+
+    assert (first.status, retry.status) == ("published", "skipped_duplicate")
+    assert retry.published_snapshot_id == first.published_snapshot_id and _row_count(config_path.parent) == 6
+
+
+def test_run_config_without_a_run_id_still_makes_a_new_one_for_every_run(config_path):
+    first, second = run_config(config_path, window=WINDOW), run_config(config_path, window=WINDOW)
+
+    assert first.run_id and second.run_id and first.run_id != second.run_id
+
+
+@pytest.mark.parametrize("attempt", [0, -1, True, 1.5, "2", None])
+def test_an_attempt_must_be_a_whole_number_from_one(config_path, attempt):
+    with pytest.raises(ConfigError, match="attempt must be a whole number from 1"):
+        run_config(config_path, window=WINDOW, run_id=uuid7(), attempt=attempt)
+
+
+def test_an_attempt_above_one_needs_the_run_id_of_the_attempt_before_it(config_path):
+    with pytest.raises(ConfigError, match="attempt needs a run_id"):
+        run_config(config_path, window=WINDOW, attempt=2)
+    assert not Iceberg("rides", {"identifier": "ns", "warehouse_path": "wh"}, base_dir=config_path.parent).exists()
+
+
+@pytest.mark.parametrize("kwargs", [{"run_id": "r-1"}, {"run_id": "r-1", "attempt": 3}])
+def test_a_run_id_without_a_window_or_a_key_is_refused_because_only_a_staged_run_has_one(config_path, kwargs):
+    with pytest.raises(ConfigError, match="belong to a staged run, so give a window or an idempotency_key"):
+        run_config(config_path, **kwargs)
+
+
+def test_a_commit_context_cannot_come_with_a_window_a_key_a_run_id_or_an_attempt(config_path):
+    context = CommitContext.create("k" * 64)
+    for extra in ({"window": WINDOW}, {"idempotency_key": "k"}, {"run_id": "r"}, {"run_id": "r", "attempt": 2}):
+        with pytest.raises(ConfigError, match="pass either commit= or"):
+            run_config(config_path, commit=context, **extra)
+    assert run_config(config_path, commit=context).idempotency_key == "k" * 64
 
 
 def test_a_missing_config_file_is_a_config_error(tmp_path):

@@ -167,6 +167,10 @@ ldp --version
 ldp pipelines                                    # list the registered source/target routes
 ldp run rides.json                               # run the config's pipeline
 ldp run rides.json --mode overwrite              # override the config's write_mode
+ldp run rides.json --window 2026-08-01/2026-08-02   # staged and exactly once: a second run for the window skips
+ldp run rides.json --window 2026-08-01/2026-08-02 --run-id RUN_ID --attempt 2   # a retry of that run
+ldp run rides.json --idempotency-key sales-2026-08-01   # a key of your own, for an orchestrator
+ldp run rides.json --window 2026-08-01/2026-08-02 --json   # the result as JSON on stdout, for scripts
 ldp snapshots rides.json                         # list the target table's snapshots
 ldp query rides.json "SELECT count(*) FROM rides"   # SQL over the target, named after target.name
 ldp query rides.json "SELECT * FROM rides" --max-rows 20   # print at most 20 rows (default 100)
@@ -176,7 +180,25 @@ ldp query config/ "SELECT o.id FROM raw.orders o JOIN raw.customers c ON c.id = 
 ldp demo --workdir /tmp/ldp_demo                 # also --rows N (default 1000) and --seed N (default 42)
 ```
 
-Every command exits with 0 on success and 1 on error. Add `-v` to see a traceback. The commands
+With `--window` or `--idempotency-key` a run is staged and exactly once. It prints its window, its
+idempotency key, its run id and attempt, its status (`published` or `skipped_duplicate`) and the snapshot that holds
+its rows, and running it again for the same window finds that snapshot and writes nothing. `ldp plan CONFIG --window W`
+prints the same key, and `--idempotency-key auto` asks for it. A retry reuses the run id with the next attempt number,
+and the new attempt fences the older ones, so a staged branch that an earlier attempt left behind never reaches `main`.
+`--attempt` needs `--run-id`, and both need a window or a key. Without these options `ldp run` writes directly, as it
+always did.
+
+Every command follows one exit-code table.
+
+| Exit | Meaning |
+|---|---|
+| 0 | success, including a run that published and a run that skipped a duplicate |
+| 1 | an error: a bad config, a usage error, a failed write |
+| 2 | reserved for an SLA breach that `ldp monitor` reports in 0.1.5 |
+| 3 | a data gate held the run back, such as a quality check that blocked a write |
+
+A scheduler retries a run that exits with 1, because the cause may pass, and never retries one that exits with 3,
+because the data has to change first. Add `-v` to see a traceback. The commands
 that read a table (`snapshots`, `query`, `commits`, `maintain`, `datasets pin`, `catalog test`) fail
 without creating anything when the config's catalog is a SQLite file that doesn't exist yet (a
 `local` catalog, or `sql` on SQLite). `ldp run`, `ldp snapshots` and `ldp query` also work with the

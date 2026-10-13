@@ -220,6 +220,74 @@ def test_sql_password_env_is_injected_and_never_logged(fake_sql, monkeypatch, ca
     assert "LDP_TEST_PG_PASSWORD" not in caplog.text  # the *_env key is redacted too
 
 
+def _already_exists(message="table iceberg_tables already exists"):
+    from sqlalchemy.exc import OperationalError
+
+    return OperationalError("CREATE TABLE iceberg_tables (...)", {}, Exception(message))
+
+
+def test_a_sql_catalog_whose_tables_another_process_just_created_is_opened_again(monkeypatch, caplog):
+    import pyiceberg.catalog.sql
+
+    calls = []
+
+    def racing(name, **properties):
+        calls.append(name)
+        if len(calls) < 3:
+            raise _already_exists()
+        return _FakeSqlCatalog(name, **properties)
+
+    monkeypatch.setattr(pyiceberg.catalog.sql, "SqlCatalog", racing)
+
+    with caplog.at_level(logging.DEBUG, logger="local_data_platform"):
+        catalog = create_catalog({"type": "sql", "uri": "sqlite:///catalog.db", "name": "lake"})
+
+    assert calls == ["lake", "lake", "lake"] and isinstance(catalog, _FakeSqlCatalog)
+    assert caplog.text.count("created the tables of catalog lake first") == 2
+
+
+def test_a_local_catalog_whose_tables_another_process_just_created_is_opened_again(tmp_path, monkeypatch):
+    from local_data_platform.catalog.local.iceberg import LocalIcebergCatalog
+
+    real, calls = LocalIcebergCatalog.__init__, []
+
+    def racing(self, name, path, **properties):
+        calls.append(name)
+        if len(calls) == 1:
+            raise _already_exists()
+        real(self, name, path, **properties)
+
+    monkeypatch.setattr(LocalIcebergCatalog, "__init__", racing)
+
+    catalog = create_catalog({"type": "local", "identifier": "ns", "warehouse_path": str(tmp_path / "wh")})
+
+    assert calls == ["ns", "ns"] and isinstance(catalog, LocalIcebergCatalog)
+    assert ("ns",) not in catalog.get_dbs()  # nothing was created by the retry but the catalog itself
+
+
+@pytest.mark.parametrize("message, tries", [("table iceberg_tables already exists", 4),
+                                            ("duplicate key value violates unique constraint pg_type_typname", 4),
+                                            ("no such table: iceberg_namespace_properties", 1),
+                                            ("database is locked", 1)])
+def test_a_sql_catalog_error_is_raised_after_the_retries_or_at_once_when_it_is_not_that_race(
+        monkeypatch, message, tries):
+    import pyiceberg.catalog.sql
+
+    calls = []
+
+    def failing(name, **properties):
+        calls.append(name)
+        raise _already_exists(message)
+
+    monkeypatch.setattr(pyiceberg.catalog.sql, "SqlCatalog", failing)
+    monkeypatch.setattr("local_data_platform.catalog.provider.time.sleep", lambda seconds: None)
+
+    with pytest.raises(Exception, match=message.split()[0]):
+        create_catalog({"type": "sql", "uri": "sqlite:///catalog.db"})
+
+    assert len(calls) == tries
+
+
 def test_password_in_uri_is_rejected_without_echoing_it():
     with pytest.raises(ConfigError, match="embeds a password") as info:
         create_catalog({"type": "sql", "uri": "postgresql://ldp:hunter2@db/catalog"})

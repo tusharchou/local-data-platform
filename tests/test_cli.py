@@ -6,6 +6,7 @@ import json
 import logging
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pyarrow as pa
@@ -17,6 +18,7 @@ from local_data_platform.cli import (CORE_COMMANDS, MODULE_COMMANDS, _needs_modu
                                      format_table, main)
 from local_data_platform.exceptions import EngineNotFound
 from local_data_platform.format.iceberg import Iceberg
+from local_data_platform.format.iceberg.commit import commit_log, staged_branches
 from local_data_platform.logger import PACKAGE_LOGGER
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -60,6 +62,7 @@ def test_no_command_prints_help_and_fails(capsys):
 
 
 @pytest.mark.parametrize("argv", [["frobnicate"], ["run"], ["run", "x.json", "--mode", "merge"],
+                                  ["run", "x.json", "--run-id", "r", "--attempt", "0"],
                                   ["query", "x.json"], ["demo", "--rows", "0"]])
 def test_usage_errors_exit_one(argv, capsys):
     assert main(argv) == 1
@@ -93,11 +96,11 @@ def test_run_mode_overrides_the_config(config_path, capsys):
     assert "overwrite, 12 -> 6 rows" in capsys.readouterr().out
 
 
-def test_a_failing_check_exits_one_without_a_traceback_and_writes_nothing(tmp_path, sample_table, capsys):
+def test_a_failing_check_exits_three_without_a_traceback_and_writes_nothing(tmp_path, sample_table, capsys):
     pa_csv.write_csv(sample_table, tmp_path / "rides.csv")
     path = _config(tmp_path, checks=[{"check": "row_count", "min": 100}, {"check": "not_null", "columns": ["x"]}])
 
-    assert main(["run", str(path)]) == 1
+    assert main(["run", str(path)]) == 3
 
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -105,6 +108,271 @@ def test_a_failing_check_exits_one_without_a_traceback_and_writes_nothing(tmp_pa
     assert "row_count" in captured.err and "not_null(x)" in captured.err
     assert "Traceback" not in captured.err
     assert not _table(tmp_path).exists()
+
+
+# --------------------------------------------------------------------------- ldp run with a window and a retry identity
+
+WINDOW = "2026-08-01/2026-08-02"
+SQL_CATALOG = {"type": "sql", "uri": "sqlite:///catalog.db", "warehouse": "wh", "namespace": "ns"}
+
+
+def _staged_config(folder: Path, sample_table, catalog=None, checks=None) -> Path:
+    """A config that appends, with the six sample rides in ``rides.csv`` next to it."""
+    pa_csv.write_csv(sample_table, folder / "rides.csv")
+    target = {"name": "rides", "format": "ICEBERG", "catalog": catalog or CATALOG, "write_mode": "append"}
+    return _config(folder, target=target, checks=checks or [{"check": "row_count", "min": 1}])
+
+
+def _fields(out: str) -> dict[str, str]:
+    """The ``name  value`` lines that a staged run prints under its summary."""
+    names = ("window", "idempotency_key", "run_id", "attempt", "status", "snapshot")
+    found = {}
+    for line in out.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[0] in names:
+            found[parts[0]] = parts[1].strip()
+    return found
+
+
+def _head(folder: Path) -> int:
+    return _table(folder).table().current_snapshot().snapshot_id
+
+
+def test_a_run_with_a_window_publishes_and_prints_the_window_the_key_the_status_and_the_snapshot(
+        tmp_path, sample_table, capsys):
+    from local_data_platform import Config
+    from local_data_platform.spec import idempotency_key
+
+    path = _staged_config(tmp_path, sample_table)
+
+    assert main(["run", str(path), "--window", WINDOW]) == 0
+
+    out = capsys.readouterr().out
+    fields = _fields(out)
+    assert out.startswith("rides: read 6 rows, wrote 6 rows")
+    assert fields["window"] == "2026-08-01T00:00:00Z/2026-08-02T00:00:00Z"
+    assert fields["idempotency_key"] == idempotency_key(Config.from_json(path), WINDOW)
+    assert (fields["status"], fields["attempt"]) == ("published", "1")
+    assert fields["snapshot"] == str(_head(tmp_path)) and _table(tmp_path).row_count() == 6
+
+
+def test_running_the_same_window_again_prints_skipped_duplicate_and_writes_nothing(tmp_path, sample_table, capsys):
+    path = _staged_config(tmp_path, sample_table)
+    assert main(["run", str(path), "--window", WINDOW]) == 0
+    first = _fields(capsys.readouterr().out)
+    snapshots = len(_table(tmp_path).table().snapshots())
+
+    assert main(["run", str(path), "--window", WINDOW]) == 0
+
+    out = capsys.readouterr().out
+    second = _fields(out)
+    assert "skipped: idempotency key already published in snapshot" in out
+    assert second["status"] == "skipped_duplicate" and second["snapshot"] == first["snapshot"]
+    assert second["idempotency_key"] == first["idempotency_key"]
+    assert _table(tmp_path).row_count() == 6 and len(_table(tmp_path).table().snapshots()) == snapshots
+
+
+def test_a_different_window_is_a_different_run_and_publishes(tmp_path, sample_table, capsys):
+    path = _staged_config(tmp_path, sample_table)
+    assert main(["run", str(path), "--window", WINDOW]) == 0
+    assert main(["run", str(path), "--window", "2026-08-02/2026-08-03"]) == 0
+
+    assert _fields(capsys.readouterr().out)["status"] == "published" and _table(tmp_path).row_count() == 12
+
+
+def test_ldp_plan_and_ldp_run_print_the_same_idempotency_key_for_a_window(tmp_path, sample_table, capsys):
+    path = _staged_config(tmp_path, sample_table)
+
+    assert main(["plan", str(path), "--window", WINDOW]) == 0
+    planned = _fields(capsys.readouterr().out)["idempotency_key"]
+    assert main(["run", str(path), "--window", WINDOW]) == 0
+
+    assert _fields(capsys.readouterr().out)["idempotency_key"] == planned
+    assert main(["run", str(path), "--window", WINDOW, "--idempotency-key", "auto"]) == 0
+    again = _fields(capsys.readouterr().out)
+    assert again["idempotency_key"] == planned and again["status"] == "skipped_duplicate"
+
+
+def test_an_explicit_idempotency_key_is_used_as_given_and_it_alone_makes_the_run_staged(tmp_path, sample_table, capsys):
+    path = _staged_config(tmp_path, sample_table)
+
+    assert main(["run", str(path), "--idempotency-key", "from-airflow-2026-08-01"]) == 0
+    first = _fields(capsys.readouterr().out)
+    assert first["idempotency_key"] == "from-airflow-2026-08-01" and first["status"] == "published"
+    assert "window" not in first
+
+    assert main(["run", str(path), "--idempotency-key", "from-airflow-2026-08-01"]) == 0
+    assert _fields(capsys.readouterr().out)["status"] == "skipped_duplicate"
+    assert _table(tmp_path).row_count() == 6
+
+
+@pytest.mark.parametrize("flags, message", [
+    (["--window", "yesterday-ish"], "window 'yesterday-ish' must be an ISO-8601 interval 'START/END'"),
+    (["--window", "2026-08-02/2026-08-01"], "window end 2026-08-01T00:00:00+00:00 must be after its start"),
+    (["--attempt", "2"], "--attempt needs --run-id: a retry reuses the run id of the attempt before it"),
+    (["--run-id", "r1"], "--run-id needs --window or --idempotency-key, because only a staged run has attempts"),
+    (["--idempotency-key", "auto"], "--idempotency-key auto needs --window, because the key is derived from "
+                                    "the window"),
+    (["--window", WINDOW, "--idempotency-key", "  "], "idempotency_key must be a non-empty string"),
+])
+def test_a_bad_window_or_retry_identity_exits_one_with_one_friendly_line_and_writes_nothing(
+        tmp_path, sample_table, capsys, flags, message):
+    path = _staged_config(tmp_path, sample_table)
+
+    assert main(["run", str(path), *flags]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err.count("\n") == 1
+    assert captured.err.startswith(f"ldp: error: {message}"), captured.err
+    assert not _table(tmp_path).exists()
+
+
+def test_a_retry_reuses_the_run_id_with_the_next_attempt(tmp_path, sample_table, capsys):
+    from local_data_platform.events import uuid7
+
+    path = _staged_config(tmp_path, sample_table)
+    run = uuid7()
+
+    assert main(["run", str(path), "--window", WINDOW, "--run-id", run, "--attempt", "2"]) == 0
+
+    fields = _fields(capsys.readouterr().out)
+    assert (fields["run_id"], fields["attempt"], fields["status"]) == (run, "2", "published")
+    summary = _table(tmp_path).table().current_snapshot().summary
+    assert summary["ldp.run-id"] == run and summary["ldp.attempt"] == "2"
+
+
+def test_a_staged_branch_that_attempt_one_left_is_fenced_and_never_reaches_main(tmp_path, sample_table, capsys):
+    from local_data_platform import Config
+    from local_data_platform.events import uuid7
+    from local_data_platform.format.iceberg.commit import CommitContext, fence_marker, stage, staged_branches
+    from local_data_platform.spec import idempotency_key
+
+    path = _staged_config(tmp_path, sample_table)
+    assert main(["run", str(path), "--window", "2026-07-31/2026-08-01"]) == 0  # the table has a main to branch from
+    capsys.readouterr()
+    run, window = uuid7(), "2026-08-01/2026-08-02"
+    key = idempotency_key(Config.from_json(path), window)
+    zombie = stage(_table(tmp_path).table(), sample_table.slice(0, 2), "append",
+                   CommitContext.create(key, run_id=run, attempt=1))  # attempt 1 staged its rows and then died
+    assert zombie.branch in _table(tmp_path).table().metadata.refs
+    assert _table(tmp_path).row_count() == 6
+
+    assert main(["run", str(path), "--window", window, "--run-id", run, "--attempt", "2"]) == 0
+
+    refs = _table(tmp_path).table().metadata.refs
+    assert _fields(capsys.readouterr().out)["status"] == "published"
+    assert zombie.branch not in refs and fence_marker(run, 1) in refs
+    assert staged_branches(_table(tmp_path).table()) == {}
+    assert _table(tmp_path).row_count() == 12  # the six rows of the first window and the six of the retry, not the two
+
+
+def test_json_prints_the_result_and_nothing_else_on_stdout(tmp_path, sample_table, capsys):
+    path = _staged_config(tmp_path, sample_table)
+
+    assert main(["run", str(path), "--window", WINDOW, "--json"]) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert main(["run", str(path), "--window", WINDOW, "--json"]) == 0
+    second = json.loads(capsys.readouterr().out)
+
+    assert (first["status"], second["status"]) == ("published", "skipped_duplicate")
+    assert first["rows_written"] == 6 and first["name"] == "rides" and first["quality"]["passed"] is True
+    assert first["idempotency_key"] == second["idempotency_key"] and len(first["idempotency_key"]) == 64
+    assert first["published_snapshot_id"] == second["published_snapshot_id"] == _head(tmp_path)
+    assert first["run_id"] != second["run_id"]
+
+
+def test_json_of_a_run_without_a_window_has_no_key_and_the_text_output_is_unchanged_without_the_flags(
+        tmp_path, sample_table, capsys):
+    path = _staged_config(tmp_path, sample_table)
+
+    assert main(["run", str(path), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert (result["status"], result["idempotency_key"]) == ("published", None)
+
+    assert main(["run", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert out.splitlines()[0].startswith("rides: read 6 rows, wrote 6 rows")
+    assert _fields(out) == {}  # no window, key, run id, status or snapshot block: the direct run prints what it did
+
+
+def test_a_failing_check_in_a_staged_run_exits_three_too_and_publishes_nothing(tmp_path, sample_table, capsys):
+    path = _staged_config(tmp_path, sample_table, checks=[{"check": "row_count", "min": 100}])
+
+    assert main(["run", str(path), "--window", WINDOW]) == 3
+
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err.startswith("ldp: error: 1 of 1 data quality checks failed:")
+    assert not _table(tmp_path).exists()
+
+
+def test_exit_status_three_keeps_the_traceback_with_verbose(tmp_path, sample_table, capsys):
+    path = _staged_config(tmp_path, sample_table, checks=[{"check": "row_count", "min": 100}])
+
+    assert main(["-v", "run", str(path)]) == 3
+
+    err = capsys.readouterr().err
+    assert "Traceback (most recent call last)" in err and "data quality checks failed" in err
+
+
+def test_the_exit_code_table_is_in_the_module_docstring_and_the_readme():
+    from local_data_platform import cli
+
+    readme = (REPO_ROOT / "README.md").read_text()
+    assert (cli.EXIT_OK, cli.EXIT_ERROR, cli.EXIT_SLA, cli.EXIT_GATE) == (0, 1, 2, 3)
+    for text in (cli.__doc__, readme):
+        for words in ("success, including a run that published and a run that skipped a duplicate",
+                      "reserved for an SLA breach that `ldp monitor` reports",
+                      "a data gate held the run back, such as a quality check that blocked a write",
+                      "never retries one that exits with 3"):
+            assert words.replace("`", "") in text.replace("`", ""), words
+
+
+# --------------------------------------------------------------------------- two processes, one key
+
+_CHILD = """
+import pathlib, sys, time
+from local_data_platform.cli import main
+import local_data_platform.etl, local_data_platform.pipeline.registry, local_data_platform.format.iceberg.commit
+ready, go = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+ready.write_text("ready")
+while not go.exists():
+    time.sleep(0.002)
+sys.exit(main(sys.argv[3:]))
+"""
+
+
+def _race(config: Path, *argv: str, processes: int = 2) -> list[dict]:
+    """Start ``processes`` runs of ``ldp run`` at the same moment and return what each printed with ``--json``."""
+    go = config.parent / "go"
+    children = [subprocess.Popen([sys.executable, "-c", _CHILD, str(config.parent / f"ready{n}"), str(go),
+                                  "run", str(config), *argv, "--json"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=config.parent)
+                for n in range(processes)]
+    deadline = time.monotonic() + 120
+    while not all((config.parent / f"ready{n}").exists() for n in range(processes)):
+        assert time.monotonic() < deadline, "the processes did not get ready"
+        time.sleep(0.01)
+    go.write_text("go")
+    outputs = [child.communicate(timeout=300) for child in children]
+    assert [child.returncode for child in children] == [0] * processes, outputs
+    return [json.loads(out) for out, _ in outputs]
+
+
+@pytest.mark.parametrize("catalog", [CATALOG, SQL_CATALOG], ids=["local catalog", "sql catalog on SQLite"])
+def test_two_processes_with_the_same_key_write_the_batch_once(tmp_path, sample_table, catalog):
+    path = _staged_config(tmp_path, sample_table, catalog=catalog)
+
+    results = _race(path, "--window", WINDOW)
+
+    assert sorted(result["status"] for result in results) == ["published", "skipped_duplicate"], results
+    assert len({result["idempotency_key"] for result in results}) == 1
+    assert len({result["published_snapshot_id"] for result in results}) == 1
+    table = Iceberg("rides", catalog, base_dir=tmp_path)
+    assert table.row_count() == 6
+    # One publish on main carries the key. The metadata may also hold the staged snapshot of the writer that lost, which
+    # is on no branch of main, so only the snapshots in main's ancestry count.
+    assert [row["idempotency_key"] for row in commit_log(table.table())] == [results[0]["idempotency_key"]]
+    assert staged_branches(table.table()) == {}
 
 
 @pytest.mark.parametrize("argv", [["-v", "run"], ["run", "-v"]])

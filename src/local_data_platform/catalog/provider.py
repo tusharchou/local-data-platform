@@ -32,6 +32,7 @@ import json
 import os
 import re
 import sys
+import time
 import weakref
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -357,7 +358,8 @@ def _local(spec: Mapping[str, Any], base_dir: Path | None) -> "PyIcebergCatalog"
         if not spec.get(key):
             raise ConfigError(f"local catalog spec is missing '{key}'")
     warehouse = resolve_path(spec["warehouse_path"], base_dir)
-    return LocalIcebergCatalog(str(spec["identifier"]), path=warehouse)
+    name = str(spec["identifier"])
+    return _build_catalog(name, lambda: LocalIcebergCatalog(name, path=warehouse))
 
 
 @register_catalog_type("sql")
@@ -370,16 +372,48 @@ def _sql(spec: Mapping[str, Any], base_dir: Path | None) -> "PyIcebergCatalog":
     if not spec.get("uri") and spec.get("warehouse_path"):
         # The original local catalog accepted "type": "sql" / "sqlite" on an {identifier, warehouse_path} block.
         return _local(spec, base_dir)
-    from pyiceberg.catalog.sql import SqlCatalog
-
     properties = _properties(spec)
     properties["uri"] = _sql_uri(spec, base_dir)
     if spec.get("warehouse"):
         properties["warehouse"] = _warehouse_uri(spec["warehouse"], base_dir)
-    catalog = SqlCatalog(catalog_name(spec), **properties)
+
+    def build() -> "PyIcebergCatalog":
+        from pyiceberg.catalog.sql import SqlCatalog
+
+        return SqlCatalog(catalog_name(spec), **properties)
+
+    catalog = _build_catalog(catalog_name(spec), build)
     # Close pooled connections when the catalog is garbage collected (no "unclosed database" warning).
     weakref.finalize(catalog, catalog.engine.dispose)
     return catalog
+
+
+_BUILD_TRIES = 4
+"""How many times :func:`_build_catalog` builds a catalog when another process creates its tables first."""
+
+
+def _build_catalog(name: str, build: Callable[[], "PyIcebergCatalog"]) -> "PyIcebergCatalog":
+    """Call ``build``, and call it again when another process created the catalog's tables a moment before.
+
+    A SQL catalog creates its tables when it is built. pyiceberg looks for the tables and then creates the ones that
+    are missing, and the two steps are not one transaction. Two processes that open a new catalog at the same moment,
+    as a scheduler does when it starts two runs at once, can both find the tables missing, and the slower ``CREATE
+    TABLE`` fails with "already exists". By then the tables are there, so building the catalog again works. Any other
+    error is raised as it is.
+    """
+    from sqlalchemy.exc import DBAPIError
+
+    for attempt in range(1, _BUILD_TRIES + 1):
+        try:
+            return build()
+        except DBAPIError as error:
+            message = str(error).lower()
+            if attempt == _BUILD_TRIES or not ("already exists" in message or "duplicate key" in message):
+                raise
+            logger.debug("Another process created the tables of catalog %s first; opening it again (%d of %d)",
+                         name, attempt, _BUILD_TRIES - 1)
+            time.sleep(0.05 * attempt)
+    raise AssertionError("unreachable")  # pragma: no cover - the loop returns or raises
 
 
 @register_catalog_type("rest")

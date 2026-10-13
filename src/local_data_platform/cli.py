@@ -4,6 +4,7 @@ Commands::
 
     ldp --version
     ldp run CONFIG [--mode {append,overwrite,upsert}]
+                   [--window START/END] [--idempotency-key KEY|auto] [--run-id ID [--attempt N]] [--json]
     ldp pipelines
     ldp snapshots CONFIG
     ldp query CONFIG [CONFIG ...] SQL [--max-rows N] [--snapshot ID | --as-of TIME]
@@ -23,8 +24,17 @@ Commands::
 The commands in the second group are added by the ``add_cli`` function of the module named
 next to them (``docs/design/v0_1_1_platform.md`` C9).
 
-Every command exits with 0 on success and 1 on error. Errors are printed as one
-friendly line on stderr; add ``-v`` for debug logging and the full traceback.
+Every command follows one exit-code table::
+
+    0  success, including a run that published and a run that skipped a duplicate
+    1  an error: a bad config, a usage error, a failed write
+    2  reserved for an SLA breach that ``ldp monitor`` reports (0.1.5)
+    3  a data gate held the run back, such as a quality check that blocked a write
+
+A scheduler retries a run that exits with 1, because the cause may pass, and never retries one that exits with 3,
+because the data has to change first.
+
+Errors are printed as one friendly line on stderr; add ``-v`` for debug logging and the full traceback.
 
 Heavy imports (pyiceberg, DuckDB) happen inside the commands. ``main`` imports the
 second group's modules only when the command line may need them, so ``ldp --version``
@@ -34,6 +44,7 @@ and the first group's commands stay fast.
 import argparse
 import datetime as dt
 import importlib
+import json
 import logging
 import math
 import os
@@ -43,10 +54,16 @@ from collections.abc import Sequence
 from typing import Any
 
 from local_data_platform import __version__
-from local_data_platform.exceptions import ConfigError, LDPError
+from local_data_platform.exceptions import ConfigError, DataQualityError, LDPError
 from local_data_platform.logger import PACKAGE_LOGGER, configure_cli_logging
 
 PROG = "ldp"
+EXIT_OK = 0
+EXIT_ERROR = 1
+EXIT_SLA = 2
+"""Reserved for an SLA breach that ``ldp monitor`` reports in 0.1.5. No command returns it yet."""
+EXIT_GATE = 3
+"""A data gate, such as a quality check, held the run back. A scheduler must not retry it."""
 DEFAULT_WORKDIR = "ldp_demo"
 DEFAULT_MAX_ROWS = 100
 WRITE_MODES = ("append", "overwrite", "upsert")
@@ -159,10 +176,29 @@ def _iceberg_table(config, must_exist: bool = False):
                       f"and its target is {config.target['format']!r}")
 
 
+def _staged_options(args: argparse.Namespace) -> tuple[str | None, str | None, str | None, int]:
+    """The ``(window, key, run_id, attempt)`` of a run, after the checks that only the command line can make."""
+    window, key, run_id = args.window, args.idempotency_key, args.run_id
+    if args.attempt is not None and run_id is None:
+        raise ConfigError("--attempt needs --run-id: a retry reuses the run id of the attempt before it")
+    if run_id is not None and window is None and key is None:
+        raise ConfigError("--run-id needs --window or --idempotency-key, because only a staged run has attempts")
+    if key == "auto":
+        if window is None:
+            raise ConfigError("--idempotency-key auto needs --window, because the key is derived from the window")
+        key = None  # the key that ldp plan prints for the config and the window
+    return window, key, run_id, args.attempt or 1
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     from local_data_platform.etl import run_config
 
-    result = run_config(args.config, mode=args.mode)
+    window, key, run_id, attempt = _staged_options(args)
+    result = run_config(args.config, mode=args.mode, window=window, idempotency_key=key, run_id=run_id,
+                        attempt=attempt)
+    if args.json:
+        _print(json.dumps(result.to_dict(), indent=2))
+        return EXIT_OK
     _print(str(result))
     write = result.write_result
     if write is not None:
@@ -171,7 +207,24 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if len(result.quality):
         for line in result.quality.summary().splitlines():
             _print(f"  {line}")
-    return 0
+    if result.idempotency_key is not None:
+        _print_staged(result, window, attempt)
+    return EXIT_OK
+
+
+def _print_staged(result: Any, window: str | None, attempt: int) -> None:
+    """What a staged run did, in the words a scheduler or a person reads: window, key, run, status, snapshot."""
+    from local_data_platform.spec import format_instant, parse_window
+
+    lines = []
+    bounds = parse_window(window)
+    if bounds is not None:
+        lines.append(("window", f"{format_instant(bounds[0])}/{format_instant(bounds[1])}"))
+    lines += [("idempotency_key", result.idempotency_key), ("run_id", result.run_id), ("attempt", str(attempt)),
+              ("status", result.status), ("snapshot", str(result.published_snapshot_id))]
+    width = max(len(name) for name, _ in lines)
+    for name, value in lines:
+        _print(f"  {name.ljust(width)}  {value}")
 
 
 def _cmd_pipelines(args: argparse.Namespace) -> int:
@@ -291,15 +344,32 @@ def build_parser(*, module_commands: bool = True) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROG, parents=[common],
         description="local-data-platform: a local Iceberg lakehouse driven by JSON dataset configs.",
-        epilog="Exit status is 0 on success and 1 on error.",
+        epilog="Exit status is 0 on success, 1 on error and 3 when a data gate held a run back (2 is reserved).",
     )
     parser.add_argument("--version", action="version", version=f"{PROG} {__version__}")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
-    run = commands.add_parser("run", parents=[common], help="run the pipeline a config describes",
-                              description="Build the pipeline for CONFIG with the registry and run it.")
+    run = commands.add_parser(
+        "run", parents=[common], help="run the pipeline a config describes",
+        description="Build the pipeline for CONFIG with the registry and run it. With --window or --idempotency-key "
+                    "the run publishes through the staged protocol, so running it again for the same window finds "
+                    "what it published and writes nothing, and a scheduler can retry it safely.",
+        epilog="Exit status is 0 on success, including a skipped duplicate, 1 on an error and 3 when a data gate "
+               "such as a quality check held the run back. Retry 1, and do not retry 3.")
     run.add_argument("config", metavar="CONFIG", help="path to a JSON dataset config")
     run.add_argument("--mode", choices=WRITE_MODES, help="override the target's write_mode for this run")
+    run.add_argument("--window", metavar="START/END",
+                     help="the logical window of the run, an ISO 8601 interval such as 2026-08-01/2026-08-02")
+    run.add_argument("--idempotency-key", metavar="KEY",
+                     help="use KEY as the key of the run, or 'auto' for the key that 'ldp plan' prints for the "
+                          "config and the window. A key alone makes the run staged too")
+    run.add_argument("--run-id", metavar="ID",
+                     help="the id of the run. A retry reuses the id of the attempt before it, with a higher --attempt")
+    run.add_argument("--attempt", type=_positive_int, metavar="N",
+                     help="the attempt number of the run, from 1. It needs --run-id, and it fences every older "
+                          "attempt of the run")
+    run.add_argument("--json", action="store_true",
+                     help="print the result as JSON on stdout, for scripts and operators")
     run.set_defaults(handler=_cmd_run)
 
     pipelines = commands.add_parser("pipelines", parents=[common], help="list the registered pipeline routes")
@@ -367,6 +437,16 @@ def _describe_error(error: BaseException) -> str:
     return f"{type(error).__name__}: {error}"
 
 
+def _fail(error: BaseException, verbose: bool, status: int) -> int:
+    """Print an error as one friendly line, and the traceback with ``-v``, and return its exit status."""
+    if verbose:
+        traceback.print_exc()
+    first, *rest = _describe_error(error).splitlines() or [""]
+    hint = "" if verbose or isinstance(error, LDPError) else " (run with -v for the traceback)"
+    _error("\n".join([f"{PROG}: error: {first}{hint}", *rest]))
+    return status
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the ``ldp`` command line.
 
@@ -374,7 +454,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         argv: The arguments, without the program name. Defaults to ``sys.argv[1:]``.
 
     Returns:
-        The exit status: 0 on success, 1 on error (including usage errors).
+        The exit status: 0 on success, 1 on error (including usage errors), and 3 when a data gate held
+        the run back. See the exit-code table at the top of this module.
     """
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser(module_commands=_needs_module_commands(argv))
@@ -396,13 +477,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except KeyboardInterrupt:
         _error(f"{PROG}: interrupted")
         return 130
+    except DataQualityError as error:  # a data gate held the run back: the data has to change, so do not retry
+        return _fail(error, verbose, EXIT_GATE)
     except Exception as error:  # noqa: BLE001 - the CLI turns every error into one line and exit 1
-        if verbose:
-            traceback.print_exc()
-        first, *rest = _describe_error(error).splitlines() or [""]
-        hint = "" if verbose or isinstance(error, LDPError) else " (run with -v for the traceback)"
-        _error("\n".join([f"{PROG}: error: {first}{hint}", *rest]))
-        return 1
+        return _fail(error, verbose, EXIT_ERROR)
     finally:
         # Leave logging as we found it, so main() can be called more than once in a process.
         for handler in package_logger.handlers:

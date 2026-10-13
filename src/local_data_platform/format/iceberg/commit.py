@@ -712,8 +712,11 @@ def write_once(
             )
         if pending is None:
             try:
-                pending = _stage_again(catalog, catalog.load_table(identifier), df, mode, ctx, previous, n,
-                                       join_cols, overwrite_filter, schema_evolution)
+                # Stage on the version of the table whose history was just searched, and on no newer one. The staging
+                # asserts that main is still that version, so a writer that published this key since the search makes
+                # the staging fail and the loop searches again. A reloaded table would hide that publish.
+                pending = _stage_again(catalog, table, df, mode, ctx, previous, n, join_cols, overwrite_filter,
+                                       schema_evolution)
             except (CommitFailedException, CommitStateUnknownException) as exc:
                 logger.debug("Staging %s on %s lost a race (%s); retrying", mode, _name(table), exc)
                 n += 1
