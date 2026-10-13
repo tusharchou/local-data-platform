@@ -229,12 +229,12 @@ def test_a_batch_with_a_duplicate_order_id_fails_the_build_and_publishes_nothing
     assert snapshot_ids(workdir) == before  # no table was touched
 
 
-# --------------------------------------------------------------------------- the churn example of issue #47
+# --------------------------------------------------------------------------- a small work folder of our own
 
 
-def test_churn_counts_a_customer_in_the_month_they_stop_ordering(tmp_path):
-    """The first month has no row, three customers who stop after January make February 3 of 3, and so on."""
-    workdir = run.prepare_workdir(tmp_path / "work")
+def small_workdir(path: Path) -> Path:
+    """A work folder with one restaurant and four customers in the landing folder, and no orders yet."""
+    workdir = run.prepare_workdir(path / "work")
     landing = workdir / "landing"
     landing.mkdir(exist_ok=True)
     generate.write_restaurants_xlsx(landing / "restaurants.xlsx", SimpleNamespace(restaurants=[
@@ -244,16 +244,77 @@ def test_churn_counts_a_customer_in_the_month_they_stop_ordering(tmp_path):
     generate._write_csv(landing / "customers.csv", ("customer_id", "name", "city", "signed_up_at"),
                         [{"customer_id": f"C{n}", "name": f"Customer {n}", "city": "Bengaluru",
                           "signed_up_at": signed_up} for n in range(1, 5)], {"signed_up_at": generate._stamp})
+    return workdir
+
+
+def order(order_id: str, customer: str, placed: dt.datetime, total: float, updated: dt.datetime | None = None) -> dict:
+    """An order of restaurant R01, last changed five minutes after it was placed unless ``updated`` says when."""
+    return {"order_id": order_id, "restaurant_id": "R01", "customer_id": customer, "order_ts": placed,
+            "channel": "dine_in", "total_amount": total, "updated_at": updated or placed + dt.timedelta(minutes=5)}
+
+
+def write_orders(workdir: Path, orders: list[dict]) -> None:
+    generate._write_csv(workdir / "landing" / "orders.csv", generate.ORDER_COLUMNS, orders,
+                        {"order_ts": generate._stamp, "updated_at": generate._stamp, "total_amount": generate._money})
+
+
+# --------------------------------------------------------------------------- orders in several versions, out of order
+
+
+def fct_orders_rows(workdir: Path) -> list[tuple[str, float]]:
+    rows = run.lake_rows(workdir / "config" / "fct_orders.json",
+                         "SELECT order_id, total_amount FROM fct_orders ORDER BY order_id")
+    return [(row["order_id"], row["total_amount"]) for row in rows]
+
+
+def test_fct_orders_keeps_the_newest_version_of_an_order_and_takes_a_late_order_whatever_its_updated_at(tmp_path):
+    """What a load on the newest updated_at in the table gets wrong, over two batches.
+
+    Batch 1 holds two versions of O1, so the model has to pick one, and keeping both would make ``order_id`` not
+    unique. Batch 2 holds a correction of O1 and a new order, O3, that are both older than the newest row already
+    loaded, which that load would skip, leaving O1's total stale and O3 missing. It also holds an old version of O2
+    that reached the lake late and must not replace the newer one. Two months of orders make the churn model
+    publish something.
+    """
+    workdir = small_workdir(tmp_path)
+    january, february = dt.datetime(2023, 1, 5, 12, 0), dt.datetime(2023, 2, 12, 13, 0)
+    write_orders(workdir, [order("O1", "C1", january, 250),
+                           order("O1", "C1", january, 300, dt.datetime(2023, 1, 5, 13)),  # changed an hour later
+                           order("O2", "C2", february, 100)])
+    for name in ("restaurants", "customers", "orders"):
+        ingest(workdir, name)
+
+    first = run.dbt_build(workdir)
+
+    assert (first["models"], first["tests"], first["passed"]) == (7, 26, 33)
+    assert [(item["mode"], item["rows_before"], item["rows_after"]) for item in first["published"][:1]] == [
+        ("upsert", 0, 2)]
+    assert fct_orders_rows(workdir) == [("O1", 300.0), ("O2", 100.0)]  # the later of the two versions of O1
+    write_orders(workdir, [
+        order("O3", "C3", dt.datetime(2023, 1, 3, 12, 0), 400),  # new, and older than the newest row loaded
+        order("O1", "C1", january, 320, dt.datetime(2023, 2, 1, 9)),  # newer than O1's row, older than that one
+        order("O2", "C2", february, 90, february)])  # a version of O2 that is older than the loaded one
+    ingest(workdir, "orders")
+
+    second = run.dbt_build(workdir)
+
+    assert fct_orders_rows(workdir) == [("O1", 320.0), ("O2", 100.0), ("O3", 400.0)]
+    assert [(item["mode"], item["rows_before"], item["rows_after"]) for item in second["published"][:1]] == [
+        ("upsert", 2, 3)]
+
+
+# --------------------------------------------------------------------------- the churn example of issue #47
+
+
+def test_churn_counts_a_customer_in_the_month_they_stop_ordering(tmp_path):
+    """The first month has no row, three customers who stop after January make February 3 of 3, and so on."""
+    workdir = small_workdir(tmp_path)
     # (customer, order time): January C1 C2 C3, February C4, March C4 and C1, April C1, June C1.
     placed = [("C1", dt.datetime(2023, 1, 5, 12, 0)), ("C2", dt.datetime(2023, 1, 12, 13, 0)),
               ("C3", dt.datetime(2023, 1, 20, 19, 0)), ("C4", dt.datetime(2023, 2, 3, 12, 0)),
               ("C4", dt.datetime(2023, 3, 2, 12, 0)), ("C1", dt.datetime(2023, 3, 15, 20, 0)),
               ("C1", dt.datetime(2023, 4, 10, 12, 0)), ("C1", dt.datetime(2023, 6, 5, 12, 0))]
-    orders = [{"order_id": f"O{n}", "restaurant_id": "R01", "customer_id": customer, "order_ts": when,
-               "channel": "dine_in", "total_amount": 250, "updated_at": when + dt.timedelta(minutes=5)}
-              for n, (customer, when) in enumerate(placed, start=1)]
-    generate._write_csv(landing / "orders.csv", generate.ORDER_COLUMNS, orders,
-                        {"order_ts": generate._stamp, "updated_at": generate._stamp, "total_amount": generate._money})
+    write_orders(workdir, [order(f"O{n}", customer, when, 250) for n, (customer, when) in enumerate(placed, start=1)])
     for name in ("restaurants", "customers", "orders"):
         ingest(workdir, name)
 

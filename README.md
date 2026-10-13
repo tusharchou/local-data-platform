@@ -440,7 +440,8 @@ with DuckDBEngine() as duck:
 `open_lake(path)` registers every Iceberg table that some dataset configs name, so SQL can join them. `path` is a
 config file, a folder of configs, or a list of them, and `ldp query` uses it when it is given a folder or more than
 one config. Each table is a view named `namespace.table` and, when no other table has the same name, a view with the
-bare name. `snapshot_id=` or `as_of=` read one table as it was, and refuse a lake of several. Nothing is written and
+bare name. A namespace of several parts, such as `a.b`, is one schema named `a.b`, so SQL quotes it: `"a.b".events`.
+`snapshot_id=` or `as_of=` read one table as it was, and refuse a lake of several. Nothing is written and
 nothing is downloaded, and the MCP SDK is not needed.
 
 ```python

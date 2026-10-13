@@ -70,7 +70,7 @@ tables above become the six that a restaurant system would export. The sales tab
 Orders arrive in dated batches that every milestone reuses. Batch 1 covers January to June 2026. Batch 2 covers July
 2026 and five late orders from the end of June, which were placed on time and only synced in July. After that comes
 one drop file a day, from 1 to 7 August 2026. `updated_at` is when the restaurant system last changed an order, and
-the models load on it.
+the models use it to tell the versions of an order apart.
 
 **Churn.** A customer churns in the month they stop ordering. For month M, `customers_at_start` is the number of
 customers with an order in month M minus 1, `churned` is the number of those customers with no order in month M, and

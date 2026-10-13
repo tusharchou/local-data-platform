@@ -5,9 +5,13 @@
     meta={'ldp_publish': true, 'ldp_namespace': 'silver'}
 ) }}
 
--- An order is new, or changed, when its updated_at is later than the newest one already here. The late June orders
--- of batch 2 have an order_ts in June, so a filter on order_ts would miss them. updated_at, when the restaurant
--- system last changed the order, does not.
+-- The raw orders keep every version of an order, and this model keeps the latest. An incoming order is taken when
+-- this table has no row for it, or only an older version. That compares each order with its own earlier row, so an
+-- order that arrives late is taken whatever its order_ts or updated_at, and a newer version replaces its earlier
+-- row (delete+insert on order_id). A filter on order_ts, or on the newest updated_at in this table, would skip
+-- the late orders of batch 2, or a correction that reached the lake out of order.
+-- When several versions of an order arrive together, rank() keeps the newest. Two rows with the same order_id and
+-- the same updated_at are a duplicate that cannot be resolved, so both stay and the unique test fails the build.
 select
     order_id,
     restaurant_id,
@@ -16,7 +20,12 @@ select
     channel,
     total_amount,
     updated_at
-from {{ ref('stg_orders') }}
+from {{ ref('stg_orders') }} as incoming
 {% if is_incremental() %}
-where updated_at > (select max(updated_at) from {{ this }})
+where not exists (
+    select 1
+    from {{ this }} as loaded
+    where loaded.order_id = incoming.order_id and loaded.updated_at >= incoming.updated_at
+)
 {% endif %}
+qualify rank() over (partition by order_id order by updated_at desc) = 1

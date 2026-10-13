@@ -195,6 +195,17 @@ def test_a_table_in_the_main_namespace_has_one_name(tmp_path, lake):
         assert count(engine, "main.events") == 4 and count(engine, "events") == 4
 
 
+def test_a_namespace_of_several_parts_is_one_schema_and_is_quoted_in_sql(tmp_path, lake, reading):
+    add_table(tmp_path, "a.b", "events", 4)
+
+    with open_lake(lake) as engine:
+        assert "a.b.events" in engine.aliases
+        assert count(engine, '"a.b".events') == 4 and count(engine, '"a.b.events"') == 4
+        assert count(engine, "events") == 4 and count(engine, "raw.orders") == 3  # the bare name and the others
+        with pytest.raises(duckdb.Error):  # unquoted, a.b.events reads as catalog a, schema b
+            engine.query("SELECT * FROM a.b.events")
+
+
 def test_a_folder_may_hold_files_that_are_not_configs(lake):
     (lake / "notes.json").write_text(json.dumps({"hello": "world"}))
     (lake / "broken.json").write_text("{not json")

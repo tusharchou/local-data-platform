@@ -13,10 +13,10 @@ The orders arrive the way a restaurant system exports them, in dated batches:
 |  | synced in July, so their ``updated_at`` is in July |
 | ``2026-08-01`` to ``2026-08-07`` | one drop file a day, for the later milestones that schedule a load for each day |
 
-Each order has an ``updated_at``, the time the restaurant system last changed it. A model can load only what is
-new by keeping the orders whose ``updated_at`` is later than the newest one it has, and the late orders show why
-that, and not ``order_ts``, is the column to use. The late June orders belong to customers who looked as if they had
-stopped ordering in June, so when they arrive, June's churn falls.
+Each order has an ``updated_at``, the time the restaurant system last changed it, which tells the versions of an
+order apart. A model can load only what is new by taking an order it has no row for, or one that is newer than the
+row it has, and the late orders show why ``order_ts`` is the wrong column to filter on. The late June orders belong
+to customers who looked as if they had stopped ordering in June, so when they arrive, June's churn falls.
 
 The restaurants are written as an Excel workbook (``restaurants.xlsx``, with a title row above the header), as an
 export from a restaurant system often is, and everything else as CSV. Run it on its own to look at the files::

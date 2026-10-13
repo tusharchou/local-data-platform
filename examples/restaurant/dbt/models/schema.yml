@@ -62,13 +62,13 @@ models:
       - name: total_amount
         description: What the order cost, from its lines.
       - name: updated_at
-        description: When the restaurant system last changed the order. The incremental load keys on it.
+        description: When the restaurant system last changed the order. It tells the versions of an order apart.
 
   - name: fct_orders
     description: >
-      One row for each order, the latest version of it. It is loaded incrementally: only orders that are new, or
-      changed, since the last build are processed, and a changed order replaces its earlier row. Published to the
-      silver namespace of the lakehouse.
+      One row for each order, the latest version of it. It is loaded incrementally: an order is taken when the
+      table has no row for it yet, or only an older version, so a late order is taken too, and a changed order
+      replaces its earlier row. Published to the silver namespace of the lakehouse.
     columns:
       - name: order_id
         description: The order's key.

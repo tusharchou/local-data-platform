@@ -82,14 +82,16 @@ An example from [issue #47](https://github.com/tusharchou/local-data-platform/is
 | nobody in May | 2023-05 | 1 | 1 | 1.0 |
 | C1 in June | 2023-06 | 0 | 0 | null |
 
-## Late orders, and why `fct_orders` loads on `updated_at`
+## Late orders, and how `fct_orders` loads
 
 Batch 2 holds July's orders and five orders that were placed at the end of June and only reached the lake in July,
-because a till was offline. Their `order_ts` is in June and their `updated_at`, when the restaurant system last
-changed the order, is in July. `fct_orders` is incremental. It keeps the orders whose `updated_at` is later than the
-newest one it has, so it sees the late orders, where a filter on `order_ts` would have skipped them. A changed order
-replaces its earlier row (`unique_key='order_id'`, `delete+insert`), and `ldp dbt` publishes the model with an upsert,
-so only new and changed rows are written to Iceberg.
+because a till was offline. Their `order_ts` is in June. `fct_orders` is incremental. It takes an incoming order when
+it has no row for that order yet, or only an older version of it (a smaller `updated_at`, which is when the
+restaurant system last changed the order), and when several versions arrive together it keeps the newest. It compares
+each order with its own earlier row, so a late order is simply an order it has not seen. A filter on `order_ts`, or on
+the newest `updated_at` in the table, would have skipped the five late orders, and would drop a correction that
+reached the lake out of order. A changed order replaces its earlier row (`unique_key='order_id'`, `delete+insert`),
+and `ldp dbt` publishes the model with an upsert, so only new and changed rows are written to Iceberg.
 
 The five late orders belong to customers who had ordered in May and not in June, so June looked like they had left.
 When the orders arrive, June's churn falls from 21 of 74 customers to 16 of 74. The snapshot that `churn_by_month` had
@@ -128,10 +130,12 @@ in `dbt/tests/` checks that `churn_rate` is between 0 and 1. All of them pass on
 
 The quality checks of the ingest configs run before a batch is written, and look at one file: its types, its channels
 and whether a key is missing. dbt's tests look at everything that has been loaded. A batch that has the same new order
-twice passes the ingest and fails `unique_fct_orders_order_id` in the build, and the build then publishes nothing,
-because nothing is published unless every model and every test passed. `tests/test_restaurant_warehouse.py` does exactly
-that. A batch that repeats orders that were loaded before changes nothing downstream, because `fct_orders` only takes
-the orders that are newer than the newest it has.
+twice, with the same `updated_at`, passes the ingest and fails `unique_fct_orders_order_id` in the build, because
+`fct_orders` cannot tell which row is the later one. The build then publishes nothing, because nothing is published
+unless every model and every test passed, and `tests/test_restaurant_warehouse.py` does exactly that. Two versions of an
+order with different `updated_at` are not a duplicate, and the later one is kept. A batch that repeats orders that were
+loaded before changes nothing downstream, because `fct_orders` only takes orders it has no row for and versions that are
+newer than the one it has.
 
 ## The data
 
