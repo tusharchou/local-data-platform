@@ -28,6 +28,7 @@ from local_data_platform.config import Config
 from local_data_platform.exceptions import ConfigError, LDPError
 from local_data_platform.logger import get_logger
 from local_data_platform.paths import resolve_path
+from local_data_platform.spec import DEFAULT_KIND, kind_of_file
 
 logger = get_logger(__name__)
 
@@ -164,14 +165,19 @@ def is_allowed(identifier: str, patterns: Sequence[str] | None) -> bool:
 
 
 def config_files(path: str | os.PathLike) -> list[Path]:
-    """Return the config files at ``path``: the file itself, or the ``*.json`` files in a folder.
+    """Return the config files at ``path``: the file itself, or the dataset configs in a folder of ``*.json`` files.
+
+    In a folder, a file whose ``kind`` is not ``Pipeline``, such as a ``Workflow``, is not a dataset config and is
+    left out, so a folder can hold workflow files next to its configs. A file that is not valid JSON, or names a kind
+    that does not exist, is returned, and the caller reports it.
 
     Raises:
         ConfigError: If ``path`` does not exist.
     """
     resolved = resolve_path(path)
     if resolved.is_dir():
-        return sorted(item for item in resolved.glob("*.json") if item.is_file())
+        return sorted(item for item in resolved.glob("*.json")
+                      if item.is_file() and kind_of_file(item) in (DEFAULT_KIND, None))
     if resolved.is_file():
         return [resolved]
     raise ConfigError(f"config path not found: {resolved}")

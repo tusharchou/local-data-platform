@@ -191,8 +191,8 @@ call:
 | Command | What it does | From Python |
 |---|---|---|
 | `ldp catalog test SPEC` | Connect to a catalog (a spec file, or a config's catalog block) and list its namespaces and tables | `catalog.provider.create_catalog(spec).list_namespaces()` |
-| `ldp schema` | Print the `ldp/v1` JSON Schema for configs | `spec.json_schema()` |
-| `ldp plan CONFIG [--window START/END] [--json]` | Validate a config (or a folder of them) and print its spec hash, route, target, sinks and idempotency key | `spec.validate_spec(data)`, `spec.plan(config, window=...)` |
+| `ldp schema [--kind KIND]` | Print the `ldp/v1` JSON Schema of a kind of file, the dataset config by default | `spec.json_schema()`, `spec.kind_schema(kind)` |
+| `ldp plan CONFIG [--window START/END] [--json]` | Validate a config (or a folder of files, each as its kind) and print its spec hash, route, target, sinks and idempotency key | `spec.validate_spec(data)`, `spec.plan(config, window=...)` |
 | `ldp runs CONFIG [--run RUN_ID] [--events]` | List the runs a config's sinks recorded | `events.summarize_runs(events.read_jsonl(path))` or `read_iceberg_events(catalog)` |
 | `ldp commits CONFIG [--key KEY] [--branches]` | List the staged publishes on a table, newest first | `format.iceberg.commit.commit_log(iceberg.table())` and `staged_branches(...)` |
 | `ldp datasets pin\|list\|export` | Pin, list and export dataset versions | `datasets.pin`, `list_versions`, `export` |
@@ -213,6 +213,13 @@ and a `metadata` block:
 | `metadata.target.catalog` | `type` (`local` by default, `sql`, `rest` or `glue`) and that type's keys; see [Catalogs](#catalogs-and-object-storage) |
 | `metadata.quality` | `on_failure` (`fail` or `warn`) and a list of `checks`: `row_count`, `not_null`, `unique`, `accepted_values`, `range`, `freshness`, `schema`, and the temporal checks `monotonic`, `max_skew`, `rate_below` and `max_gap` |
 | `metadata.observability` | Where run events go, for example `{"sinks": ["iceberg", "jsonl"]}`. The default sends them nowhere |
+
+A config may also say `"apiVersion": "ldp/v1"` and `"kind": "Pipeline"`. `kind` says what a JSON file is. `Pipeline`
+is the default, so every config here is one, and a config has the same spec hash with and without it. `Workflow` is
+the second kind. A kind is written exactly as shown, so `workflow` fails with a message that names `Workflow`, and
+`Metrics`, `Report` and `Profiles` are reserved for later milestones. `ldp plan` validates each file of a folder as its
+kind, and `ldp query`, `ldp mcp --config` and `ldp dbt` read the tables of the `Pipeline` files only, so a folder can
+hold workflow files next to its configs. `ldp schema --kind Workflow` prints the schema of another kind.
 
 Partition transforms are `identity`, `year`, `month`, `day`, `hour`, `bucket[N]` and
 `truncate[W]`. On pyiceberg 0.10 and later, writing with any transform except `identity` needs the

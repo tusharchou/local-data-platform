@@ -103,7 +103,7 @@ def test_the_json_schema_rejects_what_validate_spec_rejects():
 
 def test_a_valid_spec_and_a_config_object_have_no_problems(tmp_path):
     assert validate_spec(SPEC) == []
-    config = Config.from_dict({k: v for k, v in SPEC.items() if k != "apiVersion"}, base_dir=tmp_path)
+    config = Config.from_dict(SPEC, base_dir=tmp_path)
     assert validate_spec(config) == []
 
 

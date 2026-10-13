@@ -1,7 +1,10 @@
 """The ``ldp/v1`` dataset spec: its JSON Schema, validation, hashing and idempotency keys.
 
 A spec is today's dataset config (see ``docs/design/v0_1_1.md``) with an optional
-``apiVersion: "ldp/v1"`` and an optional ``metadata.observability`` block::
+``apiVersion: "ldp/v1"``, an optional ``kind`` and an optional ``metadata.observability`` block. The ``kind``
+says what a JSON file is. ``Pipeline`` is the default, so every existing config is one, and ``Workflow`` is the
+second kind. Each kind has a validator and a JSON Schema in a small registry, and ``register_kind`` adds more,
+which the later milestones do for metrics, reports and profiles::
 
     from local_data_platform.spec import idempotency_key, spec_hash, validate_spec
 
@@ -11,7 +14,8 @@ A spec is today's dataset config (see ``docs/design/v0_1_1.md``) with an optiona
 
 ``spec_hash`` is the sha256 of the canonical JSON of the pipeline-relevant fields:
 ``apiVersion``, ``identifier``, ``when``, ``how`` and ``metadata`` except
-``observability`` (where events go doesn't change what a run does). Keys are
+``observability`` (where events go doesn't change what a run does) and ``kind`` (a pipeline hashes the same
+with ``"kind": "Pipeline"`` as without it). Keys are
 sorted, there is no whitespace, formats are upper-case, write modes lower-case, the
 quality block is normalised to ``{"on_failure", "checks"}``, and local paths are
 made relative to the config's folder. The descriptive ``who``, ``what`` and
@@ -29,7 +33,8 @@ import json
 import os
 import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any
 
@@ -38,7 +43,13 @@ from local_data_platform.exceptions import ConfigError, PipelineNotFound
 API_VERSION = "ldp/v1"
 """The spec version this library reads and writes."""
 
-TOP_LEVEL_KEYS = ("apiVersion", "identifier", "who", "what", "where", "when", "how", "metadata")
+DEFAULT_KIND = "Pipeline"
+"""The kind of a file that has no ``kind``: a dataset config."""
+
+RESERVED_KINDS = {"Metrics": "0.1.4", "Report": "0.1.6", "Profiles": "0.2.0"}
+"""Kinds that later milestones register through :func:`register_kind`, and the version that does."""
+
+TOP_LEVEL_KEYS = ("apiVersion", "kind", "identifier", "who", "what", "where", "when", "how", "metadata")
 FORMATS = ("CSV", "PARQUET", "JSON", "ICEBERG", "DUCKDB", "XLSX")
 WRITE_MODES = ("append", "overwrite", "upsert")
 ON_FAILURE = ("fail", "warn")
@@ -145,7 +156,8 @@ def canonical_spec(config: Any, *, base_dir: str | os.PathLike | None = None) ->
 
     Returns:
         ``{"apiVersion", "identifier", "when"?, "how"?, "metadata"}`` with the
-        normalisations described in the module docstring.
+        normalisations described in the module docstring. ``kind`` is not in it, so a config has the
+        same hash with and without ``"kind": "Pipeline"``.
     """
     data = _spec_dict(config)
     base = _base_dir(config, base_dir)
@@ -297,6 +309,132 @@ def idempotency_key(config: Any, window: Any = None, *, table_uuid: str | None =
     return hashlib.sha256(canonical_json([API_VERSION, "idempotency", pipeline, target, start, end])).hexdigest()
 
 
+# ---------------------------------------------------------------------- kinds
+
+
+@dataclass(frozen=True)
+class SpecKind:
+    """What the registry holds for one kind of file.
+
+    Attributes:
+        name: The kind, as a file writes it in ``kind``.
+        validate: Takes the spec as a mapping and returns its problems, as :func:`validate_spec` does.
+        json_schema: Returns the kind's JSON Schema, which ``ldp schema --kind NAME`` prints.
+        describe: Returns what ``ldp plan`` reports about a valid file of this kind, besides its name and
+            kind, as a dict. Optional.
+    """
+
+    name: str
+    validate: Callable[[Mapping[str, Any]], list[ConfigError]]
+    json_schema: Callable[[], dict[str, Any]]
+    describe: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None
+
+
+_KINDS: dict[str, SpecKind] = {}
+_KIND_NAME = re.compile(r"^[A-Z][A-Za-z0-9]*$")
+
+
+def register_kind(name: str, *, validate: Callable[[Mapping[str, Any]], list[ConfigError]],
+                  json_schema: Callable[[], dict[str, Any]],
+                  describe: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
+                  replace: bool = False) -> SpecKind:
+    """Add a kind of file to the registry, so ``validate_spec``, ``plan`` and ``ldp schema --kind`` know it.
+
+    Args:
+        name: The kind's name. It starts with a capital letter and has only letters and digits.
+        validate: Checks a spec of this kind and returns its problems.
+        json_schema: Returns the kind's JSON Schema.
+        describe: Returns what ``plan`` reports about a valid file of this kind.
+        replace: Replace a kind that is already registered, as a module does when it takes over the
+            validator of a kind that a smaller one registered first.
+
+    Returns:
+        The registered kind.
+
+    Raises:
+        ValueError: If the name is not a kind name, or it is registered and ``replace`` is false.
+    """
+    if not isinstance(name, str) or not _KIND_NAME.match(name):
+        raise ValueError(f"a kind name starts with a capital letter and has only letters and digits, got {name!r}")
+    if name in _KINDS and not replace:
+        raise ValueError(f"the kind {name!r} is already registered; pass replace=True to replace it")
+    _KINDS[name] = SpecKind(name, validate, json_schema, describe)
+    return _KINDS[name]
+
+
+def registered_kinds() -> list[str]:
+    """The registered kinds, in the order they were registered."""
+    return list(_KINDS)
+
+
+def _unknown_kind(value: Any) -> ConfigError:
+    known = registered_kinds()
+    if isinstance(value, str):
+        for name in (*known, *RESERVED_KINDS):
+            if name.lower() == value.strip().lower() and name != value:
+                if name in _KINDS:
+                    return ConfigError(f"unknown kind {value!r}; did you mean {name!r}? Kind names are written "
+                                       f"exactly as in {known}")
+                return ConfigError(f"unknown kind {value!r}; did you mean {name!r}? That kind is reserved for "
+                                   f"{RESERVED_KINDS[name]} and is not available yet. The kinds are {known}")
+        if value in RESERVED_KINDS:
+            return ConfigError(f"kind {value!r} is reserved for {RESERVED_KINDS[value]} and is not available yet. "
+                               f"The kinds are {known}")
+    return ConfigError(f"unknown kind {value!r}; the kinds are {known}")
+
+
+def kind_of(data: Any) -> str:
+    """The kind a spec says it is: its ``kind``, or ``Pipeline`` when it has none.
+
+    Args:
+        data: A spec dict or a :class:`~local_data_platform.Config`.
+
+    Returns:
+        A registered kind.
+
+    Raises:
+        ConfigError: If ``kind`` is not a string or not a registered kind. A name in the wrong case fails with
+            the right spelling, and a kind that a later milestone adds fails with the version.
+        TypeError: If ``data`` is neither a spec dict nor a ``Config``.
+    """
+    value = _spec_dict(data).get("kind", DEFAULT_KIND)
+    if not isinstance(value, str):
+        raise ConfigError(f"kind must be a string, got {value!r}")
+    if value not in _KINDS:
+        raise _unknown_kind(value)
+    return value
+
+
+def kind_of_file(path: str | os.PathLike) -> str | None:
+    """The kind of the JSON file at ``path``, or ``None`` when it cannot be read as a spec.
+
+    A file that has no ``kind`` is a ``Pipeline``. ``None`` means the file is not JSON, is not an object, or names a
+    kind that is not registered. Code that reads a folder of files uses it to pick the files of one kind and to let
+    the rest report their own problem.
+    """
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, Mapping):
+        return None
+    try:
+        return kind_of(data)
+    except ConfigError:
+        return None
+
+
+def kind_schema(kind: str = DEFAULT_KIND) -> dict[str, Any]:
+    """The JSON Schema of one kind of file.
+
+    Raises:
+        ConfigError: If ``kind`` is not a registered kind.
+    """
+    if not isinstance(kind, str) or kind not in _KINDS:
+        raise _unknown_kind(kind)
+    return _KINDS[kind].json_schema()
+
+
 # ---------------------------------------------------------------------- JSON Schema
 
 
@@ -330,6 +468,8 @@ def json_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "properties": {
             "apiVersion": {"const": API_VERSION, "default": API_VERSION},
+            "kind": {"const": DEFAULT_KIND, "default": DEFAULT_KIND,
+                     "description": "What the file is. A dataset config is a Pipeline, which is the default."},
             "identifier": {**non_empty, "description": "The pipeline's id."},
             "who": {**string, "description": "Who owns the dataset."},
             "what": {**string, "description": "What the dataset holds."},
@@ -656,7 +796,8 @@ def _check_secrets(problems: _Problems, value: Any, where: str, key: str = "") -
 def validate_spec(data: Any) -> list[ConfigError]:
     """Check a spec and return every problem found, without raising.
 
-    It checks the shape of the spec (top-level keys, ``apiVersion``, the source and
+    It reads the spec's ``kind`` (``Pipeline`` when it has none) and checks the spec as that kind. For a
+    pipeline it checks the shape of the spec (top-level keys, ``apiVersion``, the source and
     target blocks by format, catalogs by type, write modes, join columns, partition
     transforms), builds every quality check with the same code a run uses, parses
     ``metadata.observability``, and rejects values that look like inline secrets
@@ -670,11 +811,20 @@ def validate_spec(data: Any) -> list[ConfigError]:
         One :class:`~local_data_platform.exceptions.ConfigError` per problem, each
         message starting with the JSON path of the offending value. Empty when valid.
     """
-    problems = _Problems()
     try:
         spec = _spec_dict(data)
     except TypeError as exc:
         return [ConfigError(f"spec must be a JSON object: {exc}")]
+    try:
+        kind = kind_of(spec)
+    except ConfigError as exc:
+        return [ConfigError(f"kind: {exc}")]
+    return _KINDS[kind].validate(spec)
+
+
+def _validate_pipeline(spec: Mapping[str, Any]) -> list[ConfigError]:
+    """The problems of a dataset config, which is the kind ``Pipeline``."""
+    problems = _Problems()
     unknown = sorted(set(map(str, spec)) - set(TOP_LEVEL_KEYS))
     if unknown:
         problems.add("", f"unknown top-level keys {unknown}; allowed: {list(TOP_LEVEL_KEYS)}")
@@ -701,6 +851,83 @@ def validate_spec(data: Any) -> list[ConfigError]:
     return problems.errors
 
 
+WORKFLOW_KEYS = ("apiVersion", "kind", "identifier", "who", "what", "where", "when", "how", "metadata", "tasks")
+"""The top-level keys of a ``Workflow`` file."""
+
+
+def _validate_workflow(spec: Mapping[str, Any]) -> list[ConfigError]:
+    """The problems in the envelope of a workflow file: its keys, its identifier and the ids of its tasks.
+
+    What a task runs is checked by the module that runs workflows, which registers its own validator for the kind.
+    """
+    problems = _Problems()
+    unknown = sorted(set(map(str, spec)) - set(WORKFLOW_KEYS))
+    if unknown:
+        problems.add("", f"unknown top-level keys {unknown}; allowed: {list(WORKFLOW_KEYS)}")
+    if "apiVersion" in spec and spec["apiVersion"] != API_VERSION:
+        problems.add("apiVersion", f"must be {API_VERSION!r}, got {spec['apiVersion']!r}")
+    _check_string(problems, spec, "identifier", "", required=True)
+    for key in ("who", "what", "where", "when", "how"):
+        if key in spec and not isinstance(spec[key], str):
+            problems.add(key, f"must be a string, got {type(spec[key]).__name__}")
+    if "metadata" in spec and not isinstance(spec["metadata"], Mapping):
+        problems.add("metadata", f"must be an object, got {type(spec['metadata']).__name__}")
+    tasks = spec.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        problems.add("tasks", "is required and must be a list of at least one task")
+    else:
+        seen: set[str] = set()
+        for position, task in enumerate(tasks):
+            here = f"tasks[{position}]"
+            if not isinstance(task, Mapping):
+                problems.add(here, "must be an object with an 'id'")
+                continue
+            task_id = task.get("id")
+            if not isinstance(task_id, str) or not task_id.strip():
+                problems.add(f"{here}.id", "is required and must be a non-empty string")
+            elif task_id in seen:
+                problems.add(f"{here}.id", f"{task_id!r} is the id of an earlier task")
+            else:
+                seen.add(task_id)
+    _check_secrets(problems, spec, "")
+    return problems.errors
+
+
+def _workflow_schema() -> dict[str, Any]:
+    string = {"type": "string"}
+    non_empty = {"type": "string", "minLength": 1}
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://local-data-platform.readthedocs.io/schemas/ldp-v1-workflow.json",
+        "title": f"local-data-platform workflow ({API_VERSION})",
+        "type": "object",
+        "required": ["kind", "identifier", "tasks"],
+        "additionalProperties": False,
+        "properties": {
+            "apiVersion": {"const": API_VERSION, "default": API_VERSION},
+            "kind": {"const": "Workflow", "description": "A workflow file says so, because a file without a kind "
+                                                         "is a Pipeline."},
+            "identifier": {**non_empty, "description": "The workflow's id."},
+            "who": {**string, "description": "Who owns the workflow."},
+            "what": {**string, "description": "What the workflow does."},
+            "where": {**string, "description": "Where its data comes from."},
+            "when": {**string, "description": "How often it runs, e.g. 'daily'."},
+            "how": {**string, "description": "How it runs, e.g. 'batch'."},
+            "metadata": {"type": "object"},
+            "tasks": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "object", "required": ["id"], "properties": {"id": non_empty}},
+                "description": "The tasks, each with a unique id.",
+            },
+        },
+    }
+
+
+def _describe_workflow(spec: Mapping[str, Any]) -> dict[str, Any]:
+    return {"tasks": [task["id"] for task in spec["tasks"]]}
+
+
 # ---------------------------------------------------------------------- plan
 
 
@@ -723,10 +950,12 @@ def plan(config: Any, *, window: Any = None, base_dir: str | os.PathLike | None 
             or the config's ``base_dir``).
 
     Returns:
-        ``{"config", "identifier", "valid", "errors", "api_version", "spec_hash",
+        ``{"config", "identifier", "kind", "valid", "errors", "api_version", "spec_hash",
         "route", "pipeline", "target", "write_mode", "catalog_type", "checks",
         "on_failure", "sinks", "window", "idempotency_key"}``. ``errors`` lists
-        messages; the other fields are ``None`` when they can't be worked out.
+        messages; the other fields are ``None`` when they can't be worked out. A file of another kind than
+        ``Pipeline`` has no route, target or hash, and the kind adds what it reports, such as the ``tasks`` of
+        a ``Workflow``.
     """
     label = None
     if isinstance(config, (str, os.PathLike)):
@@ -740,7 +969,8 @@ def plan(config: Any, *, window: Any = None, base_dir: str | os.PathLike | None 
         data, errors = config, []
         base = _base_dir(config, base_dir)
     result: dict[str, Any] = {
-        "config": label, "identifier": None, "valid": False, "errors": [], "api_version": API_VERSION,
+        "config": label, "identifier": None, "kind": None, "valid": False, "errors": [],
+        "api_version": API_VERSION,
         "spec_hash": None, "route": None, "pipeline": None, "target": None, "write_mode": None,
         "catalog_type": None, "checks": 0, "on_failure": None, "sinks": [], "window": None, "idempotency_key": None,
     }
@@ -750,8 +980,16 @@ def plan(config: Any, *, window: Any = None, base_dir: str | os.PathLike | None 
         spec = _spec_dict(data)
         result["identifier"] = spec.get("identifier")
         result["api_version"] = spec.get("apiVersion") or API_VERSION
+        try:
+            result["kind"] = kind_of(spec)
+        except ConfigError:
+            pass  # validate_spec reports it, and the kind stays None
     if not errors:
-        errors = _describe(result, _spec_dict(data), base, window)
+        kind = _KINDS[result["kind"]]
+        if kind.name == DEFAULT_KIND:
+            errors = _describe(result, _spec_dict(data), base, window)
+        elif kind.describe is not None:
+            result.update(kind.describe(_spec_dict(data)))
     result["errors"] = [str(error) for error in errors]
     result["valid"] = not errors
     return result
@@ -810,7 +1048,7 @@ def _describe(result: dict[str, Any], spec: Mapping[str, Any], base: Path | None
 
 
 def _cmd_schema(args: argparse.Namespace) -> int:
-    print(json.dumps(json_schema(), indent=2), file=sys.stdout)
+    print(json.dumps(kind_schema(getattr(args, "kind", None) or DEFAULT_KIND), indent=2), file=sys.stdout)
     return 0
 
 
@@ -837,7 +1075,7 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     else:
         from local_data_platform.cli import format_table
 
-        rows = [{"config": Path(item["config"]).name, "identifier": item["identifier"],
+        rows = [{"config": Path(item["config"]).name, "kind": item["kind"], "identifier": item["identifier"],
                  "valid": item["valid"], "route": item["route"], "pipeline": item["pipeline"],
                  "target": item["target"], "spec_hash": (item["spec_hash"] or "")[:12] or None}
                 for item in plans]
@@ -854,6 +1092,15 @@ def _print_plan(item: Mapping[str, Any]) -> None:
         print(f"{item['config']}: {count} problem{'s' if count != 1 else ''}:", file=sys.stderr)
         for error in item["errors"]:
             print(f"  - {error}", file=sys.stderr)
+        return
+    if item["kind"] != DEFAULT_KIND:
+        lines = [("config", item["config"]), ("identifier", item["identifier"]), ("kind", item["kind"]),
+                 ("apiVersion", item["api_version"])]
+        if "tasks" in item:
+            lines.append(("tasks", ", ".join(item["tasks"])))
+        width = max(len(name) for name, _ in lines)
+        for name, value in lines:
+            print(f"{name.ljust(width)}  {value}", file=sys.stdout)
         return
     lines = [
         ("config", item["config"]),
@@ -882,26 +1129,38 @@ def add_cli(subparsers: Any, parents: Sequence[argparse.ArgumentParser] = ()) ->
         subparsers: What ``ArgumentParser.add_subparsers()`` returned.
         parents: Parent parsers to inherit options from (e.g. the CLI's ``-v``).
     """
-    schema = subparsers.add_parser("schema", parents=list(parents), help=f"print the {API_VERSION} JSON Schema",
-                                   description=f"Print the JSON Schema of an {API_VERSION} dataset spec.")
+    schema = subparsers.add_parser(
+        "schema", parents=list(parents), help=f"print the {API_VERSION} JSON Schema",
+        description=f"Print the JSON Schema of an {API_VERSION} file. With no --kind it is the schema of a dataset "
+                    f"config, which is the kind {DEFAULT_KIND}.")
+    schema.add_argument("--kind", metavar="KIND", default=DEFAULT_KIND,
+                        help=f"the kind of file: {', '.join(registered_kinds())} (default {DEFAULT_KIND})")
     schema.set_defaults(handler=_cmd_schema)
 
     plan_parser = subparsers.add_parser(
         "plan", parents=list(parents), help="validate a config and show what a run would do",
         description="Validate CONFIG (a JSON dataset config, or a folder of them) without running it, then print "
-                    "its spec hash, route, pipeline, target and sinks. Exits with 1 if any config is invalid.")
-    plan_parser.add_argument("config", metavar="CONFIG", help="a JSON dataset config, or a folder of *.json configs")
+                    "its spec hash, route, pipeline, target and sinks. Each file is validated as its kind, so a "
+                    "workflow file in the folder is checked as a workflow. Exits with 1 if any file is invalid.")
+    plan_parser.add_argument("config", metavar="CONFIG", help="a JSON dataset config, or a folder of *.json files")
     plan_parser.add_argument("--window", metavar="START/END",
                              help="a logical window (ISO-8601 interval); prints its idempotency key")
     plan_parser.add_argument("--json", action="store_true", help="print the plan as JSON")
     plan_parser.set_defaults(handler=_cmd_plan)
 
 
+register_kind(DEFAULT_KIND, validate=_validate_pipeline, json_schema=json_schema)
+register_kind("Workflow", validate=_validate_workflow, json_schema=_workflow_schema, describe=_describe_workflow)
+
 __all__ = [
     "API_VERSION",
+    "DEFAULT_KIND",
     "FORMATS",
     "HASH_EXCLUDED_METADATA",
+    "RESERVED_KINDS",
+    "SpecKind",
     "TOP_LEVEL_KEYS",
+    "WORKFLOW_KEYS",
     "WRITE_MODES",
     "add_cli",
     "canonical_json",
@@ -909,8 +1168,13 @@ __all__ = [
     "format_instant",
     "idempotency_key",
     "json_schema",
+    "kind_of",
+    "kind_of_file",
+    "kind_schema",
     "parse_window",
     "plan",
+    "register_kind",
+    "registered_kinds",
     "spec_hash",
     "target_identity",
     "validate_spec",
