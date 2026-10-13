@@ -52,7 +52,8 @@ def open_lake(path: str | os.PathLike | Iterable[str | os.PathLike], *, install_
 
     Returns:
         The engine, open. Close it, or use it in a ``with`` block. Every table is registered as
-        ``namespace.table`` and, when its name is unique among the tables, as the bare name too.
+        ``namespace.table`` and, when its name is unique among the tables, as the bare name too. A namespace of
+        several parts, ``a.b``, is one schema named ``a.b``, so SQL quotes it: ``"a.b".table``.
 
     Raises:
         ConfigError: If a path does not exist or an explicitly named config is invalid, if both

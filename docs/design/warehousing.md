@@ -190,10 +190,11 @@ publishes the model again. Paths in it are relative to `config_dir`.
 
 **Order and failure.** Every generated config is validated before the first write, so a bad meta key
 fails the command with the model's name and nothing published. Models then publish in dependency
-order. Each model's write is one Iceberg commit, but a command that publishes several models is not
-atomic. If a write fails, for example on a blocked quality check, the command stops, says which
-models were published and which were not, prints the failed model's config so it can be run by hand
-with `ldp run`, and exits with 1.
+order, and where that leaves a choice, by unique id (`model.<package>.<name>`), so a build publishes in the same
+order on every machine. Each model's write is one Iceberg commit, but a command that publishes several models is not
+atomic. If a write fails, for example on a blocked quality check, or because the model has no rows (an
+empty table is not written), the command stops, says which models were published and which were not,
+prints the failed model's config so it can be run by hand with `ldp run`, and exits with 1.
 
 **Schema changes.** The columns of a published model can change between builds, and Iceberg decides
 what is allowed. A new column is added to the table by an `overwrite`. An `upsert` fails when the

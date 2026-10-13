@@ -4,6 +4,7 @@ Everything here runs without dbt: the plan is built from a ``manifest.json`` and
 as dicts, shaped like the files dbt 1.12 writes. The tests that use dbt end to end are in ``test_dbt_cli.py``.
 """
 
+import itertools
 import json
 import os
 import time
@@ -361,6 +362,26 @@ def test_models_are_published_after_the_models_they_depend_on(project):
     names = [item.model for item in items]
     assert set(names) == {"gold", "silver", "independent"}
     assert names.index("silver") < names.index("gold")
+
+
+def test_models_that_do_not_depend_on_each_other_are_published_by_name_in_any_manifest_order(project):
+    # dbt lists models in the order it found their files, which differs between file systems: the order that the
+    # restaurant example's tests expect held on macOS and not on the Linux runner. The order must not follow it.
+    names = ["gold_totals", "churn", "revenue", "alpha"]
+
+    for permutation in itertools.permutations(names):
+        items = plan(project, *(model(name, meta=PUBLISH) for name in permutation))
+
+        assert [item.model for item in items] == sorted(names), permutation
+
+
+def test_dependencies_come_first_in_any_manifest_order(project):
+    depends = {"a_last": ["b_middle"], "b_middle": ["c_first"], "c_first": [], "d_other": []}
+
+    for permutation in itertools.permutations(depends):
+        items = plan(project, *(model(name, meta=PUBLISH, depends_on=depends[name]) for name in permutation))
+
+        assert [item.model for item in items] == ["c_first", "b_middle", "a_last", "d_other"], permutation
 
 
 def test_the_order_goes_through_models_that_are_not_published(project):

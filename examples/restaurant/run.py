@@ -109,14 +109,21 @@ def prepare_workdir(workdir: str | Path) -> Path:
     copies in ``<workdir>/config`` also work with the CLI. The dbt project writes its published configs next to them.
 
     Raises:
-        ValueError: If the folder is not empty and was not made by this example.
+        ValueError: If the folder is not empty and was not made by this example, or one of its folders cannot be
+            cleared. A run on top of what a failed clearing left behind would mix old files with new ones.
     """
     workdir = Path(workdir).expanduser().resolve()
     if workdir.is_dir() and any(workdir.iterdir()):
         if not (workdir / MARKER).is_file():
             raise ValueError(f"{workdir} is not empty and was not created by this example; pass an empty --workdir")
         for folder in WORKDIR_FOLDERS:
-            shutil.rmtree(workdir / folder, ignore_errors=True)
+            try:
+                shutil.rmtree(workdir / folder)
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                raise ValueError(f"could not clear {workdir / folder} ({error}); remove it, "
+                                 f"or pass another --workdir") from error
     workdir.mkdir(parents=True, exist_ok=True)
     (workdir / MARKER).write_text("Created by examples/restaurant/run.py, which clears this folder on each run.\n")
     shutil.copytree(CONFIG_DIR, workdir / "config")
@@ -153,8 +160,16 @@ def shown(path: Path) -> str:
     return str(path) if relative.startswith("..") else relative
 
 
+class StepFailed(RuntimeError):
+    """An ``ldp`` command of the walkthrough exited with a failure."""
+
+
 def ldp(out: Narrator, *argv: Any) -> tuple[int, str]:
-    """Run an ``ldp`` command in this process, print it and what it printed, and return ``(status, stdout)``."""
+    """Run an ``ldp`` command in this process, print it and what it printed, and return ``(status, stdout)``.
+
+    Raises:
+        StepFailed: If the command failed. Its message is what the command printed to stderr.
+    """
     arguments = [str(item) for item in argv]
     typed = [shown(item) if isinstance(item, Path) else str(item) for item in argv]  # as a person would type it
     out.say(f"   $ {' '.join(['ldp'] + [f'"{item}"' if ' ' in item else item for item in typed])}")
@@ -164,7 +179,7 @@ def ldp(out: Narrator, *argv: Any) -> tuple[int, str]:
     for line in stdout.getvalue().splitlines():
         out.say(f"     {line}")
     if status != 0:
-        raise RuntimeError(f"ldp {' '.join(arguments[:2])} failed: {stderr.getvalue().strip()}")
+        raise StepFailed(f"ldp {' '.join(arguments[:2])} failed: {stderr.getvalue().strip()}")
     return status, stdout.getvalue()
 
 
@@ -277,7 +292,7 @@ def run_warehouse(workdir: Path, dataset: Any, out: Narrator) -> dict[str, Any]:
     result = run("orders")
     out.say(f"   raw.orders: appended {result.rows_written} rows, now {result.write_result.rows_after}. The "
             f"{len(late)} late orders were placed in June and reached the lake in July,")
-    out.say("   so their order_ts is old and their updated_at is new. fct_orders loads on updated_at, so it sees them.")
+    out.say("   so their order_ts is old. fct_orders takes every order it has no row for, so it sees them.")
     out.say(f"   $ ldp dbt build {shown(workdir / 'dbt')}")
     second = dbt_build(workdir)
     say_build(out, second)
@@ -329,9 +344,10 @@ def run_restaurant(workdir: str | Path = DEFAULT_WORKDIR, *, layer: str = "wareh
         A JSON-friendly summary of the run: row counts, builds, and the churn tables.
 
     Raises:
-        ValueError: If ``layer`` is not a layer, or the work folder is not this example's.
+        ValueError: If ``layer`` is not a layer, or the work folder is not this example's or cannot be cleared.
         EngineNotFound: If the dbt or the excel extra is missing.
         BuildFailed: If ``ldp dbt build`` fails.
+        StepFailed: If another ``ldp`` command of the walkthrough fails.
     """
     if layer not in LAYERS:
         raise ValueError(f"unknown layer {layer!r}; the layers are {list(LAYERS)}")
@@ -372,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         summary = run_restaurant(args.workdir, layer=args.layer, seed=args.seed, quiet=args.quiet)
-    except (ValueError, EngineNotFound, BuildFailed) as error:
+    except (ValueError, EngineNotFound, BuildFailed, StepFailed) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     if args.quiet:

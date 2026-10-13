@@ -6,7 +6,9 @@ dbt and checks the numbers it prints.
 
 import csv
 import datetime as dt
+import os
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -89,7 +91,7 @@ def test_the_late_orders_reach_the_lake_in_july(dataset):
     late = [order for order in dataset.batch_orders("batch2") if order["order_ts"].month == 6]
 
     assert all(order["updated_at"].month == 7 and order["updated_at"].day <= 3 for order in late)
-    # So an incremental load on updated_at sees them, and a load on order_ts would miss them.
+    # Batch 2 is newer than batch 1 on updated_at, yet the late orders carry the order_ts of June.
     assert max(order["updated_at"] for order in dataset.batch_orders("batch1")) < min(
         order["updated_at"] for order in dataset.batch_orders("batch2"))
 
@@ -278,6 +280,38 @@ def test_a_folder_the_example_did_not_make_is_refused(tmp_path):
     assert [path.name for path in tmp_path.iterdir()] == ["mine.txt"]
 
 
+def test_a_folder_that_cannot_be_cleared_stops_the_run_and_names_it(tmp_path):
+    first = run.prepare_workdir(tmp_path / "work")
+    stuck = first / "warehouse" / "locked"
+    stuck.mkdir(parents=True)
+    (stuck / "old.parquet").write_text("old")
+    stuck.chmod(0o500)  # the files in it cannot be removed
+    try:
+        if os.access(stuck, os.W_OK):
+            pytest.skip("this user can remove files from a read-only folder")
+        with pytest.raises(ValueError, match=r"could not clear .*warehouse \(.*Permission denied.*\); remove it, "
+                                             r"or pass another --workdir"):
+            run.prepare_workdir(first)
+    finally:
+        stuck.chmod(0o700)
+
+    assert (stuck / "old.parquet").read_text() == "old"  # nothing was run on top of it
+
+
+def test_a_failing_ldp_step_ends_the_example_with_a_message_and_exit_1(tmp_path, monkeypatch, capsys):
+    def failing_ldp(argv):
+        print("ldp: error: no such table", file=sys.stderr)
+        return 2
+
+    monkeypatch.setattr(run, "require_extras", lambda: None)
+    monkeypatch.setattr(run, "ldp_main", failing_ldp)
+    monkeypatch.setattr(run, "run_warehouse", lambda workdir, dataset, out: run.ldp(out, "query", "config", "SELECT 1"))
+
+    assert run.main(["--workdir", str(tmp_path / "work"), "--quiet"]) == 1
+
+    assert capsys.readouterr().err == "error: ldp query config failed: ldp: error: no such table\n"
+
+
 def test_an_unknown_layer_is_refused(tmp_path):
     with pytest.raises(ValueError, match=r"unknown layer 'gold'; the layers are \['warehouse'\]"):
         run.run_restaurant(tmp_path / "work", layer="gold", quiet=True)
@@ -348,12 +382,15 @@ def test_the_other_models_are_not_published(model):
     assert "ldp_publish" not in model_sql(model)
 
 
-def test_fct_orders_loads_incrementally_on_updated_at_with_delete_and_insert():
-    sql = model_sql("fct_orders")
+def test_fct_orders_compares_each_order_with_its_own_row_and_keeps_the_newest_version():
+    sql = " ".join(model_sql("fct_orders").split())
 
     assert "materialized='incremental'" in sql and "unique_key='order_id'" in sql
     assert "incremental_strategy='delete+insert'" in sql
-    assert "where updated_at > (select max(updated_at) from {{ this }})" in sql
+    assert ("where not exists ( select 1 from {{ this }} as loaded where loaded.order_id = incoming.order_id "
+            "and loaded.updated_at >= incoming.updated_at )") in sql
+    assert "qualify rank() over (partition by order_id order by updated_at desc) = 1" in sql
+    assert "max(" not in sql  # a load on the newest value in the table would skip the late orders
 
 
 def test_the_churn_model_and_its_description_say_what_churn_is():
