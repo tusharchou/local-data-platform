@@ -15,7 +15,7 @@ they are written, in one folder, and the run stops at the first one that fails. 
 * ``<!-- docs-runner: output -->`` on the line before a fenced block of any language says what the block before it
   prints. Every line must appear in the block's stdout, one after the other (for ``python`` blocks that run together,
   in what they printed all together). ``...`` inside a line stands for any text, a line that is only ``...`` stands
-  for any number of lines, and the spaces around a line are ignored.
+  for any number of lines, and the spaces around a line and the blank lines are ignored.
 
 ``run_page`` is what a test calls. A block that fails, or prints something else than the page says, raises
 ``DocsBlockFailed``, whose message names the page and the line of the block and shows its code and what it printed.
@@ -257,10 +257,10 @@ def output_matches(expected: str, actual: str) -> bool:
     """Whether every line of ``expected`` appears in ``actual``, in order and one right after the other.
 
     ``...`` inside a line stands for any text. A line that is only ``...`` stands for any number of lines,
-    including none. The spaces around a line, and the blank lines of ``expected``, do not count.
+    including none. The spaces around a line and the blank lines, in ``expected`` and in ``actual``, do not count.
     """
     wanted = [line.strip() for line in expected.splitlines() if line.strip()]
-    have = [line.strip() for line in actual.splitlines()]
+    have = [line.strip() for line in actual.splitlines() if line.strip()]
     return _match(wanted, 0, have, 0, True)
 
 

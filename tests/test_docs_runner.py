@@ -449,6 +449,7 @@ def test_only_stdout_counts_as_the_output(tmp_path):
     ("... PASS=33 ...", "09:02:36  Done. PASS=33 WARN=0", True),
     ("  padded  ", "padded", True),                           # spaces around a line do not count
     ("a\n\nb", "a\nb", True),                                 # nor do blank lines of the shown output
+    ("a\nb", "a\n\nb", True),                                 # or of what the command printed, as ls prints them
     ("a.b", "axb", False),                                    # a dot is a dot
     ("a (b) [c]", "a (b) [c]", True),                         # and so are the other regular expression characters
     ("b\na", "a\nb", False),                                  # the order counts
