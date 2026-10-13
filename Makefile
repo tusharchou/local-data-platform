@@ -32,7 +32,7 @@ REST_DIR     ?= $(DEMO_DIR)/rest
 REST_CONFIG  ?= $(REST_DIR)/rides_rest.json
 
 .PHONY: help all install lint test demo build smoke docs serve-docs generate-docs clean \
-	demo-robotics demo-agent demo-spark demo-rest demo-all spark-test rest-test check-scala-cli
+	demo-robotics demo-agent demo-spark demo-rest demo-all spark-test rest-test dbt-test check-scala-cli
 
 help:
 	@echo "Usage: make [target]"
@@ -51,6 +51,7 @@ help:
 	@echo "  demo-all       demo, demo-robotics and demo-agent, plus demo-spark and demo-rest when scala-cli is found"
 	@echo "  spark-test     Run the opt-in Spark integration tests (LDP_RUN_SPARK=1 pytest -m spark)"
 	@echo "  rest-test      Run the opt-in REST catalog integration tests (LDP_RUN_REST=1 pytest -m rest)"
+	@echo "  dbt-test       Run the tests that need the dbt extra (pytest -m dbt; offline, install .[dev,dbt] first)"
 	@echo "  build          Build the sdist and wheel into dist/"
 	@echo "  smoke          Install the built wheel in a fresh venv, then run 'ldp --version' and 'ldp demo'"
 	@echo "  docs           Build the docs with 'mkdocs build --strict'"
@@ -86,6 +87,10 @@ spark-test: check-scala-cli
 
 rest-test: check-scala-cli
 	LDP_RUN_REST=1 LDP_SCALA_CLI=$(SCALA_CLI) $(PY) -m pytest -m rest tests
+
+# Needs the dbt extra: pip install -e ".[dev,dbt]". Offline: dbt runs with its version check and usage statistics off.
+dbt-test:
+	$(PY) -m pytest -m dbt tests
 
 # ------------------------------------------------------------------------------
 # Demos

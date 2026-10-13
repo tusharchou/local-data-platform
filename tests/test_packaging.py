@@ -132,7 +132,15 @@ def test_ldp_console_script_is_declared():
 
 
 def test_extras_are_declared():
-    assert set(PYPROJECT["project"]["optional-dependencies"]) >= {"duckdb", "bigquery", "dev", "docs"}
+    assert set(PYPROJECT["project"]["optional-dependencies"]) >= {"duckdb", "bigquery", "dev", "docs", "dbt"}
+
+
+def test_the_dbt_extra_is_not_part_of_the_dev_extra():
+    # Tests that need dbt carry the `dbt` marker and run in their own CI job, so the core install
+    # and `make test` never need it.
+    extras = PYPROJECT["project"]["optional-dependencies"]
+    assert [name for name in extras["dev"] if name.lower().startswith("dbt")] == []
+    assert {name.split(">")[0].split("=")[0] for name in extras["dbt"]} >= {"dbt-core", "dbt-duckdb", "duckdb"}
 
 
 def test_read_the_docs_requirements_match_the_docs_extra():
