@@ -6,10 +6,14 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
-Work towards 0.1.2 Warehousing, see `docs/roadmap.md`. dbt models run over LDP's Iceberg tables in DuckDB and get
+Work towards 0.1.3 Orchestration, see `docs/roadmap.md`.
+
+## [0.1.2] - 2026-10-13
+
+Milestone 0.1.2 Warehousing, see `docs/roadmap.md`. dbt models run over LDP's Iceberg tables in DuckDB and get
 tested and documented, and the models you mark are published back to Iceberg as versioned tables. Excel files
 become a source, monthly customer churn is the worked example, and concurrent appends are safe on pyiceberg 0.11.
-The guide is `docs/warehousing.md`.
+The guide is `docs/warehousing.md`. The release tag for this version is `v0.1.2`.
 
 ### Added
 

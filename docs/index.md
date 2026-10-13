@@ -16,7 +16,15 @@ A modern, modular, and developer-friendly platform for local data engineering, a
 - [Recipes](recipes.md): short, runnable examples of the Python API.
 - [Warehousing](warehousing.md): from Excel and CSV exports to dbt-tested Iceberg tables, with churn and time travel.
 - [v0.1.1 hardening contract](design/v0_1_1.md): what each module does.
-- [Roadmap](roadmap.md): the milestones from 0.1.2 to 0.2.0 and what each one adds.
+- [Roadmap](roadmap.md): the milestones from 0.1.3 to 0.2.0 and what each one adds.
+
+## New in 0.1.2
+
+0.1.2 adds warehousing. `ldp dbt` runs a dbt project over your Iceberg tables and publishes the models you mark
+back to Iceberg, an `XLSX` source reads Excel sheets, and `ldp query` reads older snapshots and joins the tables of
+a folder. Direct appends from several processes at once no longer lose batches on pyiceberg 0.11. The
+[warehousing guide](warehousing.md) walks through all of it on a restaurant chain's exports, and
+[Warehousing with dbt](design/warehousing.md) is the design.
 
 ## New in 0.1.1
 
