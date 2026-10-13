@@ -1,0 +1,9 @@
+{
+  "database": "target/ldp_build.duckdb",
+  "sources": {"configs": ["../lake/config"]},
+  "publish": {
+    "catalog": {"identifier": "gold", "warehouse_path": "../lake/warehouse"},
+    "config_dir": "../lake/config"
+  },
+  "observability": {"sinks": ["jsonl"]}
+}
