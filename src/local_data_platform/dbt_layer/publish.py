@@ -130,7 +130,8 @@ def plan_publish(project: DbtProject, manifest: Mapping[str, Any], run_results: 
     """Decide which models to publish and build the config of each.
 
     A model is published when its meta has ``ldp_publish: true`` and it ran in this invocation with
-    status ``success``. The result is in dependency order.
+    status ``success``. The result is in dependency order, and where that leaves a choice, in the order of the
+    models' unique ids, so it does not depend on the order of the manifest.
 
     Args:
         project: The project, for the build file, the publish catalog and the config folder.
@@ -204,14 +205,19 @@ def _meta(node: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _model_order(nodes: Mapping[str, Any]) -> list[str]:
-    """Every model, each after the models it depends on, otherwise in the manifest's order."""
+    """Every model, each after the models it depends on, and where that leaves a choice, in the order of their ids.
+
+    The manifest lists the models in the order dbt found their files, which differs between file systems, so the
+    order is made from the ids (``model.<package>.<name>``) alone. A build publishes its models in the same order on
+    every machine.
+    """
     def parents(unique_id: str) -> list[str]:
-        return [parent for parent in (nodes[unique_id].get("depends_on") or {}).get("nodes", [])
-                if parent in nodes and nodes[parent].get("resource_type") == "model"]
+        return sorted(parent for parent in (nodes[unique_id].get("depends_on") or {}).get("nodes", [])
+                      if parent in nodes and nodes[parent].get("resource_type") == "model")
 
     order: list[str] = []
     seen: set[str] = set()
-    for root in (unique_id for unique_id, node in nodes.items() if node.get("resource_type") == "model"):
+    for root in sorted(unique_id for unique_id, node in nodes.items() if node.get("resource_type") == "model"):
         if root in seen:
             continue
         seen.add(root)

@@ -18,7 +18,7 @@ from local_data_platform import Config
 from local_data_platform.cli import main
 from local_data_platform.pipeline.builders import iceberg_from_config
 from local_data_platform.pipeline.registry import create_pipeline
-from tests.support import load_example_module
+from tests.support import load_example_module, without_log_warnings
 
 pytestmark = pytest.mark.dbt
 
@@ -223,7 +223,7 @@ def test_a_batch_with_a_duplicate_order_id_fails_the_build_and_publishes_nothing
     with pytest.raises(run.BuildFailed) as error:
         run.dbt_build(workdir)
 
-    message = str(error.value)
+    message = without_log_warnings(str(error.value))  # without DuckDB's iceberg extension, a warning comes first
     assert message.startswith("ldp: error: dbt build failed with exit status 1, so nothing was published")
     assert "test.restaurant.unique_fct_orders_order_id" in message and "fail" in message
     assert snapshot_ids(workdir) == before  # no table was touched
