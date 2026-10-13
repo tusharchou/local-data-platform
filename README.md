@@ -287,14 +287,16 @@ doesn't) with three fixes:
   not from a scan.
 - **A lock on local catalogs.** `overwrite` and `upsert` take an exclusive file lock,
   `<warehouse>/.ldp/locks/<namespace>.<table>.lock`, so two overwrites or upserts on one laptop
-  can't interleave. Appends take no lock (see [Known limitations](#known-limitations)).
+  can't interleave. Appends take no lock. An append that loses a commit race reloads the table
+  and runs again with a backoff (`CommitPolicy` sets the limits), so several processes can append
+  to one table at once.
 
-Direct mode on a shared remote catalog is a single-writer mode. For several writers, pass a
-`CommitContext` and `put` switches to the **staged publish protocol**: it writes to a private
-branch, checks the staged snapshot, then fast-forwards `main` in one catalog compare-and-swap that
-asserts both `main` and the branch. The idempotency key is stored on the snapshot as
-`ldp.idempotency-key` (with `ldp.run-id` and `ldp.attempt`), so re-running a key finds the
-published snapshot and writes nothing:
+Direct `overwrite` and `upsert` on a shared remote catalog are single-writer. For several
+writers, pass a `CommitContext` and `put` switches to the **staged publish protocol**: it writes
+to a private branch, checks the staged snapshot, then fast-forwards `main` in one catalog
+compare-and-swap that asserts both `main` and the branch. The idempotency key is stored on the
+snapshot as `ldp.idempotency-key` (with `ldp.run-id` and `ldp.attempt`), so re-running a key finds
+the published snapshot and writes nothing:
 
 ```python
 import pyarrow as pa
@@ -579,11 +581,8 @@ in each release, and the [contributing guide](docs/contributing.md) to get invol
 - **The engine router is unused.** Nothing calls `engine.router` yet.
 - **Remote catalogs are lightly tested.** `rest` is tested against Iceberg's REST test server and
   `glue` against moto. Postgres, hosted REST catalogs and GCS have no integration tests yet.
-- **Direct writes to a shared catalog are single-writer.** Several writers need the staged protocol
-  (`commit=`). The local file lock only covers processes on one machine.
-- **Concurrent direct-mode appends can fail on pyiceberg 0.11.** The append that loses the commit
-  race raises `CommitFailedException` (pyiceberg 0.12 retries it). Use the staged protocol
-  (`commit=`) for several writers. 0.1.2 adds the retry for direct appends (#88).
+- **Direct overwrite and upsert on a shared catalog are single-writer.** Several writers need the
+  staged protocol (`commit=`). The local file lock only covers processes on one machine.
 - **Exactly once means at most one effect per key.** Duplicates a producer sent upstream are not
   removed.
 - **An upsert batch needs every column of the table.** An upsert replaces whole rows, so a batch

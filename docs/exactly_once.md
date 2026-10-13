@@ -3,8 +3,8 @@
 An Iceberg target can be written in two ways:
 
 - **Direct mode** is a plain `Iceberg.put(df, mode)`, as the [hardening contract](design/v0_1_1.md)
-  specified it, with three fixes. It is safe for one writer per table. Several processes on one
-  laptop can overwrite and upsert safely, but see the note on concurrent appends below.
+  specified it, with three fixes. Several processes on one laptop can append, overwrite and
+  upsert safely. On a shared catalog that other machines also write, only appends are safe.
 - **Staged mode** is `Iceberg.put(df, mode, commit=CommitContext(...))`. It is for several writers,
   retries and re-runs: each idempotency key has at most one effect on `main`.
 
@@ -24,14 +24,23 @@ hardening contract. What changed:
   `total-records` summaries, not from a scan.
 - **A lock on local catalogs.** On a `local` catalog, `overwrite` and `upsert` hold an exclusive
   file lock, `<warehouse>/.ldp/locks/<namespace>.<table>.lock` (`fcntl` on POSIX, `msvcrt` on
-  Windows), for their read-modify-write. Two processes on one machine can't interleave. `append`
-  takes no lock. Concurrent appends add separate files, but they still race to commit. On
-  pyiceberg 0.11 the append that loses the race fails with `CommitFailedException`, and
-  pyiceberg 0.12 retries it. Use staged mode for several writers. The retry for direct appends
-  comes in 0.1.2 (#88).
+  Windows), for their read-modify-write. Two processes on one machine can't interleave.
+- **Appends retry.** `append` takes no lock, because concurrent appends only add files. They still
+  race to commit, and the catalog refuses the commit of the loser. That append reloads the table,
+  waits a random backoff and runs again on the new head. It stops after
+  `CommitPolicy.max_publish_attempts` tries (6 by default) or at `deadline_s`, and then `put`
+  raises a `CommitConflict` that names the table and the number of tries. `WriteResult.attempts`
+  says how many tries a write took. pyiceberg 0.12 also retries inside its own commit, and
+  pyiceberg 0.11 doesn't, which is why LDP does. A refused try leaves its data files in storage
+  without a snapshot, and `ldp maintain` lists them as orphans.
+- **An unknown outcome is never retried.** If the catalog says it can't tell whether a commit
+  landed (`CommitStateUnknownException`), the first try may have succeeded. A direct write has no
+  idempotency key to check, so `put` raises instead of risking a duplicate. Use staged mode when you
+  need to recover from that.
 
 The lock only covers processes that share the warehouse folder. On a `sql`, `rest` or `glue`
-catalog that other machines also write, direct mode is a single-writer mode: use staged mode.
+catalog that other machines also write, direct `overwrite` and `upsert` are single-writer modes:
+use staged mode for them. Direct `append` is safe for several writers on any catalog.
 
 ## Staged mode
 

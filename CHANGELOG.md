@@ -4,6 +4,21 @@ All notable changes to this project are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+Work towards 0.1.2 Warehousing, see `docs/roadmap.md`.
+
+### Fixed
+
+- Several processes appending to one table at once no longer lose batches on pyiceberg 0.11
+  (#88). A direct `append` whose commit the catalog refuses reloads the table and runs again
+  after a random backoff, up to `CommitPolicy.max_publish_attempts` tries (6 by default) or
+  `deadline_s`, then raises a `CommitConflict` that names the table and the number of tries.
+  `WriteResult.attempts` reports the tries. An unknown commit outcome, an overwrite and an upsert
+  are not retried. In a test with 8 processes appending 10 rows 5 times each, 51 of 401 rows
+  landed before the fix on pyiceberg 0.11.0, and all 401 land now. pyiceberg 0.12 already
+  retried inside its own commit.
+
 ## [0.1.1] - 2026-10-12
 
 The first release since 0.1.0. It brings together two pieces of work that were never released on
