@@ -97,6 +97,11 @@ def test_the_published_tables_are_described_by_ordinary_configs(capfd, project, 
     assert status == 0 and "gold.gold_totals: overwrite, 1 -> 1 rows" in out
     status, out, _ = ldp(capfd, "query", lake / "gold_totals.json", "select orders, revenue from gold_totals")
     assert status == 0 and re.search(r"orders\s+revenue\s*\n-+\s+-+\s*\n\s*3\s+9", out), out
+    # The lake folder now holds the ingest configs and the generated ones, so a raw table and a model built from
+    # it can be joined in one query.
+    sql = "SELECT count(*) AS n FROM raw.orders r JOIN silver.fct_orders s ON s.order_id = r.id"
+    status, out, _ = ldp(capfd, "query", lake, sql)
+    assert status == 0 and re.search(r"n\s*\n-+\s*\n\s*3\n", out), out
     status, out, _ = ldp(capfd, "maintain", lake / "fct_orders.json")  # a dry run
     assert status == 0, out
     status, out, _ = ldp(capfd, "runs", lake / "fct_orders.json")  # the run events of the publish, from ldp_dbt.json
