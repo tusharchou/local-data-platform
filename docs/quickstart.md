@@ -131,7 +131,7 @@ configs, or several configs, and it registers all their tables as `namespace.tab
 | `overwrite` | Replaces the table's rows | Each run brings the full dataset |
 | `upsert` | Updates rows whose `join_cols` match and inserts the rest. It needs `join_cols`, and every batch must have all of the table's columns | Each run brings new and changed rows |
 
-`ldp run CONFIG --mode MODE` overrides the config for one run.
+`ldp run CONFIG --mode MODE` overrides the config for one run. `ldp run CONFIG --window START/END` runs it exactly once for a window, so a second run for the same window writes nothing ([Exactly-once writes](exactly_once.md#from-the-command-line)).
 
 ### Partition the table
 

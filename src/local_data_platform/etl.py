@@ -10,6 +10,11 @@ window finds the published snapshot and writes nothing::
 
     run_config("rides.json", window="2026-09-01/2026-09-02")   # publishes
     run_config("rides.json", window="2026-09-01/2026-09-02")   # status "skipped_duplicate"
+
+A scheduler that retries a run passes the run id of the first attempt and the next attempt
+number, and the new attempt fences the older ones::
+
+    run_config("rides.json", window="2026-09-01/2026-09-02", run_id=run_id, attempt=2)
 """
 
 import datetime as dt
@@ -102,7 +107,8 @@ def commit_context(config: Config, *, window: Any = None, idempotency_key: str |
 
 
 def run_config(path_or_config: Config | str | os.PathLike | dict[str, Any], mode: str | None = None, *,
-               commit: Any = None, sink: Any = None, window: Any = None, idempotency_key: str | None = None):
+               commit: Any = None, sink: Any = None, window: Any = None, idempotency_key: str | None = None,
+               run_id: str | None = None, attempt: int = 1):
     """Build and run the pipeline for a config.
 
     Args:
@@ -117,12 +123,18 @@ def run_config(path_or_config: Config | str | os.PathLike | dict[str, Any], mode
             ``commit``), the run writes through the staged protocol with a context from
             :func:`commit_context`, so re-running it is a no-op.
         idempotency_key: An explicit idempotency key, e.g. from an orchestrator.
+        run_id: The id of the run, for a retry: the next attempt reuses the id of the one before it. A new
+            UUIDv7 by default. It belongs to a staged run, so it needs ``window`` or ``idempotency_key``.
+        attempt: The attempt number, from 1. An attempt above 1 needs ``run_id``, and it fences every older
+            attempt of the run, so a staged branch that one of them left never reaches ``main``.
 
     Returns:
         The :class:`~local_data_platform.pipeline.PipelineResult`.
 
     Raises:
-        ConfigError: If the config is missing or invalid.
+        ConfigError: If the config is missing or invalid, ``attempt`` is not a whole number from 1, ``attempt``
+            is above 1 without ``run_id``, ``run_id`` or ``attempt`` come without a window or key, or ``commit``
+            is given together with ``window``, ``idempotency_key``, ``run_id`` or ``attempt``.
         PipelineNotFound: If no pipeline is registered for the config's route.
         DataQualityError: If a quality check fails and ``on_failure`` is ``"fail"``;
             nothing is written.
@@ -130,10 +142,19 @@ def run_config(path_or_config: Config | str | os.PathLike | dict[str, Any], mode
     from local_data_platform.pipeline.registry import create_pipeline
 
     config = load_config(path_or_config)
-    if commit is None and (window is not None or idempotency_key is not None):
-        commit = commit_context(config, window=window, idempotency_key=idempotency_key)
-    elif commit is not None and (window is not None or idempotency_key is not None):
-        raise ConfigError("pass either commit= or window=/idempotency_key=, not both")
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+        raise ConfigError(f"attempt must be a whole number from 1, got {attempt!r}")
+    if attempt > 1 and run_id is None:
+        raise ConfigError("attempt needs a run_id: a retry reuses the run id of the attempt before it")
+    staged = window is not None or idempotency_key is not None
+    retry = run_id is not None or attempt > 1
+    if commit is not None and (staged or retry):
+        raise ConfigError("pass either commit= or window=/idempotency_key=/run_id=/attempt=, not both")
+    if commit is None and staged:
+        commit = commit_context(config, window=window, idempotency_key=idempotency_key, run_id=run_id,
+                                attempt=attempt)
+    elif retry and commit is None:
+        raise ConfigError("run_id and attempt belong to a staged run, so give a window or an idempotency_key too")
     logger.info("Running config %s", config.identifier)
     return create_pipeline(config).run(mode=mode, commit=commit, sink=sink)
 

@@ -135,6 +135,27 @@ print(first.status, again.status, again.published_snapshot_id == first.published
 and deliberately not of the spec, so changing a spec and re-running a window still finds the
 earlier commit. See [Run events and the `_ldp` namespace](observability.md#exactly-once-runs-and-idempotency-keys).
 
+### From the command line
+
+`ldp run` takes the same window and retry identity, so cron, Airflow or a shell script can run and retry a window
+without loading its rows twice:
+
+```bash
+ldp run rides.json --window 2026-08-01/2026-08-02                 # published
+ldp run rides.json --window 2026-08-01/2026-08-02                 # skipped_duplicate, and the rows are unchanged
+ldp run rides.json --window 2026-08-01/2026-08-02 --run-id RUN --attempt 2   # a retry of run RUN
+ldp run rides.json --idempotency-key sales-2026-08-01             # a key from the orchestrator, used as given
+ldp run rides.json --window 2026-08-01/2026-08-02 --json          # PipelineResult.to_dict() on stdout
+```
+
+A staged run prints its `window`, `idempotency_key`, `run_id`, `attempt`, `status` and `snapshot`. The key is the one
+`ldp plan rides.json --window 2026-08-01/2026-08-02` prints, and `--idempotency-key auto` says to use it. `--run-id`
+and `--attempt` belong to a staged run, so they need a window or a key, and `--attempt` needs `--run-id`. A malformed
+window, or one of these combinations that does not make sense, exits with 1 and one line. A quality check that blocks
+the run exits with 3, and `ldp run` exits with 0 for a skipped duplicate, so a scheduler can retry exit 1, never
+retry exit 3, and treat a re-run of a finished window as done. The exit-code table is in the
+[README](https://github.com/tusharchou/local-data-platform#use-it-from-the-command-line).
+
 ## What it guarantees
 
 - **At most one effect on `main` per idempotency key**, as long as the key's snapshot is within the
@@ -154,6 +175,10 @@ staged and direct mode both work on every supported pyiceberg.
 - `tests/test_commit.py` covers each step: the `ldp.*` properties, re-running a key, a publish that
   asserts both refs, `find_commit` failing closed, conflict resolution for each mode, lost publish
   responses, fencing of zombie and superseded attempts, and a failed audit.
+- `tests/test_cli.py` covers `ldp run --window`: the printed window, key, status and snapshot, a second run that
+  skips, the key that `ldp plan` prints, a retry with a higher attempt that fences the staged branch an earlier
+  attempt left, `--json`, and the exit status 3. Two processes that start at the same moment with the same key, on
+  the `local` catalog and on a `sql` catalog on SQLite, write the batch once.
 - `tests/test_upsert_race.py` runs N processes upserting the same keys into one table, three ways.
   Raw pyiceberg `Table.upsert` duplicates keys: pyiceberg's commit retry rebases each loser's
   insert onto the new head, so the race is real. Direct mode on a `local` catalog is serialised by
