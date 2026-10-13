@@ -107,7 +107,10 @@ def exists(uri, base_dir=None) -> bool
   requirements on BOTH `main` and the branch. This works around `Transaction._stage` dropping
   repeated requirement types (SaaS §7.1 fact 3).
 - **Exactly once:** re-running with the same key finds the published snapshot and returns
-  `WriteResult(skipped_duplicate=True)` without writing.
+  `WriteResult(skipped_duplicate=True)` without writing. `find_commit` is the search of the publish loop, bounded
+  by `search_since_ms` and `max_search_depth`. `find_published` is the search of a run that has not read its source
+  yet: it has no bound but the retained history of `main`, and `Pipeline.run` makes it first (0.1.3), so a window that
+  ran 8 days ago or 600 commits ago is skipped without being read.
 - **Races:** a concurrent writer that moved `main` forces a rebase-and-retry within `CommitPolicy`.
 - **Fencing:** superseded attempts are fenced by removing their branches.
 - **API:** `Iceberg.put(df, mode=None, *, commit: CommitContext | None = None, overwrite_filter=None)

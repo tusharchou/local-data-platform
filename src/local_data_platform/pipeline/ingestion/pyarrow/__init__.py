@@ -58,9 +58,10 @@ class PyArrowLoader(Ingestion):
         """Run the delegate pipeline's quality checks."""
         return self.pipeline.validate(df, context)
 
-    def run(self, mode: str | None = None, *, commit: Any = None, sink: Any = None) -> PipelineResult:
+    def run(self, mode: str | None = None, *, commit: Any = None, sink: Any = None,
+            policy: Any = None) -> PipelineResult:
         """Run the delegate pipeline; see :meth:`Pipeline.run`."""
-        return self.pipeline.run(mode, commit=commit, sink=sink)
+        return self.pipeline.run(mode, commit=commit, sink=sink, policy=policy)
 
 
 __all__ = ["PyArrowLoader"]

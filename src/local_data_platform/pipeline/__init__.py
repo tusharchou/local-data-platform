@@ -35,10 +35,13 @@ one of ``run.published``, ``run.skipped_duplicate``, ``run.blocked_quality`` or
 ``run.failed``, and finally ``run.finished``. The sink comes from ``run(sink=...)``, the
 ``sink=`` constructor argument, or the config's ``metadata.observability`` block; the
 default drops every event. ``run(commit=CommitContext(...))`` writes through the staged,
-exactly-once publish protocol (see ``docs/exactly_once.md``).
+exactly-once publish protocol (see ``docs/exactly_once.md``). A staged run first looks for its idempotency key in the
+whole retained history of the target, and when it is there the run reads nothing: it emits ``run.started``,
+``run.skipped_duplicate`` and ``run.finished`` only.
 """
 
 import dataclasses
+import datetime as dt
 import inspect
 import time
 import warnings
@@ -79,7 +82,8 @@ class PipelineResult:
 
     Attributes:
         name: The pipeline's name (the config's ``identifier`` when built from a config).
-        rows_read: Rows the source returned, before any transform.
+        rows_read: Rows the source returned, before any transform. 0 for a run that found its key already
+            published and so did not read the source.
         rows_written: Rows the target write added or changed. For an Iceberg upsert,
             input rows identical to the stored ones are not rewritten and not counted.
         write_result: What the target's ``put`` returned: a
@@ -140,7 +144,8 @@ class PipelineResult:
     def __str__(self) -> str:
         kept = f", kept {self.rows_kept} in the window" if self.rows_kept is not None else ""
         if self.skipped_duplicate:
-            return (f"{self.name}: read {self.rows_read} rows{kept}, skipped: idempotency key already published in "
+            read = "" if self.rows_read == 0 else f" read {self.rows_read} rows{kept},"
+            return (f"{self.name}:{read} skipped: idempotency key already published in "
                     f"snapshot {self.published_snapshot_id} ({self.duration_s:.2f}s)")
         text = (f"{self.name}: read {self.rows_read} rows{kept}, wrote {self.rows_written} rows in "
                 f"{self.duration_s:.2f}s")
@@ -361,7 +366,7 @@ class Pipeline(Flow):
         report.raise_for_failures()
         return report  # pragma: no cover - raise_for_failures() raised
 
-    def write(self, df: pa.Table, mode: str | None = None, *, commit: Any = None) -> Any:
+    def write(self, df: pa.Table, mode: str | None = None, *, commit: Any = None, policy: Any = None) -> Any:
         """Write ``df`` to the target.
 
         In a windowed run of a config that names a ``metadata.window.column``, an ``overwrite`` of an Iceberg table
@@ -374,6 +379,9 @@ class Pipeline(Flow):
             commit: A :class:`~local_data_platform.format.iceberg.commit.CommitContext`
                 to write through the staged publish protocol, for targets whose ``put``
                 takes ``commit=`` (Iceberg).
+            policy: The :class:`~local_data_platform.format.iceberg.commit.CommitPolicy` that bounds the write: its
+                publish attempts, deadline and key search depth. The target's own defaults when ``None``, and a
+                target whose ``put`` takes no ``policy`` (a CSV or Parquet file) has no use for one.
 
         Returns:
             Whatever the target's ``put`` returned.
@@ -384,8 +392,10 @@ class Pipeline(Flow):
                 for a target that can't take it, or a window overwrite needs a ``metadata.window.column`` that
                 ``df`` does not have.
         """
-        options = self._overwrite_options(df, mode, commit)
-        if not options:
+        replace = self._overwrite_options(df, mode, commit)
+        takes_policy = policy is not None and self._accepts(self.target, "policy")
+        options = {**replace, **({"policy": policy} if takes_policy else {})}
+        if not replace:
             return self._put(df, mode, commit, options)
         with warnings.catch_warnings():
             # The first load of a window has no rows to replace, which pyiceberg reports as a warning.
@@ -432,7 +442,7 @@ class Pipeline(Flow):
     def _run_window(self, commit: Any) -> tuple[Any, Any] | None:
         """The window of a run: the pipeline's own, else the one a commit context carries, else none."""
         carried = getattr(commit, "logical_window", None)
-        carried = tuple(carried) if carried else None
+        carried = tuple(_utc(bound) for bound in carried) if carried else None  # a window without a zone is UTC
         if self.window is None:
             return carried
         if carried is not None and carried != self.window:
@@ -469,9 +479,49 @@ class Pipeline(Flow):
         column_type = df.schema.field(declared.column).type
         return {"overwrite_filter": windows.overwrite_filter(declared.column, window, declared.tz, column_type)}
 
+    def _published_before(self, commit: Any, mode: str | None) -> Any:
+        """Look for the key of a staged run in the whole retained history of the target, before the source is read.
+
+        Returns:
+            The result of the earlier publish, as a skipped duplicate, or ``None`` when the key is not there. A
+            target that cannot look (it has no ``published`` method) gives ``None``, and the publish loop of the
+            write finds a duplicate on its own, as it always did.
+        """
+        lookup = getattr(self.target, "published", None)
+        if not callable(lookup):
+            return None
+        earlier = lookup(commit, mode)
+        if earlier is None:
+            self._warn_if_the_key_may_have_expired(commit)
+        return earlier
+
+    def _warn_if_the_key_may_have_expired(self, commit: Any) -> None:
+        """Warn when the window is older than every window that the target still holds a key for.
+
+        A key that is not there is no proof that the window never ran: an expiry may have removed the snapshot
+        that carried it, and then loading the window again would duplicate its rows.
+        """
+        window = getattr(commit, "logical_window", None)
+        oldest_of = getattr(self.target, "oldest_key_window", None)
+        if window is None or not callable(oldest_of):
+            return
+        try:
+            oldest = oldest_of()
+            if oldest is None or _utc(window[0]) >= oldest[0]:
+                return
+        except Exception as exc:  # noqa: BLE001 - the warning is advice, and it must never stop a run
+            logger.debug("Pipeline %s: could not tell whether the key may have expired: %s", self.name, exc)
+            return
+        logger.warning(
+            "Pipeline %s: the window %s/%s is older than every window that %r still holds a key for, the oldest "
+            "starting %s, and its key is not there. If this window ran before, its key may have expired and this "
+            "run loads it again. ldp backfill --replace replaces a window instead of adding to it.",
+            self.name, _iso(window[0]), _iso(window[1]), self._target_name(), _iso(oldest[0]))
+
     # ------------------------------------------------------------------ run
 
-    def run(self, mode: str | None = None, *, commit: Any = None, sink: EventSink | None = None) -> PipelineResult:
+    def run(self, mode: str | None = None, *, commit: Any = None, sink: EventSink | None = None,
+            policy: Any = None) -> PipelineResult:
         """Extract, transform, validate, then write, emitting run events on the way.
 
         Args:
@@ -481,8 +531,11 @@ class Pipeline(Flow):
                 When given, the target is written through the staged publish protocol:
                 a re-run with the same idempotency key finds the published snapshot and
                 writes nothing (``PipelineResult.status == "skipped_duplicate"``). The
-                run id, attempt and key come from the context.
+                run id, attempt and key come from the context. The key is looked for before the source is read, in
+                the whole retained history of the target, so a duplicate reads nothing.
             sink: Where this run's events go, instead of the pipeline's default sink.
+            policy: The :class:`~local_data_platform.format.iceberg.commit.CommitPolicy` of the write. A batch of
+                runs raises its ``max_search_depth``, see :func:`~local_data_platform.etl.batch_search`.
 
         Returns:
             A :class:`PipelineResult`.
@@ -517,6 +570,19 @@ class Pipeline(Flow):
             if emitter.enabled:
                 emitter.emit("run.started", lambda: self._started_payload(mode, commit, key),
                              table_uuid=self._table_uuid())
+            if commit is not None:
+                stage = "search"
+                earlier = self._published_before(commit, mode)
+                if earlier is not None:
+                    counts["rows_written"] = 0
+                    result = self._result(None, 0, earlier, QualityReport(), key, run_id, started)
+                    table_uuid, summary = (self._snapshot_facts(result.published_snapshot_id) if emitter.enabled
+                                           else (None, {}))
+                    emitter.emit("run." + result.status, lambda: self._written_payload(result, earlier, summary),
+                                 table_uuid=table_uuid)
+                    finish(result.status, published_snapshot_id=result.published_snapshot_id, quality_passed=None)
+                    logger.info("Pipeline %s", result)
+                    return result
             stage = "extract"
             df = self.extract()
             counts["rows_read"] = rows_read = df.num_rows
@@ -541,7 +607,7 @@ class Pipeline(Flow):
                 raise blocked
 
             stage = "write"
-            written = self.write(df, mode, commit=commit)
+            written = self.write(df, mode, commit=commit, policy=policy)
             stage = "report"
             result = self._result(df, rows_read, written, report, key, run_id, started, rows_kept)
             counts["rows_written"] = result.rows_written
@@ -564,7 +630,7 @@ class Pipeline(Flow):
         finally:
             emitter.flush()
 
-    def _result(self, df: pa.Table, rows_read: int, written: Any, report: QualityReport, key: str | None,
+    def _result(self, df: pa.Table | None, rows_read: int, written: Any, report: QualityReport, key: str | None,
                 run_id: str, started: float, rows_kept: int | None = None) -> PipelineResult:
         skipped = getattr(written, "skipped_duplicate", False) is True
         if isinstance(getattr(written, "rows_written", None), int):
@@ -682,6 +748,11 @@ class Pipeline(Flow):
 
 def _iso(value: Any) -> Any:
     return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _utc(moment: Any) -> Any:
+    """``moment`` as an aware datetime, reading one without a time zone as UTC."""
+    return moment.replace(tzinfo=dt.timezone.utc) if getattr(moment, "tzinfo", True) is None else moment
 
 
 __all__ = ["ON_FAILURE", "Pipeline", "PipelineResult", "Transform"]

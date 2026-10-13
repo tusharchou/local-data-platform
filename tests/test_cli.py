@@ -172,6 +172,25 @@ def test_running_the_same_window_again_prints_skipped_duplicate_and_writes_nothi
     assert _table(tmp_path).row_count() == 6 and len(_table(tmp_path).table().snapshots()) == snapshots
 
 
+def test_a_second_run_of_a_published_window_does_not_read_its_source_and_says_so(tmp_path, sample_table, capsys):
+    path = _staged_config(tmp_path, sample_table)
+    assert main(["run", str(path), "--window", WINDOW]) == 0
+    first = _fields(capsys.readouterr().out)
+    (tmp_path / "rides.csv").unlink()  # a run that read its source would fail now
+
+    assert main(["run", str(path), "--window", WINDOW]) == 0
+
+    out = capsys.readouterr().out
+    assert out.startswith("rides: skipped: idempotency key already published in snapshot")
+    assert "rows" not in out.splitlines()[0]  # it did not read any
+    fields = _fields(out)
+    assert (fields["status"], fields["snapshot"]) == ("skipped_duplicate", first["snapshot"])
+    assert main(["run", str(path), "--window", WINDOW, "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert (data["status"], data["rows_read"], data["rows_written"]) == ("skipped_duplicate", 0, 0)
+    assert _table(tmp_path).row_count() == 6
+
+
 def test_a_different_window_is_a_different_run_and_publishes(tmp_path, sample_table, capsys):
     path = _staged_config(tmp_path, sample_table)
     assert main(["run", str(path), "--window", WINDOW]) == 0

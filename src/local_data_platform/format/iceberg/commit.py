@@ -8,7 +8,9 @@ to the interfaces in ``docs/design/v0_1_1_platform.md`` (C3). A write never touc
 2. **Base** (:func:`ensure_base`): a new table gets an empty ``ldp.init`` snapshot, so there is
    always a ``main`` snapshot to branch from.
 3. **Find** (:func:`find_commit`): walk ``main``'s ancestry for the idempotency key. If it is
-   there, the write already happened and nothing is written again.
+   there, the write already happened and nothing is written again. The walk stops at ``search_since_ms`` and after
+   ``max_search_depth`` snapshots, so a caller that cannot afford to read its source twice asks
+   :func:`find_published` first, which has no bound but the history the table still holds.
 4. **Stage** (:func:`stage`): create a private branch at ``base`` and write to it, with the
    additive schema union in the same transaction as the data.
 5. **Audit**: optional table-level checks on the staged snapshot.
@@ -47,7 +49,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import pyarrow as pa
@@ -442,6 +444,63 @@ def find_commit(table, key: str, *, since_ms: int, max_depth: int = 500):
             )
         snapshot = parent
     return None
+
+
+def find_published(table, key: str):
+    """Find the snapshot that carries idempotency key ``key`` anywhere in the retained history of ``main``.
+
+    :func:`find_commit` is the search of the publish loop. It stops at a time bound and at a depth, because a
+    writer that publishes the same key at the same moment can only have committed recently. This is the search that
+    a run makes before it reads its source, and it has neither bound. It walks ``main`` from the head, newest first,
+    until it finds the key or reaches the oldest snapshot the table still has. It answers for as long as the snapshot
+    of the first publish is in the table, which :func:`~local_data_platform.maintenance.expire_snapshots` guarantees
+    for the idempotency horizon and may end after it.
+
+    Args:
+        table: A pyiceberg table; its loaded metadata is searched as is.
+        key: The idempotency key.
+
+    Returns:
+        The newest snapshot carrying ``key``, or ``None`` when no retained snapshot of ``main`` has it. A publish
+        that added several snapshots (an ``overwrite`` adds a delete and an append) gives the last of them.
+    """
+    for snapshot, _, found in _keyed_snapshots(table):
+        if found == key:
+            return snapshot
+    return None
+
+
+def already_published(table, ctx: "CommitContext", mode: str) -> WriteResult | None:
+    """The result of a write whose key is already in the retained history of ``main``, or ``None``.
+
+    It is the result :func:`write_once` returns for a duplicate, with ``skipped_duplicate`` true and no attempt used,
+    found with :func:`find_published` instead of the bounded search of the publish loop.
+
+    Args:
+        table: A pyiceberg table.
+        ctx: The commit context whose key is looked for.
+        mode: The write mode the write would have used, for the result.
+    """
+    found = find_published(table, ctx.idempotency_key)
+    return None if found is None else _found_result(None, table, found, mode, ctx, 0, None)
+
+
+def oldest_keyed_window(table) -> tuple[datetime, datetime] | None:
+    """The earliest logical window among the keyed snapshots in the retained history of ``main``.
+
+    Each LDP publish with a window records it as ``ldp.logical-window``. The earliest start among them tells how far
+    back the table can still answer "did this window run?". A window older than that may have been published before
+    its snapshot expired, so a caller can warn that its key may be gone.
+
+    Returns:
+        ``(start, end)`` of the window that starts first, or ``None`` when no retained keyed snapshot has a window.
+    """
+    earliest = None
+    for _, summary, _ in _keyed_snapshots(table):
+        window = _read_window(summary.get(LOGICAL_WINDOW_PROPERTY))
+        if window is not None and (earliest is None or window[0] < earliest[0]):
+            earliest = window
+    return earliest
 
 
 def fence(catalog, table, branches: Iterable[str]) -> None:
@@ -1063,15 +1122,41 @@ def add_cli(subparsers, parents: Iterable[Any] = ()) -> None:
     parser.set_defaults(handler=_cmd_commits)
 
 
-def commit_log(table, key: str | None = None) -> list[dict[str, Any]]:
-    """The LDP publishes in ``main``'s ancestry, newest first, one row per snapshot carrying a key."""
+def _keyed_snapshots(table):
+    """The snapshots in ``main``'s retained history that carry an idempotency key, as ``(snapshot, summary, key)``.
+
+    Newest first, from the head to the oldest snapshot the table still has. A table with no snapshot gives none.
+    """
     from pyiceberg.table.snapshots import ancestors_of
 
-    rows = []
     for snapshot in ancestors_of(table.current_snapshot(), table.metadata):
         summary = _summary(snapshot)
         found = summary.get(IDEMPOTENCY_KEY_PROPERTY)
-        if found is None or (key is not None and found != key):
+        if found is not None:
+            yield snapshot, summary, found
+
+
+def _read_window(text: str | None) -> tuple[datetime, datetime] | None:
+    """Read an ``ldp.logical-window`` property, ``START/END`` in ISO 8601, or ``None`` when it is not one.
+
+    A bound written without a time zone is read as UTC, as everything of LDP that has no zone is, so that the windows
+    that come out can always be compared.
+    """
+    if not text:
+        return None
+    try:
+        start, end = (datetime.fromisoformat(part) for part in text.split("/"))
+    except ValueError:
+        return None
+    return tuple(bound if bound.tzinfo is not None else bound.replace(tzinfo=timezone.utc)  # type: ignore[return-value]
+                 for bound in (start, end))
+
+
+def commit_log(table, key: str | None = None) -> list[dict[str, Any]]:
+    """The LDP publishes in ``main``'s ancestry, newest first, one row per snapshot carrying a key."""
+    rows = []
+    for snapshot, summary, found in _keyed_snapshots(table):
+        if key is not None and found != key:
             continue
         rows.append({
             "snapshot_id": snapshot.snapshot_id,
@@ -1122,6 +1207,7 @@ __all__ = [
     "StagedWrite",
     "WriteResult",
     "add_cli",
+    "already_published",
     "check_upsert_columns",
     "attempt_prefix",
     "branch_name",
@@ -1130,8 +1216,10 @@ __all__ = [
     "fence",
     "fence_marker",
     "find_commit",
+    "find_published",
     "is_sequence_race",
     "new_run_id",
+    "oldest_keyed_window",
     "publish",
     "sequence_race_is_a_conflict",
     "snapshot_records",

@@ -59,8 +59,10 @@ from local_data_platform.format.iceberg.commit import (
     CommitSearchExhausted,
     StagedWrite,
     WriteResult,
+    already_published,
     check_upsert_columns,
     is_sequence_race,
+    oldest_keyed_window,
     snapshot_records,
     write_once,
 )
@@ -437,6 +439,35 @@ class Iceberg(Format):
         except NoSuchTableError as exc:
             location = self.path if self.path is not None else (self.warehouse or getattr(self.catalog, "name", "?"))
             raise TableNotFound(f"Iceberg table {self.identifier} does not exist in {location}") from exc
+
+    def published(self, commit: CommitContext, mode: str | None = None) -> WriteResult | None:
+        """Find out whether ``commit``'s idempotency key is already on ``main``, anywhere in its retained history.
+
+        A staged run asks this before it reads its source. The publish loop of :meth:`put` searches back to
+        ``commit.search_since_ms`` and at most ``policy.max_search_depth`` snapshots, which is the right bound for a
+        rival that publishes the same key at the same moment. This question has no bound but the history that the
+        table still holds, so a window that ran 8 days ago, or 600 commits ago, is found too.
+
+        Args:
+            commit: The context whose key is looked for.
+            mode: The write mode the write would use, for the result. The ``write_mode`` of the table by default.
+
+        Returns:
+            The result :meth:`put` would return for the duplicate, with ``skipped_duplicate=True`` and the snapshot
+            that carries the key, or ``None`` when the table does not exist or has no snapshot with the key.
+        """
+        if not self.exists():
+            return None
+        mode = self.write_mode if mode is None else self._check_mode(mode)
+        result = already_published(self.table(), commit, mode)
+        return None if result is None else _replace(result, table_identifier=self.identifier)
+
+    def oldest_key_window(self) -> tuple[Any, Any] | None:
+        """The earliest logical window among the keyed snapshots that ``main`` still holds, or ``None``.
+
+        See :func:`~local_data_platform.format.iceberg.commit.oldest_keyed_window`.
+        """
+        return oldest_keyed_window(self.table()) if self.exists() else None
 
     def row_count(self) -> int:
         """Rows in the current snapshot, read from snapshot metadata where possible.
