@@ -178,6 +178,14 @@ so to replace a day that changed at the source, run it with a key of your own:
 ldp run orders.json --window 2026-08-02/2026-08-03 --idempotency-key orders-2026-08-02-v2
 ```
 
+### Workflows
+
+`ldp workflow run FILE --window W` runs several configs for one window. Each pipeline task publishes under its own key, the
+one `ldp plan CONFIG --window W` prints, and the run looks for it before it reads the source. So a window that failed half way
+can be run again as it is: the tasks that published are skipped, and only the tasks that failed or did not run do their work.
+A task whose target is a file is the exception. A file is replaced whole by every run and cannot take a key, so that task runs
+again. The [contract](design/v0_1_1.md#workflow-files-013) has the rest.
+
 ### Long backfills and late re-runs
 
 A staged run looks for its idempotency key twice, and the two searches answer different questions.

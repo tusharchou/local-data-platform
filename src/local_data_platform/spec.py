@@ -946,76 +946,26 @@ WORKFLOW_KEYS = ("apiVersion", "kind", "identifier", "who", "what", "where", "wh
 
 
 def _validate_workflow(spec: Mapping[str, Any]) -> list[ConfigError]:
-    """The problems in the envelope of a workflow file: its keys, its identifier and the ids of its tasks.
+    """The problems of a workflow file, which is the kind ``Workflow``.
 
-    What a task runs is checked by the module that runs workflows, which registers its own validator for the kind.
+    The checks are in :mod:`local_data_platform.orchestration.workflow`, which is imported when it is needed, so that
+    this module stays light.
     """
-    problems = _Problems()
-    unknown = sorted(set(map(str, spec)) - set(WORKFLOW_KEYS))
-    if unknown:
-        problems.add("", f"unknown top-level keys {unknown}; allowed: {list(WORKFLOW_KEYS)}")
-    if "apiVersion" in spec and spec["apiVersion"] != API_VERSION:
-        problems.add("apiVersion", f"must be {API_VERSION!r}, got {spec['apiVersion']!r}")
-    _check_string(problems, spec, "identifier", "", required=True)
-    for key in ("who", "what", "where", "when", "how"):
-        if key in spec and not isinstance(spec[key], str):
-            problems.add(key, f"must be a string, got {type(spec[key]).__name__}")
-    if "metadata" in spec and not isinstance(spec["metadata"], Mapping):
-        problems.add("metadata", f"must be an object, got {type(spec['metadata']).__name__}")
-    tasks = spec.get("tasks")
-    if not isinstance(tasks, list) or not tasks:
-        problems.add("tasks", "is required and must be a list of at least one task")
-    else:
-        seen: set[str] = set()
-        for position, task in enumerate(tasks):
-            here = f"tasks[{position}]"
-            if not isinstance(task, Mapping):
-                problems.add(here, "must be an object with an 'id'")
-                continue
-            task_id = task.get("id")
-            if not isinstance(task_id, str) or not task_id.strip():
-                problems.add(f"{here}.id", "is required and must be a non-empty string")
-            elif task_id in seen:
-                problems.add(f"{here}.id", f"{task_id!r} is the id of an earlier task")
-            else:
-                seen.add(task_id)
-    _check_secrets(problems, spec, "")
-    return problems.errors
+    from local_data_platform.orchestration.workflow import validate_workflow
+
+    return validate_workflow(spec)
 
 
 def _workflow_schema() -> dict[str, Any]:
-    string = {"type": "string"}
-    non_empty = {"type": "string", "minLength": 1}
-    return {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://local-data-platform.readthedocs.io/schemas/ldp-v1-workflow.json",
-        "title": f"local-data-platform workflow ({API_VERSION})",
-        "type": "object",
-        "required": ["kind", "identifier", "tasks"],
-        "additionalProperties": False,
-        "properties": {
-            "apiVersion": {"const": API_VERSION, "default": API_VERSION},
-            "kind": {"const": "Workflow", "description": "A workflow file says so, because a file without a kind "
-                                                         "is a Pipeline."},
-            "identifier": {**non_empty, "description": "The workflow's id."},
-            "who": {**string, "description": "Who owns the workflow."},
-            "what": {**string, "description": "What the workflow does."},
-            "where": {**string, "description": "Where its data comes from."},
-            "when": {**string, "description": "How often it runs, e.g. 'daily'."},
-            "how": {**string, "description": "How it runs, e.g. 'batch'."},
-            "metadata": {"type": "object"},
-            "tasks": {
-                "type": "array",
-                "minItems": 1,
-                "items": {"type": "object", "required": ["id"], "properties": {"id": non_empty}},
-                "description": "The tasks, each with a unique id.",
-            },
-        },
-    }
+    from local_data_platform.orchestration.workflow import workflow_schema
+
+    return workflow_schema()
 
 
 def _describe_workflow(spec: Mapping[str, Any]) -> dict[str, Any]:
-    return {"tasks": [task["id"] for task in spec["tasks"]]}
+    from local_data_platform.orchestration.workflow import describe_workflow
+
+    return describe_workflow(spec)
 
 
 # ---------------------------------------------------------------------- plan

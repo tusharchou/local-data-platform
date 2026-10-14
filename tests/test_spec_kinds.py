@@ -41,7 +41,8 @@ PIPELINE = {
 WORKFLOW = {
     "apiVersion": "ldp/v1", "kind": "Workflow", "identifier": "daily_orders",
     "metadata": {"schedule": "@daily"},
-    "tasks": [{"id": "load", "pipeline": "orders.json"}, {"id": "model", "depends_on": ["load"]}],
+    "tasks": [{"id": "load", "pipeline": "orders.json"},
+              {"id": "model", "maintain": {"config": "orders.json"}, "depends_on": ["load"]}],
 }
 
 
@@ -149,7 +150,8 @@ def test_a_workflow_and_a_pipeline_with_a_kind_are_valid():
     ({"tasks": "load"}, "tasks: is required and must be a list of at least one task"),
     ({"tasks": ["load"]}, "tasks[0]: must be an object with an 'id'"),
     ({"tasks": [{"pipeline": "a.json"}]}, "tasks[0].id: is required and must be a non-empty string"),
-    ({"tasks": [{"id": "a"}, {"id": "b"}, {"id": "a"}]}, "tasks[2].id: 'a' is the id of an earlier task"),
+    ({"tasks": [{"id": "a", "pipeline": "a.json"}, {"id": "b", "pipeline": "b.json"},
+                {"id": "a", "pipeline": "a.json"}]}, "tasks[2].id: 'a' is the id of an earlier task"),
     ({"identifier": None}, "identifier: is required"),
     ({"apiVersion": "ldp/v9"}, "apiVersion: must be 'ldp/v1', got 'ldp/v9'"),
     ({"metadata": "daily"}, "metadata: must be an object, got str"),
@@ -164,17 +166,19 @@ def test_a_workflow_is_checked_for_its_envelope(changes, expected):
 
 
 def test_a_workflow_with_an_inline_secret_is_refused_and_the_secret_is_not_repeated():
-    data = _with(WORKFLOW, metadata={"notify": {"token": "abc123secret"}})
+    data = _with(WORKFLOW, what="AKIAABCDEFGHIJKLMNOP")
 
     messages = _messages(data)
 
-    assert len(messages) == 1 and messages[0].startswith("metadata.notify.token: looks like an inline secret")
-    assert "abc123secret" not in messages[0]
+    assert len(messages) == 1 and messages[0].startswith("what: looks like an inline secret")
+    assert "AKIAABCDEFGHIJKLMNOP" not in messages[0]
 
 
 def test_a_pipeline_cannot_have_tasks_and_a_pipeline_file_that_says_workflow_is_checked_as_one():
     assert _messages(_with(PIPELINE, tasks=[{"id": "a"}]))[0].startswith("unknown top-level keys ['tasks']")
-    assert _messages(_with(PIPELINE, kind="Workflow")) == ["tasks: is required and must be a list of at least one task"]
+    messages = _messages(_with(PIPELINE, kind="Workflow"))
+    assert "tasks: is required and must be a list of at least one task" in messages
+    assert messages[0].startswith("metadata: has unknown keys ['source', 'target']")
 
 
 def test_validate_spec_still_never_raises_for_junk():
@@ -213,7 +217,8 @@ def test_ldp_plan_of_a_folder_that_mixes_a_pipeline_and_a_workflow_checks_each_a
 def test_ldp_plan_exits_with_1_for_a_broken_workflow_in_a_folder_and_names_the_file(tmp_path, capsys):
     folder = tmp_path / "configs"
     _write(folder, "rides.json", PIPELINE)
-    _write(folder, "daily.json", _with(WORKFLOW, tasks=[{"id": "a"}, {"id": "a"}]))
+    twice = [{"id": "a", "pipeline": "a.json"}, {"id": "a", "pipeline": "a.json"}]
+    _write(folder, "daily.json", _with(WORKFLOW, tasks=twice))
 
     assert _cli(["plan", str(folder)]) == 1
 

@@ -571,7 +571,8 @@ def test_python_dash_m_runs_the_cli():
 
 # ---------------------------------------------------------------------- module commands (platform contract C9)
 
-MODULE_COMMAND_NAMES = ("catalog", "schema", "plan", "runs", "commits", "datasets", "maintain", "spark", "mcp", "dbt")
+MODULE_COMMAND_NAMES = ("catalog", "schema", "plan", "runs", "commits", "datasets", "maintain", "spark", "mcp", "dbt",
+                        "workflow")
 
 
 def _command_names(parser) -> list[str]:
