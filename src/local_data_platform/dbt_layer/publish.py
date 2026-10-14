@@ -346,7 +346,8 @@ def _relative(path: Path, start: Path) -> str:
 # --------------------------------------------------------------------------- publishing
 
 
-def publish(plan: list[PublishItem], report: Callable[[Published], None] | None = None) -> PublishOutcome:
+def publish(plan: list[PublishItem], report: Callable[[Published], None] | None = None, *,
+            wrap_sink: Callable[[Any], Any] | None = None) -> PublishOutcome:
     """Write every config in ``plan`` to its folder, then run them in order.
 
     The configs are all written first, so they exist, and can be run with ``ldp run``, even when
@@ -356,8 +357,12 @@ def publish(plan: list[PublishItem], report: Callable[[Published], None] | None 
     Args:
         plan: What :func:`plan_publish` returned.
         report: Called with each model right after it was written, so a long run shows progress.
+        wrap_sink: Called with the sink that a model's own config names, which is a ``NullSink`` when it names none,
+            and returns the sink that the events of that model's write go to. A workflow passes a function that adds
+            the workflow run and the task to every event, so the write of each model shows up as a run of the task.
+            By default the events go to the sinks of the config.
     """
-    from local_data_platform.etl import run_config
+    from local_data_platform.etl import load_config, run_config
 
     for item in plan:
         item.path.parent.mkdir(parents=True, exist_ok=True)
@@ -365,7 +370,13 @@ def publish(plan: list[PublishItem], report: Callable[[Published], None] | None 
     published: list[Published] = []
     for position, item in enumerate(plan):
         try:
-            result = run_config(item.path)
+            if wrap_sink is None:
+                result = run_config(item.path)
+            else:
+                from local_data_platform.events import sink_from_config
+
+                config = load_config(item.path)
+                result = run_config(config, sink=wrap_sink(sink_from_config(config)))
         except Exception as error:  # noqa: BLE001 - reported with the models that were and were not published
             return PublishOutcome(published, (item.model, error), item.path,
                                   [later.model for later in plan[position + 1:]])

@@ -39,6 +39,8 @@ from local_data_platform.orchestration import (
     workflow_schema,
 )
 from local_data_platform.orchestration.tasks import (
+    TaskBlocked,
+    TaskFailed,
     TaskOutcome,
     TaskPlan,
     config_tables,
@@ -138,9 +140,10 @@ def test_a_workflow_with_every_key_is_valid():
     assert _problems(spec) == [] and validate_spec(spec) == []
 
 
-def test_the_shipped_task_kinds_are_pipeline_and_maintain():
-    assert task_kinds()[:2] == ["pipeline", "maintain"]
+def test_the_shipped_task_kinds_are_pipeline_maintain_and_dbt():
+    assert task_kinds()[:3] == ["pipeline", "maintain", "dbt"]
     assert get_task_kind("pipeline").emits_events is True and get_task_kind("maintain").emits_events is False
+    assert get_task_kind("dbt").emits_events is False
 
 
 @pytest.mark.parametrize("changes, expected", [
@@ -175,10 +178,11 @@ def test_a_workflow_is_checked_for_its_envelope_and_its_metadata(changes, expect
 
 
 @pytest.mark.parametrize("task, expected", [
-    ({"id": "a"}, "tasks[0]: needs exactly one task kind of ['pipeline', 'maintain'], and has none"),
+    ({"id": "a"}, "tasks[0]: needs exactly one task kind of ['pipeline', 'maintain', 'dbt'], and has none"),
     ({"id": "a", "pipeline": "a.json", "maintain": {"config": "a.json"}},
-     "tasks[0]: needs exactly one task kind of ['pipeline', 'maintain'], and has 2: ['pipeline', 'maintain']"),
-    ({"id": "a", "pipeline": "a.json", "dbt": {}}, "tasks[0]: has unknown keys ['dbt']; a task has an id, depends_on"),
+     "tasks[0]: needs exactly one task kind of ['pipeline', 'maintain', 'dbt'], and has 2: ['pipeline', 'maintain']"),
+    ({"id": "a", "pipeline": "a.json", "gold": {}},
+     "tasks[0]: has unknown keys ['gold']; a task has an id, depends_on"),
     ({"id": "a", "pipeline": ""}, "tasks[0].pipeline: must be the path of a dataset config, got ''"),
     ({"id": "a", "pipeline": 5}, "tasks[0].pipeline: must be the path of a dataset config, got 5"),
     ({"pipeline": "a.json"}, "tasks[0].id: is required and must be a non-empty string"),
@@ -250,8 +254,8 @@ def test_the_schema_lists_the_task_kinds_and_checks_a_workflow_file():
     assert schema == workflow_schema()
     task = schema["$defs"]["task"]
     assert task["required"] == ["id"] and task["additionalProperties"] is False
-    assert task["oneOf"] == [{"required": ["pipeline"]}, {"required": ["maintain"]}]
-    assert {"pipeline", "maintain", "depends_on", "retries"} <= set(task["properties"])
+    assert task["oneOf"] == [{"required": ["pipeline"]}, {"required": ["maintain"]}, {"required": ["dbt"]}]
+    assert {"pipeline", "maintain", "dbt", "depends_on", "retries"} <= set(task["properties"])
     assert set(schema["properties"]["metadata"]["properties"]) == {"schedule", "window", "catchup", "start", "retries",
                                                                    "observability"}
 
@@ -269,7 +273,8 @@ def test_ldp_schema_prints_the_workflow_schema(capsys):
     assert main(["schema", "--kind", "Workflow"]) == 0
 
     printed = json.loads(capsys.readouterr().out)
-    assert printed["$defs"]["task"]["oneOf"] == [{"required": ["pipeline"]}, {"required": ["maintain"]}]
+    assert printed["$defs"]["task"]["oneOf"] == [{"required": ["pipeline"]}, {"required": ["maintain"]},
+                                                 {"required": ["dbt"]}]
 
 
 def test_a_new_task_kind_is_checked_planned_and_run_without_changing_the_runner(tmp_path, custom_kind):
@@ -841,6 +846,69 @@ def test_a_task_that_returns_something_else_than_an_outcome_fails_the_task(tmp_p
         unregister_task_kind("odd")
 
     assert result.tasks["x"].status == "failed" and "returned str, not a TaskOutcome" in result.tasks["x"].error
+
+
+def test_a_kind_that_raises_with_facts_gets_them_into_the_result_and_the_events(tmp_path):
+    def gate(task, ctx):
+        raise TaskBlocked("the amounts are not valid", {"rows_checked": 3})
+
+    def boom(task, ctx):
+        raise TaskFailed("the engine stopped", {"exit_status": 9, "nodes": {"error": 1}})
+
+    for name, run in (("gate", gate), ("boom", boom)):
+        register_task_kind(name, validate=lambda v: [], json_schema=dict, plan=lambda t, c: TaskPlan(), run=run)
+    try:
+        tasks = [{"id": "g", "gate": 1}, {"id": "b", "boom": 1}, {"id": "after", "depends_on": ["g"], "gate": 1}]
+        result = run_workflow(_project(tmp_path, workflow=_spec(tasks=tasks)), window=DAY1)
+    finally:
+        unregister_task_kind("gate")
+        unregister_task_kind("boom")
+
+    assert _statuses(result) == {"g": "blocked_quality", "b": "failed", "after": "upstream_failed"}
+    assert result.exit_code == 1, "a failure outranks a data gate"
+    assert result.tasks["g"].detail == {"rows_checked": 3} and "the amounts are not valid" in result.tasks["g"].error
+    assert result.tasks["b"].detail == {"exit_status": 9, "nodes": {"error": 1}}
+    finished = {event.payload["task_id"]: event.payload for event in read_jsonl(tmp_path / ".ldp" / "events.jsonl")
+                if event.type == "run.finished" and event.payload.get("task_id")}
+    assert finished["g"]["rows_checked"] == 3 and finished["b"]["exit_status"] == 9
+    failed = [event for event in read_jsonl(tmp_path / ".ldp" / "events.jsonl") if event.type == "run.failed"]
+    assert [event.payload["task_id"] for event in failed] == ["b"], "a data gate is not a failure"
+
+
+def test_an_error_with_a_detail_that_is_not_an_object_is_just_an_error(tmp_path):
+    class Odd(Exception):
+        detail = "not a mapping"
+
+    def run(task, ctx):
+        raise Odd("odd")
+
+    register_task_kind("odd", validate=lambda v: [], json_schema=dict, plan=lambda t, c: TaskPlan(), run=run)
+    try:
+        result = run_workflow(_project(tmp_path, workflow=_spec(tasks=[{"id": "x", "odd": 1}])), window=DAY1)
+    finally:
+        unregister_task_kind("odd")
+
+    assert result.tasks["x"].status == "failed" and result.tasks["x"].detail == {}
+
+
+def test_a_task_sees_the_results_of_the_tasks_that_ran_before_it_and_cannot_change_them(tmp_path):
+    seen = {}
+
+    def look(task, ctx):
+        seen[task.id] = {name: item.status for name, item in ctx.finished.items()}
+        with pytest.raises(TypeError):
+            ctx.finished["x"] = None
+        return TaskOutcome("succeeded", {})
+
+    register_task_kind("look", validate=lambda v: [], json_schema=dict, plan=lambda t, c: TaskPlan(), run=look)
+    try:
+        tasks = [{"id": "one", "look": 1}, {"id": "two", "depends_on": ["one"], "look": 1},
+                 {"id": "three", "depends_on": ["two"], "look": 1}]
+        run_workflow(_project(tmp_path, workflow=_spec(tasks=tasks)), window=DAY1)
+    finally:
+        unregister_task_kind("look")
+
+    assert seen == {"one": {}, "two": {"one": "succeeded"}, "three": {"one": "succeeded", "two": "succeeded"}}
 
 
 def test_an_interrupted_run_still_writes_workflow_finished_and_the_interrupt_goes_on(tmp_path):

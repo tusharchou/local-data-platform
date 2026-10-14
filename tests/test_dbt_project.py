@@ -254,6 +254,30 @@ def test_run_dbt_flushes_what_ldp_printed_before_dbt_writes_to_the_same_stream(c
     assert len(flushed) == 2
 
 
+def test_run_dbt_can_send_the_output_of_dbt_to_another_descriptor(captured, project):
+    run_dbt(project, "/bin/dbt", ["ls"], stdout=2)
+
+    assert captured.calls[0][1]["stdout"] == 2
+    assert "stdout" in captured.calls[0][1] and run_dbt(project, "/bin/dbt", ["ls"]) == 3
+    assert captured.calls[1][1]["stdout"] is None, "by default dbt writes where ldp writes"
+
+
+def test_run_dbt_decides_about_colour_from_where_the_output_goes(captured, project, monkeypatch):
+    class Terminal:
+        def isatty(self):
+            return True
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr(sys, "stdout", Terminal())
+    monkeypatch.setattr("local_data_platform.dbt_layer.project.os.isatty", lambda descriptor: False)
+
+    run_dbt(project, "/bin/dbt", ["ls"], stdout=2)
+
+    assert "--no-use-colors" in captured.calls[0][0], "standard output is a terminal, but dbt writes to descriptor 2"
+
+
 # --------------------------------------------------------------------------- where dbt writes its artifacts
 
 

@@ -8,6 +8,7 @@
   plan.
 * :mod:`~local_data_platform.orchestration.tasks`: the registry of task kinds, with the ``pipeline`` and ``maintain``
   kinds.
+* :mod:`~local_data_platform.orchestration.dbt_task`: the ``dbt`` kind, which builds a dbt project for the window.
 * :mod:`~local_data_platform.orchestration.runner`: the runner, :func:`run_workflow`.
 
 The names below are loaded when they are first used, so importing this package, which ``local_data_platform.spec`` does
@@ -33,6 +34,8 @@ _LAZY = {
     "register_task_kind": "tasks",
     "task_kinds": "tasks",
     "Task": "tasks",
+    "TaskBlocked": "tasks",
+    "TaskFailed": "tasks",
     "TaskKind": "tasks",
     "TaskOutcome": "tasks",
     "TaskPlan": "tasks",

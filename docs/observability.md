@@ -80,6 +80,21 @@ A run writes all of its events, `workflow.started`, the events of every task and
 is not a pipeline, and a task that did not run because one it depends on did not succeed, get a `run.started` and a
 `run.finished` from the runner. `ldp runs .ldp/events.jsonl` lists the workflow run and each task's run, with a `workflow`
 and a `task` column.
+
+A `dbt` task is one of those tasks, so its `run.started` and `run.finished` come from the runner, and the `run.finished`
+carries what the task did. Each model that the task published is a run of its own, with the `workflow`, `workflow_run_id`
+and `task_id` of the task, so `ldp runs` lists it under the task and OpenLineage links it to the workflow run as its parent.
+
+| Field of `run.finished` | When | Meaning |
+|---|---|---|
+| `command`, `window`, `fingerprint` | once the project was found | The dbt command, the window as two UTC instants, and the 16 hex characters that identify the project, the command, the selection and the variables. A later run skips the task when its window and fingerprint match a build that succeeded |
+| `nodes` | after dbt ran | How many dbt nodes ended with each status, such as `{"success": 2, "pass": 4}` |
+| `dbt_s` | a success | The seconds dbt says it took |
+| `published` | a successful `build` | One object for each model written: `table`, `mode`, `rows_before`, `rows_after` and `snapshot_id` |
+| `built_by` | a skip | The `workflow_run_id` of the run that built this window |
+| `exit_status`, `failed_nodes`, `failed_total` | a failure or a data gate | dbt's exit status, the first 10 failed nodes as `node` and `status`, and how many failed |
+| `published`, `failed_model`, `not_published` | a write that failed | The tables written before it, the model that failed, and the models after it that were not tried |
+
 ### What never goes into an event
 
 Payloads follow the SaaS boundary allowlist (§10.2): specs, schemas, counts, snapshot ids and

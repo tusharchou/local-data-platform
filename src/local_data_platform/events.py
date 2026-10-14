@@ -79,7 +79,7 @@ task that did not run because one it depends on did not succeed is ``upstream_fa
 
 WORKFLOW_STATUSES = ("succeeded", "blocked_quality", "failed")
 """The ``status`` a ``workflow.finished`` event reports: every task succeeded, or the only problem was a data gate that
-held a pipeline back, or at least one task failed."""
+held a task back, or at least one task failed."""
 
 SYSTEM_NAMESPACE = "_ldp"
 """The namespace LDP's own tables live in, inside the customer's catalog."""

@@ -1,0 +1,14 @@
+version: 2
+
+models:
+  - name: stg_orders
+    columns:
+      - name: order_id
+        data_tests: [not_null]
+  - name: daily_revenue
+    description: Orders and revenue of each day that a workflow run has built.
+    columns:
+      - name: day
+        data_tests: [unique, not_null]
+      - name: revenue
+        data_tests: [not_null]

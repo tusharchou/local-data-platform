@@ -20,6 +20,7 @@ from local_data_platform.cli import build_parser, main
 from local_data_platform.dbt_layer import cli as dbt_cli
 from local_data_platform.format.iceberg import Iceberg
 from tests.support import (
+    FakeDbt,
     build_lake,
     copy_fixture_project,
     dataset_config,
@@ -29,52 +30,6 @@ from tests.support import (
     requires_iceberg_extension,
     without_log_warnings,
 )
-
-FAKE_DBT = """#!PYTHON
-import json
-import sys
-from pathlib import Path
-
-here = Path(__file__).parent
-plan = json.loads((here / "plan.json").read_text())
-cwd = Path.cwd()
-with (here / "calls.jsonl").open("a") as log:
-    log.write(json.dumps({
-        "argv": sys.argv[1:], "cwd": str(cwd),
-        "sources_yaml_existed": (cwd / "models" / "_ldp_sources.yml").is_file(),
-    }) + "\\n")
-if plan.get("sql"):
-    import duckdb
-    with duckdb.connect(plan["database"]) as connection:
-        for statement in plan["sql"]:
-            connection.execute(statement)
-target = cwd / plan.get("target", "target")
-for name, content in plan.get("artifacts", {}).items():
-    target.mkdir(parents=True, exist_ok=True)
-    (target / name).write_text(json.dumps(content))
-print(plan.get("say", "fake dbt ran"))
-sys.exit(plan.get("exit", 0))
-"""
-
-
-class FakeDbt:
-    """An executable that stands in for ``dbt``: it logs each call, then does what :meth:`will` said."""
-
-    def __init__(self, folder: Path):
-        folder.mkdir(parents=True)
-        self.folder = folder
-        self.path = folder / "dbt"
-        self.path.write_text(FAKE_DBT.replace("PYTHON", sys.executable))
-        self.path.chmod(0o755)
-        self.will()
-
-    def will(self, **plan) -> None:
-        (self.folder / "plan.json").write_text(json.dumps(plan))
-
-    @property
-    def calls(self) -> list[dict]:
-        log = self.folder / "calls.jsonl"
-        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
 @pytest.fixture

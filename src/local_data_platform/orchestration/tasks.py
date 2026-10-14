@@ -6,15 +6,18 @@ does::
     {"id": "orders", "pipeline": "config/orders.json"}
     {"id": "tidy", "depends_on": ["orders"], "maintain": {"config": "config/orders.json", "expire": 7, "apply": true}}
 
-This milestone ships two kinds, ``pipeline`` (the path of a dataset config, relative to the workflow file) and
-``maintain`` (the path of a dataset config and the options of ``ldp maintain``). Each is a :class:`TaskKind` in a small
+This milestone ships three kinds, ``pipeline`` (the path of a dataset config, relative to the workflow file),
+``maintain`` (the path of a dataset config and the options of ``ldp maintain``) and ``dbt`` (a dbt project, run for the
+window, which :mod:`local_data_platform.orchestration.dbt_task` describes). Each is a :class:`TaskKind` in a small
 registry, and :func:`register_task_kind` adds more. A later milestone adds a ``gold`` task and a ``report`` task the
 same way, and neither the runner nor the workflow file format changes.
 
 A kind says how its value is checked (``validate`` and ``json_schema``), what ``ldp workflow plan`` shows and checks
 about it (``plan``), and what it does when a workflow runs (``run``). ``run`` returns a :class:`TaskOutcome` and raises
-when the task fails. A kind whose ``run`` is not a pipeline run leaves its events to the runner, which emits
-``run.started`` and ``run.finished`` for it. A pipeline run emits its own events (``emits_events=True``).
+when the task fails: :class:`TaskFailed` for an error, and :class:`TaskBlocked` when a data gate held the task back, and
+both carry small JSON facts about the run that the events and the result of the task keep. A kind whose ``run`` is not
+a pipeline run leaves its events to the runner, which emits ``run.started`` and ``run.finished`` for it. A pipeline run
+emits its own events (``emits_events=True``).
 
 This module needs only the standard library when it is imported, so a workflow can be validated without pyiceberg.
 """
@@ -26,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from local_data_platform.exceptions import DataQualityError, LDPError
+
 TASK_KEYS = ("id", "depends_on", "retries")
 """The keys a task may have besides its one kind."""
 
@@ -35,6 +40,39 @@ TASK_OK = ("published", "skipped_duplicate", "succeeded")
 _KIND_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
+class TaskFailed(LDPError):
+    """Raised by the ``run`` of a task kind when the task failed.
+
+    Any other exception fails the task too. This one also carries ``detail``, small JSON facts about the failed run,
+    which go into the ``run.finished`` event and the result of the task, so a failure says what was run and what went
+    wrong, not only that it did.
+
+    Args:
+        message: What went wrong.
+        detail: The facts, such as the command, its exit status and the models that failed. Never rows.
+    """
+
+    def __init__(self, message: str, detail: Mapping[str, Any] | None = None):
+        super().__init__(message)
+        self.detail = dict(detail or {})
+
+
+class TaskBlocked(DataQualityError):
+    """Raised by the ``run`` of a task kind when a data gate held the task back.
+
+    The data has to change, so the task ends ``blocked_quality``, the workflow exits with 3 and a scheduler must not
+    retry it. ``detail`` is as for :class:`TaskFailed`.
+
+    Args:
+        message: What the gate found.
+        detail: The facts about the run. Never rows.
+    """
+
+    def __init__(self, message: str, detail: Mapping[str, Any] | None = None, report: Any = None):
+        super().__init__(message, report)
+        self.detail = dict(detail or {})
+
+
 @dataclass(frozen=True)
 class Task:
     """One task of a workflow.
@@ -42,7 +80,8 @@ class Task:
     Attributes:
         id: The task's id, unique in the workflow.
         kind: The kind of the task, the key of the registry that its ``value`` sits under.
-        value: What the kind's key holds: the path of a config for ``pipeline``, an options object for ``maintain``.
+        value: What the kind's key holds: the path of a config for ``pipeline``, an options object for ``maintain``
+            and ``dbt``.
         depends_on: The ids of the tasks that must succeed before this one runs.
         retries: The task's own ``retries`` setting, or ``None`` to use the workflow's.
         index: The position of the task in the file, which orders tasks that nothing else orders.
@@ -117,6 +156,8 @@ class RunContext:
             workflow's ``metadata.observability``.
         policy: The :class:`~local_data_platform.format.iceberg.commit.CommitPolicy` of the writes of the run.
         search_since_ms: The start of the key search of the publish loop of the run, in epoch milliseconds.
+        finished: The result of every task that has finished in this run, by task id, in the order they finished. It is
+            read-only, and it holds what ran before the task, so a task can tell whether anything upstream wrote data.
     """
 
     workflow: Any
@@ -125,10 +166,27 @@ class RunContext:
     sink: Any
     policy: Any = None
     search_since_ms: int | None = None
+    finished: Mapping[str, Any] = field(default_factory=dict)
 
     def resolve(self, path: str | Path) -> Path:
         """The path of a file the workflow names, against the folder of the workflow file."""
         return self.workflow.resolve(path)
+
+    def wrote_data(self) -> bool:
+        """Whether a task that finished earlier in this run may have written data.
+
+        A task that was skipped, or did not run, wrote nothing. A task that succeeded wrote data unless its kind says
+        it changes none, as ``maintain`` does. A task that failed, or that a data gate blocked, may have written part of
+        its data before it stopped, so it counts: skipping a task as already done is only safe when nothing it reads
+        can have changed.
+        """
+        for result in self.finished.values():
+            if result.status in ("skipped_duplicate", "upstream_failed"):
+                continue
+            if result.status == "succeeded" and not _KINDS[result.kind].changes_data:
+                continue
+            return True
+        return False
 
     def tags(self, task: Task) -> dict[str, str]:
         """The fields that every event of a task's run carries: its workflow, the workflow run and the task."""
@@ -155,6 +213,9 @@ class TaskKind:
         emits_events: Whether ``run`` emits the events of the task's run itself, as a pipeline does. When it does not,
             the runner emits ``run.started`` and ``run.finished`` for the task.
         description: One line for ``ldp workflow plan`` and the docs.
+        changes_data: Whether a task of this kind that succeeds has changed data that a later task may read. Most do. A
+            kind that only looks after tables, such as ``maintain``, says no, so it does not make a later task run
+            again that would otherwise be skipped as already done.
     """
 
     name: str
@@ -164,6 +225,7 @@ class TaskKind:
     run: Callable[[Task, RunContext], TaskOutcome]
     emits_events: bool = False
     description: str = ""
+    changes_data: bool = True
 
 
 _KINDS: dict[str, TaskKind] = {}
@@ -172,7 +234,7 @@ _KINDS: dict[str, TaskKind] = {}
 def register_task_kind(name: str, *, validate: Callable[[Any], list[tuple[str, str]]],
                        json_schema: Callable[[], dict[str, Any]], plan: Callable[[Task, PlanContext], TaskPlan],
                        run: Callable[[Task, RunContext], TaskOutcome], emits_events: bool = False,
-                       description: str = "", replace: bool = False) -> TaskKind:
+                       description: str = "", changes_data: bool = True, replace: bool = False) -> TaskKind:
     """Add a kind of task to the registry, so a workflow can use it.
 
     Args:
@@ -185,6 +247,8 @@ def register_task_kind(name: str, *, validate: Callable[[Any], list[tuple[str, s
         emits_events: Whether ``run`` emits the run events of the task itself. A kind that does not has them emitted by
             the runner.
         description: One line that says what the kind is.
+        changes_data: Whether a task of this kind that succeeds has changed data that a later task may read. See
+            :class:`TaskKind`.
         replace: Replace a kind that is already registered.
 
     Returns:
@@ -199,7 +263,7 @@ def register_task_kind(name: str, *, validate: Callable[[Any], list[tuple[str, s
                          f"{list(TASK_KEYS)}, got {name!r}")
     if name in _KINDS and not replace:
         raise ValueError(f"the task kind {name!r} is already registered; pass replace=True to replace it")
-    _KINDS[name] = TaskKind(name, validate, json_schema, plan, run, emits_events, description)
+    _KINDS[name] = TaskKind(name, validate, json_schema, plan, run, emits_events, description, changes_data)
     return _KINDS[name]
 
 
@@ -453,7 +517,12 @@ register_task_kind(
     emits_events=True, description="Run a dataset config for the window of the workflow run.")
 register_task_kind(
     "maintain", validate=_validate_maintain, json_schema=_maintain_schema, plan=_plan_maintain, run=_run_maintain,
+    changes_data=False,
     description="Expire snapshots and find orphan files of a config's Iceberg table, as ldp maintain does.")
+
+# The dbt kind lives in its own module and registers itself when that is imported, which has to come last: the module
+# imports from this one. Importing it first works too, because this import finds it half loaded and goes on.
+from local_data_platform.orchestration import dbt_task  # noqa: E402,F401
 
 
 __all__ = [
@@ -463,6 +532,8 @@ __all__ = [
     "TASK_KEYS",
     "TASK_OK",
     "Task",
+    "TaskBlocked",
+    "TaskFailed",
     "TaskKind",
     "TaskOutcome",
     "TaskPlan",
