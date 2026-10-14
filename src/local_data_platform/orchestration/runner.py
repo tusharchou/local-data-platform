@@ -35,6 +35,12 @@ the attempt counts up, so the events of each attempt carry the attempt number, a
 key, so the new attempt fences the old one and a load that already landed is not written twice. A quality check that
 blocked a write, a config that is wrong and a fenced attempt are never retried. By default a task runs once.
 
+A run that did not succeed can be carried on by a later run, which ``ldp schedule tick`` does for a window that failed
+on the tick before: ``run_workflow(..., continues=...)`` takes the ids from the ledger, see
+:func:`~local_data_platform.orchestration.ledger.trace_runs`. The workflow keeps its run id and the task its run id, and
+each of them goes on with the attempt after the last one, so a commit of the new attempt fences every older attempt of
+the run, also one that a crashed process left behind. Its retries count from the attempt it starts with.
+
 The workflow is ``failed`` when a task failed, ``blocked_quality`` when the only problem is a data gate, and
 ``succeeded`` otherwise, and :attr:`WorkflowResult.exit_code` is 1, 3 or 0 to match the exit-code table of ``ldp``.
 
@@ -58,6 +64,7 @@ from typing import Any
 from local_data_platform.exceptions import ConfigError, DataQualityError
 from local_data_platform.logger import get_logger
 from local_data_platform.orchestration import tasks as task_registry
+from local_data_platform.orchestration.ledger import Continuation
 from local_data_platform.orchestration.retries import is_retriable
 from local_data_platform.orchestration.tasks import TASK_OK, RunContext, Task, TaskOutcome
 from local_data_platform.orchestration.workflow import Workflow, load_workflow, plan_workflow
@@ -215,24 +222,31 @@ class _Pause:
 
 
 def _run_task(task: Task, ctx: RunContext, results: Mapping[str, TaskResult], counts: dict[str, int],
-              pause: _Pause) -> TaskResult:
-    """Run one task, and again after a failure that another attempt may fix, or mark it ``upstream_failed``."""
+              pause: _Pause, continues: Continuation | None = None) -> TaskResult:
+    """Run one task, and again after a failure that another attempt may fix, or mark it ``upstream_failed``.
+
+    A task of a run that is carried on keeps the run id it had, and its attempts go on from the last one. Its retries
+    count the attempts of this run, so ``max_attempts`` is the most that one run of the task makes.
+    """
+    carried_id, base = continues.task(task.id) if continues is not None else (None, 0)
     blockers = [name for name in task.depends_on if results[name].status not in TASK_OK]
     if blockers:
         logger.info("Workflow %s: task %s did not run, because %s did not succeed", ctx.workflow.identifier, task.id,
                     ", ".join(blockers))
-        _finish_task_run(_task_emitter(ctx, task), "upstream_failed", extra={"blocked_by": blockers})
+        _finish_task_run(_task_emitter(ctx, task, carried_id, base + 1), "upstream_failed",
+                         extra={"blocked_by": blockers})
         return TaskResult(task.id, task.kind, "upstream_failed", {"blocked_by": blockers}, attempts=0)
     from local_data_platform.events import uuid7
 
     kind = task_registry.get_task_kind(task.kind)
     policy = ctx.workflow.retries_of(task)
-    run_id = uuid7()  # one run id for every attempt of the task, so a retry fences the attempt before it
+    run_id = carried_id or uuid7()  # one run id for every attempt of the task, so a retry fences the attempt before it
     seen = _Counting(ctx.sink, counts, task.id)
     started = time.perf_counter()
-    attempt = 0
+    attempt = base
     while True:
         attempt += 1
+        tries = attempt - base
         counts[task.id] = 0
         scoped = dataclasses.replace(ctx, sink=seen, finished=MappingProxyType(results), attempt=attempt,
                                      task_run_id=run_id)
@@ -255,19 +269,19 @@ def _run_task(task: Task, ctx: RunContext, results: Mapping[str, TaskResult], co
             _finish_task_run(emitter, status, error=error if status == "failed" else None, duration_s=took,
                              extra=detail)
         logger.info("Workflow %s: task %s %s in %.2fs", ctx.workflow.identifier, task.id, status, took)
-        if not (status == "failed" and attempt < policy.max_attempts and is_retriable(error)):
+        if not (status == "failed" and tries < policy.max_attempts and is_retriable(error)):
             break
-        wait = policy.delay(attempt, pause.rng)
+        wait = policy.delay(tries, pause.rng)
         logger.warning("Workflow %s: task %s failed on attempt %d of %d (%s), and runs again in %.1f s",
-                       ctx.workflow.identifier, task.id, attempt, policy.max_attempts, _message(error), wait)
+                       ctx.workflow.identifier, task.id, tries, policy.max_attempts, _message(error), wait)
         pause.sleep(wait)
     return TaskResult(task.id, task.kind, status, detail, _message(error) if error is not None else None,
-                      time.perf_counter() - started, attempt)
+                      time.perf_counter() - started, attempt - base)
 
 
 def run_workflow(source: "str | Path | Workflow", *, window: Any, policy: Any = None,
                  search_since_ms: int | None = None, sleep: Callable[[float], None] | None = None,
-                 rng: Any = None, replace: bool = False) -> WorkflowResult:
+                 rng: Any = None, replace: bool = False, continues: Continuation | None = None) -> WorkflowResult:
     """Run the tasks of a workflow, one at a time, in dependency order, for one window.
 
     The workflow and every config it names are checked first, and a workflow that is not valid does not start. A
@@ -294,6 +308,11 @@ def run_workflow(source: "str | Path | Workflow", *, window: Any, policy: Any = 
             window that was replaced under the same spec is skipped. Every such pipeline needs a
             ``metadata.window.column``, and a workflow with one that has none does not start. A dbt task builds the
             window again whatever it built before. ``ldp backfill --replace`` is the command line for it.
+        continues: A run of this window that did not succeed, to carry on, from
+            :func:`~local_data_platform.orchestration.ledger.trace_runs`. The run keeps the run id of the workflow and
+            of each task, and goes on with the attempt after the last one, so its first commit fences the older
+            attempts. ``ldp schedule tick`` passes it for a window that failed on an earlier tick. The events of the run
+            carry the attempt numbers, and a task that did not take part in the earlier run starts a run of its own.
 
     Returns:
         The :class:`WorkflowResult`. It does not raise for a failed task: read ``result.status`` or
@@ -319,7 +338,7 @@ def run_workflow(source: "str | Path | Workflow", *, window: Any, policy: Any = 
     started_at = dt.datetime.now(dt.timezone.utc)
     pipelines = sum(1 for task in workflow.tasks if task.kind == "pipeline")
     batch_since, batch_policy = batch_search(pipelines, started=started_at)
-    run_id = uuid7()
+    run_id = continues.run_id if continues is not None else uuid7()
     sinks = [JsonlSink(workflow.ledger_path)]
     sinks += [sink for sink in (build_sink(spec, workflow.base_dir) for spec in sink_specs(workflow.metadata))
               if not isinstance(sink, NullSink)]
@@ -328,8 +347,9 @@ def run_workflow(source: "str | Path | Workflow", *, window: Any, policy: Any = 
                          policy=policy if policy is not None else batch_policy,
                          search_since_ms=search_since_ms if search_since_ms is not None else batch_since,
                          replace=replace)
-    emitter = RunEmitter(sink, run_id, context={"pipeline": workflow.identifier, "workflow": workflow.identifier,
-                                                "workflow_run_id": run_id})
+    emitter = RunEmitter(sink, run_id, attempt=continues.attempt + 1 if continues is not None else 1,
+                         context={"pipeline": workflow.identifier, "workflow": workflow.identifier,
+                                  "workflow_run_id": run_id})
     result = WorkflowResult(workflow=workflow.identifier, run_id=run_id, window=bounds, started_at=started_at,
                             ledger=workflow.ledger_path)
     clock = time.perf_counter()
@@ -346,7 +366,7 @@ def run_workflow(source: "str | Path | Workflow", *, window: Any, policy: Any = 
         while sorter.is_active():
             ready = sorted(sorter.get_ready(), key=lambda task_id: by_id[task_id].index)
             for task_id in ready:
-                result.tasks[task_id] = _run_task(by_id[task_id], context, result.tasks, counts, pause)
+                result.tasks[task_id] = _run_task(by_id[task_id], context, result.tasks, counts, pause, continues)
             sorter.done(*ready)
     finally:
         result.duration_s = time.perf_counter() - clock

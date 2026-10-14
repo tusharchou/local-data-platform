@@ -37,7 +37,6 @@ published, were skipped, were blocked by a data gate and failed.
 
 import datetime as dt
 import itertools
-import json
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -47,8 +46,9 @@ from typing import Any
 from local_data_platform.exceptions import ConfigError, TableNotFound
 from local_data_platform.logger import get_logger
 from local_data_platform.orchestration import windows
+from local_data_platform.orchestration.ledger import Continuation, read_windows, run_status, trace_runs
 from local_data_platform.orchestration.runner import WorkflowResult, run_workflow
-from local_data_platform.orchestration.tasks import TASK_OK, get_task_kind
+from local_data_platform.orchestration.tasks import get_task_kind
 from local_data_platform.orchestration.workflow import Workflow, load_workflow, plan_workflow
 from local_data_platform.spec import format_instant, idempotency_key, replace_key, spec_hash
 
@@ -92,6 +92,8 @@ class BackfillWindow:
         result: The :class:`~local_data_platform.orchestration.runner.WorkflowResult` of the run of the window, or
             ``None`` when the window was not run.
         error: Why the window failed when its workflow could not start, such as a source file that cannot be planned.
+        attempt: The attempt of the workflow run that this run is. It is 1 for a run of its own, and more for a run that
+            carried on the last run of the window, as ``ldp schedule tick`` does. ``None`` when the window was not run.
     """
 
     start: dt.datetime
@@ -101,6 +103,7 @@ class BackfillWindow:
     outcome: str | None = None
     result: WorkflowResult | None = None
     error: str | None = None
+    attempt: int | None = None
 
     @property
     def window(self) -> str:
@@ -127,7 +130,7 @@ class BackfillWindow:
     def to_dict(self) -> dict[str, Any]:
         """The window as JSON-serialisable primitives."""
         data: dict[str, Any] = {"window": self.window, "state": self.state, "keys": dict(self.keys),
-                                "outcome": self.outcome, "error": self.error}
+                                "outcome": self.outcome, "error": self.error, "attempt": self.attempt}
         if self.result is not None:
             data["workflow_run_id"] = self.result.run_id
             data["tasks"] = [{"id": task.id, "kind": task.kind, "status": task.status, "attempts": task.attempts,
@@ -142,7 +145,7 @@ class BackfillResult:
     Attributes:
         workflow: The identifier of the workflow.
         ledger: The file that the events of the runs go to, next to the workflow file.
-        window_size: ``day``, ``hour`` or ``15m``.
+        window_size: ``day``, ``hour`` or ``15m``, or ``None`` for the windows of a schedule that has no size.
         timezone: The time zone the days are counted in.
         start: Where the range starts, an aware UTC datetime.
         end: Where it ends.
@@ -155,7 +158,7 @@ class BackfillResult:
 
     workflow: str
     ledger: Path
-    window_size: str
+    window_size: str | None
     timezone: str
     start: dt.datetime
     end: dt.datetime
@@ -261,47 +264,8 @@ def _read_ledger(workflow: Workflow) -> dict[tuple[str, str], Mapping[str, str]]
     tasks that ran. A line that is not an event, such as one cut short by a crash, and the runs of other workflows that
     share the ledger, are ignored, and so is a ledger that does not exist.
     """
-    last: dict[tuple[str, str], Mapping[str, str]] = {}
-    try:
-        handle = open(workflow.ledger_path, encoding="utf-8")
-    except OSError:
-        return last
-    opened: dict[str, tuple[str, str]] = {}
-    with handle:
-        for line in handle:
-            if '"workflow.' not in line:
-                continue  # a cheap test that spares most lines the JSON parser
-            try:
-                event = json.loads(line)
-                payload, run_id, kind = event["payload"], event["run_id"], event["type"]
-            except (ValueError, KeyError, TypeError):
-                continue
-            if not isinstance(payload, Mapping) or payload.get("workflow") != workflow.identifier:
-                continue
-            span = payload.get("window")
-            if kind == "workflow.started" and isinstance(span, list) and len(span) == 2:
-                opened[run_id] = (str(span[0]), str(span[1]))
-            elif kind == "workflow.finished" and run_id in opened and isinstance(payload.get("tasks"), Mapping):
-                last[opened[run_id]] = payload["tasks"]
-    return last
-
-
-def _ledger_status(tasks: Mapping[str, str] | None, task_ids: Sequence[str]) -> str | None:
-    """What the last run of a window says: ``failed``, ``blocked``, ``succeeded``, ``incomplete``, or ``None``.
-
-    ``succeeded`` means that every task of the workflow ended well.
-
-    ``incomplete`` is a run that stopped before every task ran, such as an interrupted one, or one from before a task
-    was added to the workflow.
-    """
-    if tasks is None:
-        return None
-    statuses = list(tasks.values())
-    if "failed" in statuses:
-        return "failed"
-    if "blocked_quality" in statuses:
-        return "blocked"
-    return "succeeded" if all(tasks.get(task_id) in TASK_OK for task_id in task_ids) else "incomplete"
+    records = read_windows(workflow.ledger_path, workflow.identifier)
+    return {window: record.tasks for window, record in records.items() if record.tasks is not None}
 
 
 class _Inspector:
@@ -322,7 +286,8 @@ class _Inspector:
                     self.needs_ledger = True
             elif task.kind != "maintain":
                 self.needs_ledger = True
-        self.ledger = _read_ledger(workflow)
+        self.records = read_windows(workflow.ledger_path, workflow.identifier)
+        self.ledger = {window: record.tasks for window, record in self.records.items() if record.tasks is not None}
         self.task_ids = [task.id for task in workflow.tasks]
 
     def keys(self, bounds: tuple[dt.datetime, dt.datetime]) -> dict[str, str]:
@@ -336,7 +301,7 @@ class _Inspector:
     def state(self, bounds: tuple[dt.datetime, dt.datetime], keys: Mapping[str, str]) -> str:
         """The state of a window, see :data:`STATES`."""
         on_main = [keys[keyed.task_id] in keyed.published for keyed in self.keyed]
-        ledger = _ledger_status(self.ledger.get((format_instant(bounds[0]), format_instant(bounds[1]))), self.task_ids)
+        ledger = run_status(self.ledger.get((format_instant(bounds[0]), format_instant(bounds[1]))), self.task_ids)
         by_keys = all(on_main)  # true when nothing is keyed, which leaves the ledger to say
         by_ledger = ledger == "succeeded" if (self.needs_ledger or not self.keyed) else True
         # A replace cannot be told from the ledger alone: what it did is on main, under the keys it wrote.
@@ -347,6 +312,17 @@ class _Inspector:
         if ledger == "blocked":
             return "blocked"
         return "partial" if any(on_main) else "missing"
+
+    def resumable(self, bounds: tuple[dt.datetime, dt.datetime]) -> str | None:
+        """The run id of the last run of a window, when that run did not succeed, so that the next run can carry it on.
+
+        A run that failed, was blocked by a data gate or never finished is carried on. A window whose last run succeeded
+        is not, and nor is one that no run has started.
+        """
+        record = self.records.get((format_instant(bounds[0]), format_instant(bounds[1])))
+        if record is None or run_status(record.tasks, self.task_ids) == "succeeded":
+            return None
+        return record.run_id
 
 
 def _outcome_of(result: WorkflowResult) -> str:
@@ -426,17 +402,12 @@ def backfill(source: "str | Path | Workflow", start: Any, end: Any = None, *, re
             holds more than ``max_windows`` windows, the workflow does not say how long a window is, or ``replace`` is
             set and a pipeline that writes to Iceberg has no ``metadata.window.column``. Nothing has run then.
     """
-    from local_data_platform.etl import batch_search
-
     began = time.perf_counter()
     if not isinstance(max_windows, int) or isinstance(max_windows, bool) or max_windows < 1:
         raise ConfigError(f"max_windows must be a whole number from 1, got {max_windows!r}")
     workflow = source if isinstance(source, Workflow) else load_workflow(source, require_schedule=False)
     size, zone, first, last = _range(workflow, start, end, now)
-    checked = plan_workflow(workflow, replace=replace)  # what no window can change: the configs, and a replace's column
-    if not checked["valid"]:
-        listed = "\n".join(f"  - {message}" for message in checked["errors"])
-        raise ConfigError(f"workflow {workflow.identifier} is not valid, so no window ran:\n{listed}")
+    check_workflow(workflow, replace)
     grid = list(itertools.islice(windows.iter_windows(first, last, size, workflow.timezone), max_windows + 1))
     if len(grid) > max_windows:
         raise ConfigError(f"the range from {format_instant(first)} to {format_instant(last)} holds more than "
@@ -444,28 +415,96 @@ def backfill(source: "str | Path | Workflow", start: Any, end: Any = None, *, re
                           "max_windows (--max-windows)")
     if run_backwards:
         grid.reverse()
+    return run_windows(workflow, grid, window_size=size, timezone=zone, start=first, end=last,
+                       order="newest first" if run_backwards else "oldest first", replace=replace, dry_run=dry_run,
+                       stop_on_failure=stop_on_failure, policy=policy, sleep=sleep, rng=rng, on_window=on_window,
+                       began=began)
+
+
+def check_workflow(workflow: Workflow, replace: bool = False) -> None:
+    """Check the workflow and every config it names, which no window can change, and a replace's window columns.
+
+    Raises:
+        ConfigError: If anything is not valid, with every problem in the message. Nothing has run then.
+    """
+    checked = plan_workflow(workflow, replace=replace)
+    if not checked["valid"]:
+        listed = "\n".join(f"  - {message}" for message in checked["errors"])
+        raise ConfigError(f"workflow {workflow.identifier} is not valid, so no window ran:\n{listed}")
+
+
+def run_windows(workflow: Workflow, grid: Sequence[tuple[dt.datetime, dt.datetime]], *, window_size: str | None,
+                timezone: str, start: dt.datetime, end: dt.datetime, order: str = "oldest first",
+                replace: bool = False, dry_run: bool = False, stop_on_failure: bool = False, policy: Any = None,
+                sleep: Callable[[float], None] | None = None, rng: Any = None,
+                on_window: Callable[[BackfillWindow, int, int], None] | None = None, continue_runs: bool = False,
+                max_pending: int | None = None, began: float | None = None) -> BackfillResult:
+    """Run a workflow for each window of a list, in that order, skipping the windows that are done.
+
+    It is what :func:`backfill` does once it has the windows of its range, and what ``ldp schedule tick`` does with the
+    windows that are due. The windows need not lie on a grid. A window is done by the rules in the module, and a window
+    that is done is skipped without being read, planned or written to the ledger.
+
+    Args:
+        workflow: The workflow, which the caller has checked with :func:`check_workflow`.
+        grid: The windows, ``(start, end)`` pairs in UTC, in the order they run.
+        window_size: The size of the windows for the result, or ``None`` when they have none.
+        timezone: The time zone name for the result.
+        start: Where the range of the result starts.
+        end: Where it ends.
+        order: What the result says about the order of the windows.
+        replace: Replace the windows instead of loading them.
+        dry_run: Work out the states and the keys, and run nothing.
+        stop_on_failure: Stop at the first window that failed. The windows that were not run have the outcome
+            ``not_run``.
+        policy: The commit policy of the writes, see :func:`backfill`.
+        sleep: What waits between the attempts of a task that is retried.
+        rng: What draws the jitter of those waits.
+        on_window: Called as ``on_window(window, number, total)`` when a window is done, or was skipped.
+        continue_runs: Carry on the last run of a window that did not succeed, as the next attempt of the same run:
+            the run id of the workflow and of each task is the one from the ledger, and the attempt is one more. That
+            is how a scheduler retries a failed window, and a backfill starts a run of its own instead.
+        max_pending: The most windows that are not done to run. The ones after them are left for a later call, with the
+            outcome ``not_run``. A scheduler that catches up uses it to take a few windows at a time.
+        began: When the caller started, from ``time.perf_counter()``, for the duration of the result.
+
+    Returns:
+        The :class:`BackfillResult`. It does not raise for a window that failed.
+    """
+    from local_data_platform.etl import batch_search
+
+    began = began if began is not None else time.perf_counter()
     inspector = _Inspector(workflow, replace)
     entries = []
     for bounds in grid:
         keys = inspector.keys(bounds)
         entries.append(BackfillWindow(bounds[0], bounds[1], inspector.state(bounds, keys), keys))
-    result = BackfillResult(workflow=workflow.identifier, ledger=workflow.ledger_path, window_size=size, timezone=zone,
-                            start=first, end=last, order="newest first" if run_backwards else "oldest first",
-                            replace=replace, dry_run=dry_run, windows=entries)
+    result = BackfillResult(workflow=workflow.identifier, ledger=workflow.ledger_path, window_size=window_size,
+                            timezone=timezone, start=start, end=end, order=order, replace=replace, dry_run=dry_run,
+                            windows=entries)
     if dry_run:
         result.duration_s = time.perf_counter() - began
         return result
-    pending = sum(1 for entry in entries if entry.state != "published")
-    since_ms, batch_policy = batch_search(pending * max(1, len(inspector.keyed)), policy=policy)
+    pending = [entry for entry in entries if entry.state != "published"]
+    if max_pending is not None:
+        pending = pending[:max_pending]
+    to_run = {(entry.start, entry.end) for entry in pending}
+    since_ms, batch_policy = batch_search(len(pending) * max(1, len(inspector.keyed)), policy=policy)
+    carried: dict[tuple[dt.datetime, dt.datetime], str] = {}
+    if continue_runs:
+        carried = {(entry.start, entry.end): run_id for entry in pending
+                   if (run_id := inspector.resumable((entry.start, entry.end))) is not None}
+    continuations = trace_runs(workflow.ledger_path, set(carried.values()))
     stopped = False
     try:
         for number, entry in enumerate(entries, start=1):
             if entry.state == "published":
                 entry.outcome = "skipped"
-            elif stopped:
+            elif stopped or (entry.start, entry.end) not in to_run:
                 entry.outcome = "not_run"
             else:
-                _run_window(workflow, entry, batch_policy, since_ms, sleep, rng, replace)
+                continues = continuations.get(carried.get((entry.start, entry.end), ""))
+                _run_window(workflow, entry, batch_policy, since_ms, sleep, rng, replace, continues)
                 stopped = stop_on_failure and entry.outcome == "failed"
             if on_window is not None and entry.outcome != "not_run":
                 on_window(entry, number, len(entries))
@@ -475,17 +514,28 @@ def backfill(source: "str | Path | Workflow", start: Any, end: Any = None, *, re
 
 
 def _run_window(workflow: Workflow, entry: BackfillWindow, policy: Any, since_ms: int,
-                sleep: Callable[[float], None] | None, rng: Any, replace: bool) -> None:
+                sleep: Callable[[float], None] | None, rng: Any, replace: bool,
+                continues: Continuation | None = None) -> None:
     """Run the workflow for one window and record how it ended. An interrupt goes on."""
     try:
         outcome = run_workflow(workflow, window=(entry.start, entry.end), policy=policy, search_since_ms=since_ms,
-                               sleep=sleep, rng=rng, replace=replace)
+                               sleep=sleep, rng=rng, replace=replace, continues=continues)
     except ConfigError as error:  # a problem of this window alone, such as a source that cannot be planned
         entry.outcome, entry.error = "failed", str(error)
         logger.warning("Backfill of %s: the window %s could not start: %s", workflow.identifier, entry.window,
                        str(error).splitlines()[0])
         return
     entry.result, entry.outcome = outcome, _outcome_of(outcome)
+    entry.attempt = continues.attempt + 1 if continues is not None else 1
 
 
-__all__ = ["DEFAULT_MAX_WINDOWS", "OUTCOMES", "STATES", "BackfillResult", "BackfillWindow", "backfill"]
+__all__ = [
+    "DEFAULT_MAX_WINDOWS",
+    "OUTCOMES",
+    "STATES",
+    "BackfillResult",
+    "BackfillWindow",
+    "backfill",
+    "check_workflow",
+    "run_windows",
+]

@@ -17,7 +17,7 @@ A workflow file is a spec of the kind ``Workflow``::
 
 ``metadata`` may have ``schedule`` (a cron expression, or ``@hourly``, ``@daily``, ``@weekly`` or ``@monthly``),
 ``window`` (``"none"``, or the ``size`` of a window and the ``timezone`` its days are counted in), ``catchup`` (whether
-the scheduler runs the windows it missed, which a later item reads), ``start`` (the first window), ``retries``
+``ldp schedule tick`` runs every window it missed, which needs a ``start``), ``start`` (the first window), ``retries``
 (``max_attempts``, ``delay_s`` and ``backoff``, which :mod:`local_data_platform.orchestration.retries` describes) and
 ``observability`` (sinks for the events of the whole workflow run). Each task has a unique ``id``, an optional
 ``depends_on`` that lists the ids it waits for, an optional ``retries`` of its own, and exactly one task kind, which is
@@ -199,6 +199,8 @@ def _check_metadata(problems: _Problems, metadata: Mapping[str, Any]) -> None:
         problems.add("metadata.catchup", f"must be true or false, got {metadata['catchup']!r}")
     if "start" in metadata and (message := _start_problem(metadata["start"])):
         problems.add("metadata.start", message)
+    if metadata.get("catchup") is True and "start" not in metadata:
+        problems.add("metadata.catchup", "is true, and a catch-up needs metadata.start, the first window it runs")
     if "retries" in metadata:
         _retries_problems(metadata["retries"], "metadata.retries", problems)
     if "observability" in metadata:
@@ -355,7 +357,8 @@ def workflow_schema() -> dict[str, Any]:
                                                   "timezone": {**non_empty, "examples": ["UTC", "Europe/Paris"]}}}],
                     },
                     "catchup": {"type": "boolean", "default": False,
-                                "description": "Whether the scheduler runs the windows it missed."},
+                                "description": "Whether the scheduler runs every window it missed since start, and not "
+                                               "only the latest. It needs start."},
                     "start": {**non_empty, "description": "The first window, as an ISO-8601 date or time."},
                     "retries": {"$ref": "#/$defs/retries"},
                     "observability": {"$ref": "#/$defs/observability"},
