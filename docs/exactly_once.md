@@ -241,6 +241,15 @@ window is written once however many ticks it takes. A window that no run has sta
 a run of its own. `ldp schedule tick` takes a lock on the folder, so two ticks of one folder never run at once, and the fence
 covers the rest.
 
+### Airflow retries
+
+`LdpRunOperator` gives an Airflow task the same protocol. The window is the data interval of the DAG run, the run id is
+`airflow:DAG_ID:RUN_ID:TASK_ID`, and the attempt is `ti.try_number`, so a retry by Airflow is the next attempt of the same run
+and its first commit fences every older try, also one that Airflow gave up on and that is still running. A try that follows
+one that was lost after its commit finds the key and writes nothing, and a second DAG run over the same interval, such as a
+backfill, finds the key as well. A data gate fails the task for good, with `AirflowFailException`, and any other error is left
+to the retries of the task. The [Airflow guide](airflow.md) runs it.
+
 ### Long backfills and late re-runs
 
 A staged run looks for its idempotency key twice, and the two searches answer different questions.
