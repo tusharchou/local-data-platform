@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .exceptions import ConfigError
-from .orchestration import windows
+from .orchestration import retries, windows
 from .paths import resolve_path
 from .spec import API_VERSION, DEFAULT_KIND, kind_of
 
@@ -97,6 +97,9 @@ class Config:
             except ConfigError as exc:
                 raise ConfigError(f"metadata.schedule: {exc}") from None
         windows.parse_window_spec(self.metadata.get("window"))
+        if "retries" in self.metadata:
+            for path, message in retries.retries_problems(self.metadata["retries"]):
+                raise ConfigError(f"metadata.retries{path}: {message}")
 
     @property
     def source(self) -> dict[str, Any]:

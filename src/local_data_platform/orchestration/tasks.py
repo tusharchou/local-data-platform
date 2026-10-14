@@ -19,6 +19,10 @@ both carry small JSON facts about the run that the events and the result of the 
 a pipeline run leaves its events to the runner, which emits ``run.started`` and ``run.finished`` for it. A pipeline run
 emits its own events (``emits_events=True``).
 
+The runner may call ``run`` more than once for a task, as the ``retries`` of the task say: the call follows a failure
+that another attempt may fix, ``ctx.attempt`` counts from 1, and ``ctx.task_run_id`` is the same every time. So a
+``run`` has to be safe to repeat, as a pipeline is by its idempotency key and a dbt model by its overwrite or upsert.
+
 This module needs only the standard library when it is imported, so a workflow can be validated without pyiceberg.
 """
 
@@ -158,6 +162,9 @@ class RunContext:
         search_since_ms: The start of the key search of the publish loop of the run, in epoch milliseconds.
         finished: The result of every task that has finished in this run, by task id, in the order they finished. It is
             read-only, and it holds what ran before the task, so a task can tell whether anything upstream wrote data.
+        attempt: The attempt number of this run of the task, from 1. A retry of a failed task is the next attempt.
+        task_run_id: The run id of the task's run. It is the same for every attempt of the task, so that a retry fences
+            the attempt before it.
     """
 
     workflow: Any
@@ -167,6 +174,8 @@ class RunContext:
     policy: Any = None
     search_since_ms: int | None = None
     finished: Mapping[str, Any] = field(default_factory=dict)
+    attempt: int = 1
+    task_run_id: str | None = None
 
     def resolve(self, path: str | Path) -> Path:
         """The path of a file the workflow names, against the folder of the workflow file."""
@@ -398,11 +407,11 @@ def _run_pipeline(task: Task, ctx: RunContext) -> TaskOutcome:
     sink = ctx.task_sink(task, sink_from_config(config))
     if str(config.target.get("format", "")).strip().upper() == "ICEBERG":
         result = run_config(config, window=ctx.bounds, sink=sink, policy=ctx.policy,
-                            search_since_ms=ctx.search_since_ms)
+                            search_since_ms=ctx.search_since_ms, run_id=ctx.task_run_id, attempt=ctx.attempt)
     else:
         # A file target is replaced whole by every run, so it needs no key and cannot take one. The window still picks
         # the source path and the rows that the run reads.
-        result = create_pipeline(config, window=ctx.bounds).run(sink=sink)
+        result = create_pipeline(config, window=ctx.bounds).run(sink=sink, run_id=ctx.task_run_id, attempt=ctx.attempt)
     detail = {"run_id": result.run_id, "idempotency_key": result.idempotency_key,
               "snapshot_id": result.published_snapshot_id, "rows_read": result.rows_read,
               "rows_written": result.rows_written}

@@ -550,13 +550,17 @@ def test_a_plan_notes_a_pipeline_that_appends_the_same_rows_in_every_window_of_a
     assert not [w for w in plan_workflow(unscheduled_path, window=DAY1)["warnings"] if note in w]
 
 
-def test_a_plan_says_that_retries_are_read_but_a_task_still_runs_once(tmp_path):
-    spec = _spec(metadata={"schedule": "@daily", "retries": {"max_attempts": 3}})
+def test_a_plan_shows_the_retries_of_each_task_and_has_nothing_to_warn_about(tmp_path):
+    spec = _spec(metadata={"schedule": "@daily", "retries": {"max_attempts": 3, "delay_s": 5}})
+    spec["tasks"][1]["retries"] = {"max_attempts": 1}
     result = plan_workflow(_project(tmp_path, workflow=spec))
 
-    assert any("retries is read and checked, but every task still runs once" in w for w in result["warnings"])
-    one = plan_workflow(_project(tmp_path, workflow=_spec(metadata={"retries": {"max_attempts": 1}})))
-    assert not [w for w in one["warnings"] if "retries" in w]
+    tasks = {task["id"]: task for task in result["tasks"]}
+    assert tasks["orders"]["retries"] == {"max_attempts": 3, "delay_s": 5.0, "backoff": 2.0}
+    assert "retries" not in tasks["customers"], "a task that sets one attempt is not retried"
+    assert not [w for w in result["warnings"] if "retries" in w], "retries are applied now, so there is no note"
+    plain = plan_workflow(_project(tmp_path, workflow=_spec()))
+    assert not [task for task in plain["tasks"] if "retries" in task]
 
 
 def test_a_plan_counts_a_shortcut_in_the_time_zone_of_the_workflow(tmp_path, monkeypatch):
@@ -930,16 +934,14 @@ def test_an_interrupted_run_still_writes_workflow_finished_and_the_interrupt_goe
     assert finished.payload["tasks"] == {"first": "published"}
 
 
-def test_retries_that_are_set_are_warned_about_and_a_failing_task_still_runs_once(tmp_path, caplog):
-    path = _project(tmp_path, workflow=_spec(metadata={"schedule": "@daily", "retries": {"max_attempts": 3}}))
+def test_a_task_without_retries_runs_once_and_a_failing_one_leaves_one_failed_run(tmp_path):
+    path = _project(tmp_path)
     (tmp_path / "landing" / "orders.csv").unlink()
-    caplog.set_level("WARNING", logger="local_data_platform.orchestration.runner")
+    waits = []
 
-    result = run_workflow(path, window=DAY1)
+    result = run_workflow(path, window=DAY1, sleep=waits.append)
 
-    assert result.tasks["orders"].status == "failed"
-    note = "retries is read and checked, but every task still runs once"
-    assert [r for r in caplog.records if note in r.getMessage()]
+    assert result.tasks["orders"].status == "failed" and result.tasks["orders"].attempts == 1 and waits == []
     attempts = [e for e in read_jsonl(path.parent / ".ldp" / "events.jsonl")
                 if e.payload.get("task_id") == "orders" and e.type == "run.failed"]
     assert len(attempts) == 1

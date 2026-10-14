@@ -15,8 +15,9 @@ which the later milestones do for metrics, reports and profiles::
 ``spec_hash`` is the sha256 of the canonical JSON of the pipeline-relevant fields:
 ``apiVersion``, ``identifier``, ``when``, ``how`` and ``metadata`` except
 ``observability`` (where events go doesn't change what a run does), ``schedule`` (when a run starts doesn't change
-what it does, though ``window`` does, because its column picks the rows a run reads) and ``kind`` (a pipeline hashes
-the same with ``"kind": "Pipeline"`` as without it). Keys are
+what it does, though ``window`` does, because its column picks the rows a run reads), ``retries`` (how often a failed
+run is tried again doesn't change what it does) and ``kind`` (a pipeline hashes the same with ``"kind": "Pipeline"`` as
+without it). Keys are
 sorted, there is no whitespace, formats are upper-case, write modes lower-case, the
 quality block is normalised to ``{"on_failure", "checks"}``, and local paths are
 made relative to the config's folder. The descriptive ``who``, ``what`` and
@@ -40,7 +41,7 @@ from pathlib import Path, PurePath
 from typing import Any
 
 from local_data_platform.exceptions import ConfigError, PipelineNotFound
-from local_data_platform.orchestration import windows
+from local_data_platform.orchestration import retries, windows
 
 API_VERSION = "ldp/v1"
 """The spec version this library reads and writes."""
@@ -55,7 +56,7 @@ TOP_LEVEL_KEYS = ("apiVersion", "kind", "identifier", "who", "what", "where", "w
 FORMATS = ("CSV", "PARQUET", "JSON", "ICEBERG", "DUCKDB", "XLSX")
 WRITE_MODES = ("append", "overwrite", "upsert")
 ON_FAILURE = ("fail", "warn")
-HASH_EXCLUDED_METADATA = ("observability", "schedule")
+HASH_EXCLUDED_METADATA = ("observability", "schedule", "retries")
 """``metadata`` keys that don't change what a run does, so :func:`spec_hash` ignores them."""
 
 _BUILTIN_CATALOG_TYPES = ("local", "sql", "rest", "glue")
@@ -526,8 +527,12 @@ def json_schema() -> dict[str, Any]:
                         "examples": ["@daily", "5 2 * * *"],
                     },
                     "window": {"$ref": "#/$defs/window"},
+                    "retries": {"$ref": "#/$defs/retries"},
                 },
             },
+            "retries": {**retries.retries_schema(),
+                        "description": "How the run is tried again after a failure, when a workflow runs it. Editing "
+                                       "it does not change the spec hash."},
             "format": {"type": "string", "enum": formats},
             "block": {
                 "type": "object",
@@ -931,6 +936,9 @@ def _validate_pipeline(spec: Mapping[str, Any]) -> list[ConfigError]:
         _check_block(problems, metadata.get("target"), "target")
         _check_quality(problems, metadata.get("quality"))
         _check_schedule_and_window(problems, metadata)
+        if "retries" in metadata:
+            for path, message in retries.retries_problems(metadata["retries"]):
+                problems.add(f"metadata.retries{path}", message)
         from local_data_platform.events import sink_specs
 
         try:

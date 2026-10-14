@@ -66,6 +66,8 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
         description="Run the tasks of FILE one at a time, in dependency order, each pipeline task for the window, so "
                     "its idempotency key is the one 'ldp plan CONFIG --window' prints. A task that fails, or that a "
                     "quality check blocks, makes the tasks that depend on it upstream_failed, and the rest still run. "
+                    "A task with retries that fails on an error that another attempt may fix, such as a dropped "
+                    "connection, runs again after a wait, with the same run id and the next attempt number. "
                     "Run the same window again after fixing the cause: the pipelines that published are skipped by "
                     "their keys, and only the tasks that failed or did not run do their work. The events of the run go "
                     "to .ldp/events.jsonl next to FILE.")
@@ -100,11 +102,17 @@ def _print_plan(result: dict[str, Any]) -> None:
         for name, value in lines:
             _out(f"{name.ljust(width)}  {value}")
         _out()
-        rows = [{"order": task["order"], "id": task["id"], "kind": task["kind"],
-                 "depends_on": ", ".join(task["depends_on"]) or "-",
-                 "runs": task.get("config") or task.get("project") or "-",
-                 "target": task.get("target") or task.get("table") or "-",
-                 "key": _short(task.get("idempotency_key")) or "-"} for task in result["tasks"]]
+        retried = any("retries" in task for task in result["tasks"])
+        rows = []
+        for task in result["tasks"]:
+            row = {"order": task["order"], "id": task["id"], "kind": task["kind"],
+                   "depends_on": ", ".join(task["depends_on"]) or "-",
+                   "runs": task.get("config") or task.get("project") or "-",
+                   "target": task.get("target") or task.get("table") or "-",
+                   "key": _short(task.get("idempotency_key")) or "-"}
+            if retried:  # the most attempts a task gets, which is 1 for a task that is not retried
+                row["attempts"] = task.get("retries", {}).get("max_attempts", 1)
+            rows.append(row)
         _out(format_table(rows))
     if result["errors"]:
         _err(f"{len(result['errors'])} problem{'s' if len(result['errors']) != 1 else ''}:")
@@ -132,11 +140,15 @@ def _print_result(result: Any) -> None:
     _out(f"workflow {result.workflow}  run {result.run_id}  "
          f"window {format_instant(result.window[0])}/{format_instant(result.window[1])}")
     rows = []
+    retried = any(task.attempts > 1 for task in result.tasks.values())
     for task in result.tasks.values():
-        rows.append({"id": task.id, "kind": task.kind, "status": task.status,
-                     "rows_read": _cell(task.detail.get("rows_read")),
-                     "rows_written": _cell(task.detail.get("rows_written")),
-                     "snapshot": _cell(task.detail.get("snapshot_id")), "seconds": round(task.duration_s, 2)})
+        row = {"id": task.id, "kind": task.kind, "status": task.status}
+        if retried:  # the column shows only when a task ran again
+            row["attempts"] = task.attempts
+        row.update({"rows_read": _cell(task.detail.get("rows_read")),
+                    "rows_written": _cell(task.detail.get("rows_written")),
+                    "snapshot": _cell(task.detail.get("snapshot_id")), "seconds": round(task.duration_s, 2)})
+        rows.append(row)
     _out(format_table(rows))
     for task in result.tasks.values():
         for item in task.detail.get("published", []):

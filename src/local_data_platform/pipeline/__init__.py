@@ -521,7 +521,7 @@ class Pipeline(Flow):
     # ------------------------------------------------------------------ run
 
     def run(self, mode: str | None = None, *, commit: Any = None, sink: EventSink | None = None,
-            policy: Any = None) -> PipelineResult:
+            policy: Any = None, run_id: str | None = None, attempt: int = 1) -> PipelineResult:
         """Extract, transform, validate, then write, emitting run events on the way.
 
         Args:
@@ -536,6 +536,9 @@ class Pipeline(Flow):
             sink: Where this run's events go, instead of the pipeline's default sink.
             policy: The :class:`~local_data_platform.format.iceberg.commit.CommitPolicy` of the write. A batch of
                 runs raises its ``max_search_depth``, see :func:`~local_data_platform.etl.batch_search`.
+            run_id: The id of the run, for a run that has no ``commit``: the attempts of a retry share it, so their
+                events belong together. A new UUIDv7 by default. A ``commit`` brings its own.
+            attempt: The attempt number, from 1, which every event of the run carries. A ``commit`` brings its own.
 
         Returns:
             A :class:`PipelineResult`.
@@ -543,15 +546,21 @@ class Pipeline(Flow):
         Raises:
             DataQualityError: If a check failed and ``on_failure`` is ``"fail"``.
                 Nothing is written; ``run.blocked_quality`` is emitted.
-            ConfigError: If ``commit`` is given for a target that can't take it.
+            ConfigError: If ``commit`` is given for a target that can't take it, or together with ``run_id`` or
+                ``attempt``, or ``attempt`` is not a whole number from 1.
             TypeError: If ``sink`` has no ``emit``/``flush`` methods.
         """
         started = time.perf_counter()
+        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+            raise ConfigError(f"attempt must be a whole number from 1, got {attempt!r}")
+        if commit is not None and (run_id is not None or attempt != 1):
+            raise ConfigError("a commit context brings its own run id and attempt, so pass either commit= or "
+                              "run_id=/attempt=, not both")
         if commit is not None:
             self._require_commit_support()
         window = self._run_window(commit)
-        run_id = str(getattr(commit, "run_id", None) or uuid7())
-        attempt = int(getattr(commit, "attempt", None) or 1)
+        run_id = str(getattr(commit, "run_id", None) or run_id or uuid7())
+        attempt = int(getattr(commit, "attempt", None) or attempt)
         key = getattr(commit, "idempotency_key", None) if commit is not None else None
         emitter = RunEmitter(self._check_sink(sink) if sink is not None else self.sink, run_id, attempt=attempt,
                              context={"pipeline": self.name, "table": self._target_name()})
