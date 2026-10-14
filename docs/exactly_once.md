@@ -173,7 +173,8 @@ the rows of its window.
 
 `yesterday`, `last-week` (the last full Monday-to-Monday week) and `last-month` are counted in the time zone of
 `metadata.window`, and `ldp run` prints the window each one stands for. A published window is skipped when it runs again,
-so to replace a day that changed at the source, run it with a key of your own:
+so to replace a day that changed at the source, run it with `ldp backfill --replace`, see [Backfills](#backfills), or with a
+key of your own:
 
 ```bash
 ldp run orders.json --window 2026-08-02/2026-08-03 --idempotency-key orders-2026-08-02-v2
@@ -199,6 +200,34 @@ every build takes time. So the runner skips the task when it would repeat a buil
 window has to have succeeded, the project has to have the same fingerprint, and no task that ran earlier in this run may
 have written data. A changed model, a failed last build or a pipeline that published again runs the build again.
 [Running dbt from a workflow](design/warehousing.md#running-dbt-from-a-workflow) has the rule.
+
+### Backfills
+
+`ldp backfill FILE --from START --to END` runs a workflow, or a config with a window, for every window of a range, and it
+leans on everything above: each window is run as `ldp workflow run` runs it, so each pipeline publishes under its own key.
+What it adds is that it knows which windows are done before it runs any. It walks the history of each table once, for the
+keys that `main` holds, and reads the last run of every window from the ledger. A window is done when every pipeline that
+writes to Iceberg has its key on `main`, and, when the workflow has a task that a key cannot vouch for, such as a dbt task
+or a pipeline that writes a file, when the last run of the window in the ledger succeeded for every task. A done window is
+skipped without being read, planned or written to the ledger. So a finished backfill that runs again does nothing, a
+backfill that stopped at window 40 starts again at window 40, and a window that failed is tried again with its finished
+tasks skipped by their keys. `--dry-run` shows the state of each window, `published`, `partial`, `missing`, `failed` or
+`blocked`, and runs nothing. The search of the publish loop is sized for the whole batch with `etl.batch_search`, so the
+501st window of a backfill publishes as the first did.
+
+**Replace.** A published window is skipped, so redoing one needs a key that is not on the table. `--replace` gives each
+window the key `sha256(["ldp/v1", "replace", key, spec_hash])`, where `key` is its key and `spec_hash` is the hash of its
+config, and writes it with a window overwrite. The same window replaced under the same spec has the same key, so a second
+`--replace` of it is skipped. A change to the spec changes the hash, so the window is replaced once more after the config
+was fixed. The rows of the window are replaced by the rows the source has now, and a window that has none is loaded, which is
+what makes `--replace` the answer to a key that expired: it cannot add the rows a second time. A window whose source has no
+rows is not replaced, because an empty write fails with "No data to write", or is blocked by a `row_count` check, and the
+table keeps what it had. The cost of `--replace` is that a window that was only ever written by a replace has no original
+key on the table, so a plain backfill of it would load it a second time. Run such a range with `--replace` again, or load a
+window with a plain run first and replace it afterwards.
+
+It needs `metadata.window.column` in every pipeline that writes to Iceberg, because without it an overwrite would replace the
+whole table with the rows of one window. A backfill without it exits with 1 before it runs anything.
 
 ### Long backfills and late re-runs
 
@@ -237,8 +266,8 @@ snapshots in 7 days. Then pass `policy=CommitPolicy(max_search_depth=...)` or `s
 **A key that is gone.** The first search is no proof that a window never ran. If the snapshot of its first publish expired,
 its key is gone and the window would load again. When the key is not there and the window is older than every window that
 the table still holds a key for, the run logs a warning and carries on. The warning names `ldp backfill --replace`, which
-replaces a window instead of adding to it. Until that command exists, redo the window under a key of your own, with a
-window column and the write mode `overwrite`, as in [What a window reads](#what-a-window-reads).
+replaces a window instead of adding to it, see [Backfills](#backfills). A run that does not append, such as a replace, does
+not warn, because it cannot add the rows again.
 
 ## What it guarantees
 

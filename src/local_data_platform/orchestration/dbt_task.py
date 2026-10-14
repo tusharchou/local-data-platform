@@ -336,7 +336,7 @@ def run(task: Task, ctx: RunContext) -> TaskOutcome:
     fingerprint = _fingerprint(project, identity, extra)
     base: dict[str, Any] = {"command": command, "window": window, "fingerprint": fingerprint}
 
-    if options.get("skip_unchanged", True):
+    if options.get("skip_unchanged", True) and not ctx.replace:  # a replace builds the window again, whatever it built
         earlier = _built_before(ctx, task, window, fingerprint)
         if earlier is not None:
             logger.info("Workflow %s: dbt task %s already built this window in run %s, so it did not run",

@@ -59,7 +59,7 @@ depends on the type:
 | `run.blocked_quality` | `checks_failed`, `failures` (check names), `on_failure` |
 | `run.failed` | `stage` (`search`, `extract`, `transform`, `validate`, `write`), `error_type`, `message` |
 | `run.finished` | `status`, `duration_s`, `rows_read`, `rows_written`, `published_snapshot_id`, `idempotency_key`, `quality_passed`. A task of a workflow that did not run a pipeline has `succeeded`, `failed` or `upstream_failed` as its `status`, and `upstream_failed` adds `blocked_by`, the ids of the tasks that did not succeed |
-| `workflow.started` | `workflow` and `pipeline` (the workflow's identifier), `workflow_run_id`, `window` (start and end), `schedule`, `tasks` (the `id`, `kind` and `depends_on` of each, in the order they run, and `max_attempts` for a task that is retried), `ldp_version` |
+| `workflow.started` | `workflow` and `pipeline` (the workflow's identifier), `workflow_run_id`, `window` (start and end), `schedule`, `tasks` (the `id`, `kind` and `depends_on` of each, in the order they run, and `max_attempts` for a task that is retried), `ldp_version`, and `replace` (true) when the run replaces the window, as `ldp backfill --replace` does |
 | `workflow.finished` | `status` (`succeeded`, `blocked_quality` when a data gate is the only problem, or `failed`), `duration_s`, `counts` (tasks per status), `tasks` (the status of each task) |
 
 ### Workflow runs
@@ -79,7 +79,9 @@ A run writes all of its events, `workflow.started`, the events of every task and
 `metadata.observability`. A pipeline task's events also go to the sinks of its own config, and only that task's. A task that
 is not a pipeline, and a task that did not run because one it depends on did not succeed, get a `run.started` and a
 `run.finished` from the runner. `ldp runs .ldp/events.jsonl` lists the workflow run and each task's run, with a `workflow`
-and a `task` column.
+and a `task` column. `ldp backfill` runs the workflow once for each window that is not done and writes nothing for a window that is, so
+the ledger has one `workflow.started` and `workflow.finished` for each run of a window, and a backfill that is run again adds nothing
+for the windows it skips.
 
 A task that is retried is one run with several attempts. A task with `retries` that fails with an error that another
 attempt may fix runs again with the same `run_id` and the next `attempt`, and each attempt emits its own events, so a task that

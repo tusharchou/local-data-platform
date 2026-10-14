@@ -11,6 +11,8 @@
 * :mod:`~local_data_platform.orchestration.dbt_task`: the ``dbt`` kind, which builds a dbt project for the window.
 * :mod:`~local_data_platform.orchestration.retries`: how a failed task is tried again, and which errors are worth it.
 * :mod:`~local_data_platform.orchestration.runner`: the runner, :func:`run_workflow`.
+* :mod:`~local_data_platform.orchestration.backfills`: :func:`backfill`, which runs a workflow for every window of a
+  range and resumes where it stopped.
 
 The names below are loaded when they are first used, so importing this package, which ``local_data_platform.spec`` does
 for the windows, does not import pyiceberg::
@@ -24,7 +26,10 @@ import importlib
 from typing import Any
 
 _LAZY = {
+    "BackfillResult": "backfills",
+    "BackfillWindow": "backfills",
     "RetryPolicy": "retries",
+    "backfill": "backfills",
     "is_retriable": "retries",
     "run_workflow": "runner",
     "TaskResult": "runner",

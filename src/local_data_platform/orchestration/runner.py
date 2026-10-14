@@ -44,6 +44,7 @@ pipeline task's events also go to the sinks of its own config. Every event of a 
 ``workflow_run_id`` and ``task_id`` in its payload, and ``ldp runs .ldp/events.jsonl`` lists them.
 """
 
+import dataclasses
 import datetime as dt
 import random
 import time
@@ -233,9 +234,8 @@ def _run_task(task: Task, ctx: RunContext, results: Mapping[str, TaskResult], co
     while True:
         attempt += 1
         counts[task.id] = 0
-        scoped = RunContext(workflow=ctx.workflow, bounds=ctx.bounds, run_id=ctx.run_id, sink=seen, policy=ctx.policy,
-                            search_since_ms=ctx.search_since_ms, finished=MappingProxyType(results), attempt=attempt,
-                            task_run_id=run_id)
+        scoped = dataclasses.replace(ctx, sink=seen, finished=MappingProxyType(results), attempt=attempt,
+                                     task_run_id=run_id)
         emitter = None if kind.emits_events else _task_emitter(ctx, task, run_id, attempt)
         began = time.perf_counter()
         error: BaseException | None = None
@@ -267,7 +267,7 @@ def _run_task(task: Task, ctx: RunContext, results: Mapping[str, TaskResult], co
 
 def run_workflow(source: "str | Path | Workflow", *, window: Any, policy: Any = None,
                  search_since_ms: int | None = None, sleep: Callable[[float], None] | None = None,
-                 rng: Any = None) -> WorkflowResult:
+                 rng: Any = None, replace: bool = False) -> WorkflowResult:
     """Run the tasks of a workflow, one at a time, in dependency order, for one window.
 
     The workflow and every config it names are checked first, and a workflow that is not valid does not start. A
@@ -289,6 +289,11 @@ def run_workflow(source: "str | Path | Workflow", *, window: Any, policy: Any = 
             ``time.sleep`` by default, and a test passes a function that only records the wait.
         rng: What draws the jitter of those waits, anything with ``uniform(a, b)``. A new :class:`random.Random` by
             default, and a seeded one makes the waits repeatable.
+        replace: Replace the window instead of loading it. A pipeline task that writes to Iceberg runs under the
+            replace key of its window, with a window overwrite, so the rows the window already has are replaced and a
+            window that was replaced under the same spec is skipped. Every such pipeline needs a
+            ``metadata.window.column``, and a workflow with one that has none does not start. A dbt task builds the
+            window again whatever it built before. ``ldp backfill --replace`` is the command line for it.
 
     Returns:
         The :class:`WorkflowResult`. It does not raise for a failed task: read ``result.status`` or
@@ -305,7 +310,7 @@ def run_workflow(source: "str | Path | Workflow", *, window: Any, policy: Any = 
         raise ConfigError(f"workflow {workflow.identifier} runs for a window: pass one, such as START/END or "
                           "yesterday")
     bounds = window_bounds(workflow.spec, window)
-    plan = plan_workflow(workflow, window=bounds)
+    plan = plan_workflow(workflow, window=bounds, replace=replace)
     if not plan["valid"]:
         listed = "\n".join(f"  - {message}" for message in plan["errors"])
         raise ConfigError(f"workflow {workflow.identifier} is not valid, so no task ran:\n{listed}")
@@ -321,7 +326,8 @@ def run_workflow(source: "str | Path | Workflow", *, window: Any, policy: Any = 
     sink = MultiSink(sinks)
     context = RunContext(workflow=workflow, bounds=bounds, run_id=run_id, sink=sink,
                          policy=policy if policy is not None else batch_policy,
-                         search_since_ms=search_since_ms if search_since_ms is not None else batch_since)
+                         search_since_ms=search_since_ms if search_since_ms is not None else batch_since,
+                         replace=replace)
     emitter = RunEmitter(sink, run_id, context={"pipeline": workflow.identifier, "workflow": workflow.identifier,
                                                 "workflow_run_id": run_id})
     result = WorkflowResult(workflow=workflow.identifier, run_id=run_id, window=bounds, started_at=started_at,
@@ -331,7 +337,7 @@ def run_workflow(source: "str | Path | Workflow", *, window: Any, policy: Any = 
         "window": [format_instant(bounds[0]), format_instant(bounds[1])],
         "schedule": workflow.schedule.expression if workflow.schedule else None,
         "tasks": [_started_task(workflow, task) for task in workflow.order()],
-        "ldp_version": _version()})
+        "ldp_version": _version(), **({"replace": True} if replace else {})})
     counts: dict[str, int] = {}
     try:
         by_id = {task.id: task for task in workflow.tasks}

@@ -138,10 +138,13 @@ class PlanContext:
     Attributes:
         workflow: The :class:`~local_data_platform.orchestration.workflow.Workflow`.
         bounds: The window as UTC ``(start, end)``, or ``None`` when the plan has none.
+        replace: Whether the run replaces its window, as ``ldp backfill --replace`` does, so that a pipeline task is
+            planned under the replace key and has to have a ``window.column``.
     """
 
     workflow: Any
     bounds: tuple[Any, Any] | None = None
+    replace: bool = False
 
     def resolve(self, path: str | Path) -> Path:
         """The path of a file the workflow names, against the folder of the workflow file."""
@@ -165,6 +168,9 @@ class RunContext:
         attempt: The attempt number of this run of the task, from 1. A retry of a failed task is the next attempt.
         task_run_id: The run id of the task's run. It is the same for every attempt of the task, so that a retry fences
             the attempt before it.
+        replace: Whether the run replaces its window, as ``ldp backfill --replace`` does: a pipeline task writes the
+            window under the replace key with a window overwrite, and a dbt task builds again whatever it built before.
+            A kind of its own decides what replacing means for it.
     """
 
     workflow: Any
@@ -176,6 +182,7 @@ class RunContext:
     finished: Mapping[str, Any] = field(default_factory=dict)
     attempt: int = 1
     task_run_id: str | None = None
+    replace: bool = False
 
     def resolve(self, path: str | Path) -> Path:
         """The path of a file the workflow names, against the folder of the workflow file."""
@@ -365,8 +372,17 @@ def _plan_pipeline(task: Task, ctx: PlanContext) -> TaskPlan:
             outcome.details[name] = result[name]
     if result["catalog_type"] is not None:  # an Iceberg target: the run publishes under the key of the window
         outcome.details["publish"] = "staged"
-        if result.get("idempotency_key") is not None:
-            outcome.details["idempotency_key"] = result["idempotency_key"]
+        key = result.get("idempotency_key")
+        if ctx.replace:
+            outcome.details["replace"] = True
+            if result["valid"] and not result.get("window_column"):
+                outcome.errors.append(f"{task.value} has no metadata.window.column, so replacing a window would add "
+                                      "its rows again. Set window.column to the column that holds the time of each "
+                                      "row, so that a replace overwrites only the rows of the window")
+            elif key is not None:
+                key = spec.replace_key(key, result["spec_hash"])
+        if key is not None:
+            outcome.details["idempotency_key"] = key
     elif result["valid"]:
         outcome.details["publish"] = "direct"
         outcome.notes.append("its target is a file, which every run replaces whole, so the task has no idempotency "
@@ -398,6 +414,13 @@ def _warn_if_it_appends_the_same_rows_in_every_window(outcome: TaskPlan, path: P
                              "metadata.source.path or set metadata.window.column")
 
 
+def replace_key_of(config: Any, bounds: Any) -> str:
+    """The key under which a pipeline replaces a window: the replace key of its key for the window and its spec hash."""
+    from local_data_platform import spec
+
+    return spec.replace_key(spec.idempotency_key(config, bounds), spec.spec_hash(config))
+
+
 def _run_pipeline(task: Task, ctx: RunContext) -> TaskOutcome:
     from local_data_platform.etl import load_config, run_config
     from local_data_platform.events import sink_from_config
@@ -406,7 +429,10 @@ def _run_pipeline(task: Task, ctx: RunContext) -> TaskOutcome:
     config = load_config(ctx.resolve(task.value))
     sink = ctx.task_sink(task, sink_from_config(config))
     if str(config.target.get("format", "")).strip().upper() == "ICEBERG":
-        result = run_config(config, window=ctx.bounds, sink=sink, policy=ctx.policy,
+        mode, key = None, None
+        if ctx.replace:  # the window is written again under the replace key, over the rows it already has
+            mode, key = "overwrite", replace_key_of(config, ctx.bounds)
+        result = run_config(config, mode, window=ctx.bounds, idempotency_key=key, sink=sink, policy=ctx.policy,
                             search_since_ms=ctx.search_since_ms, run_id=ctx.task_run_id, attempt=ctx.attempt)
     else:
         # A file target is replaced whole by every run, so it needs no key and cannot take one. The window still picks
@@ -548,6 +574,7 @@ __all__ = [
     "TaskPlan",
     "config_tables",
     "get_task_kind",
+    "replace_key_of",
     "register_task_kind",
     "task_kinds",
     "unregister_task_kind",

@@ -413,16 +413,19 @@ def _describe_problems(path: Any, problems: list[ConfigError]) -> str:
     return "\n".join(lines + [f"  - {problem}" for problem in problems])
 
 
-def _workflow_of_config(data: Mapping[str, Any], path: Path) -> Workflow:
-    """A dataset config with a schedule, as a workflow of one task."""
+def _workflow_of_config(data: Mapping[str, Any], path: Path, require_schedule: bool = True) -> Workflow:
+    """A dataset config with a schedule, or a window if ``require_schedule`` is false, as a workflow of one task."""
     from local_data_platform.config import Config
 
     config = Config.from_dict(dict(data), base_dir=path.parent)
     schedule = config.schedule
-    if schedule is None:
-        raise ConfigError(f"{path.name} is a dataset config with no schedule, so it is not a workflow. Add "
-                          "metadata.schedule to run it as one, or name it as a task in a workflow file")
-    metadata: dict[str, Any] = {"schedule": schedule.expression}
+    if schedule is None and (require_schedule or config.window is None):
+        if require_schedule:
+            raise ConfigError(f"{path.name} is a dataset config with no schedule, so it is not a workflow. Add "
+                              "metadata.schedule to run it as one, or name it as a task in a workflow file")
+        raise ConfigError(f"{path.name} is a dataset config with no metadata.window and no schedule, so it has no "
+                          "windows. Set metadata.window.size to day, hour or 15m")
+    metadata: dict[str, Any] = {"schedule": schedule.expression} if schedule is not None else {}
     if config.window is not None:
         metadata["window"] = {"size": config.window.size, "timezone": config.window.timezone}
     if config.metadata.get("retries") is not None:
@@ -434,8 +437,14 @@ def _workflow_of_config(data: Mapping[str, Any], path: Path) -> Workflow:
                     base_dir=path.parent, path=path, from_config=True)
 
 
-def read_workflow(path: str | Path) -> tuple[Workflow | None, list[str]]:
+def read_workflow(path: str | Path, *, require_schedule: bool = True) -> tuple[Workflow | None, list[str]]:
     """Read a workflow file, or a dataset config with a schedule, without raising.
+
+    Args:
+        path: The file.
+        require_schedule: Whether a dataset config needs a schedule to be a workflow. ``ldp backfill`` passes false,
+            because it needs the windows of a config, and a config with a ``metadata.window`` has them without a
+            schedule.
 
     Returns:
         ``(workflow, problems)``. ``workflow`` is ``None`` when the file cannot be used, and ``problems`` says why.
@@ -457,19 +466,23 @@ def read_workflow(path: str | Path) -> tuple[Workflow | None, list[str]]:
         if kind == "Workflow":
             return workflow_from_dict(data, base_dir=resolved.parent, path=resolved), []
         if kind == "Pipeline":
-            return _workflow_of_config(data, resolved), []
+            return _workflow_of_config(data, resolved, require_schedule), []
     except ConfigError as exc:
         return None, str(exc).splitlines()
     return None, [f"{resolved.name} is a {kind}, not a workflow"]
 
 
-def load_workflow(path: str | Path) -> Workflow:
+def load_workflow(path: str | Path, *, require_schedule: bool = True) -> Workflow:
     """Read a workflow file, or a dataset config with a schedule, which is a workflow of one task.
+
+    Args:
+        path: The file.
+        require_schedule: Whether a dataset config needs a schedule to be a workflow, see :func:`read_workflow`.
 
     Raises:
         ConfigError: If the file is missing or not valid, or is a config with no schedule.
     """
-    workflow, problems = read_workflow(path)
+    workflow, problems = read_workflow(path, require_schedule=require_schedule)
     if workflow is None:
         raise ConfigError("\n".join(problems))
     return workflow
@@ -493,7 +506,7 @@ def _connection_warnings(workflow: Workflow, plans: Mapping[str, TaskPlan]) -> l
     return found
 
 
-def plan_workflow(source: "str | Path | Workflow", *, window: Any = None) -> dict[str, Any]:
+def plan_workflow(source: "str | Path | Workflow", *, window: Any = None, replace: bool = False) -> dict[str, Any]:
     """Check a workflow and every config it names, and say what a run would do, without running anything.
 
     Each task is planned by its kind. A pipeline task is planned with :func:`local_data_platform.spec.plan`, so its
@@ -503,6 +516,9 @@ def plan_workflow(source: "str | Path | Workflow", *, window: Any = None) -> dic
         source: A workflow file, a dataset config with a schedule, or a :class:`Workflow`.
         window: A window, ``START/END``, a pair of datetimes or ``yesterday``, ``last-week`` or ``last-month``. A
             shortcut is counted in the time zone of the workflow. Without one, the plan has no keys.
+        replace: Plan the run that replaces the window, as ``ldp backfill --replace`` does. A pipeline task that writes
+            to Iceberg shows the replace key of its window, and is an error when its config has no
+            ``metadata.window.column``.
 
     Returns:
         ``{"workflow", "file", "kind", "valid", "errors", "warnings", "schedule", "schedule_from", "timezone",
@@ -538,7 +554,7 @@ def plan_workflow(source: "str | Path | Workflow", *, window: Any = None) -> dic
         from local_data_platform.spec import format_instant
 
         result["window"] = f"{format_instant(bounds[0])}/{format_instant(bounds[1])}"
-    context = PlanContext(workflow, bounds)
+    context = PlanContext(workflow, bounds, replace)
     plans: dict[str, TaskPlan] = {}
     for number, task in enumerate(workflow.order(), start=1):
         try:

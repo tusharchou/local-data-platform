@@ -21,6 +21,7 @@ Commands::
     ldp mcp --config DIR_OR_FILE           (mcp_server)
     ldp dbt init|build|test|docs|exec ...  (dbt_layer.cli)
     ldp workflow plan|run FILE ...         (orchestration.cli)
+    ldp backfill FILE --from START [--to END] [--dry-run] [--replace]   (orchestration.cli)
 
 The commands in the second group are added by the ``add_cli`` function of the module named
 next to them (``docs/design/v0_1_1_platform.md`` C9).
@@ -82,7 +83,7 @@ MODULE_COMMANDS = (
     ("local_data_platform.engine.spark", ("spark",)),
     ("local_data_platform.mcp_server.cli", ("mcp",)),
     ("local_data_platform.dbt_layer.cli", ("dbt",)),
-    ("local_data_platform.orchestration.cli", ("workflow",)),
+    ("local_data_platform.orchestration.cli", ("workflow", "backfill")),
 )
 """``(module, commands)``: each module's ``add_cli(subparsers, parents=...)`` registers its commands."""
 
