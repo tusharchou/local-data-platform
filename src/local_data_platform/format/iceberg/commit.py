@@ -470,6 +470,21 @@ def find_published(table, key: str):
     return None
 
 
+def published_keys(table) -> set[str]:
+    """Every idempotency key in the retained history of ``main``, found in one walk.
+
+    :func:`find_published` answers for one key, and walks the history to do it. A caller with many keys to look for,
+    such as a backfill that wants to know which of its windows ran, asks this once and tests each key against the set.
+
+    Args:
+        table: A pyiceberg table; its loaded metadata is searched as is.
+
+    Returns:
+        The keys. The empty set when the table has no snapshot, or none of them carries a key.
+    """
+    return {found for _, _, found in _keyed_snapshots(table)}
+
+
 def already_published(table, ctx: "CommitContext", mode: str) -> WriteResult | None:
     """The result of a write whose key is already in the retained history of ``main``, or ``None``.
 
@@ -1221,6 +1236,7 @@ __all__ = [
     "new_run_id",
     "oldest_keyed_window",
     "publish",
+    "published_keys",
     "sequence_race_is_a_conflict",
     "snapshot_records",
     "stage",

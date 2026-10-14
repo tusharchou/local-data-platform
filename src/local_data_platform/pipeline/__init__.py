@@ -491,15 +491,21 @@ class Pipeline(Flow):
         if not callable(lookup):
             return None
         earlier = lookup(commit, mode)
-        if earlier is None:
+        if earlier is None and self._appends(mode):
             self._warn_if_the_key_may_have_expired(commit)
         return earlier
+
+    def _appends(self, mode: str | None) -> bool:
+        """Whether a run in ``mode`` adds its rows to the table. An overwrite or an upsert replaces rows instead."""
+        effective = mode or getattr(self.target, "write_mode", None) or "append"
+        return str(effective).strip().lower() == "append"
 
     def _warn_if_the_key_may_have_expired(self, commit: Any) -> None:
         """Warn when the window is older than every window that the target still holds a key for.
 
         A key that is not there is no proof that the window never ran: an expiry may have removed the snapshot
-        that carried it, and then loading the window again would duplicate its rows.
+        that carried it, and then loading the window again would duplicate its rows. Only a run that appends can
+        duplicate them, so a run that overwrites or upserts, such as ``ldp backfill --replace``, does not warn.
         """
         window = getattr(commit, "logical_window", None)
         oldest_of = getattr(self.target, "oldest_key_window", None)

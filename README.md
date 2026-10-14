@@ -220,6 +220,7 @@ call:
 | `ldp catalog test SPEC` | Connect to a catalog (a spec file, or a config's catalog block) and list its namespaces and tables | `catalog.provider.create_catalog(spec).list_namespaces()` |
 | `ldp schema [--kind KIND]` | Print the `ldp/v1` JSON Schema of a kind of file, the dataset config by default | `spec.json_schema()`, `spec.kind_schema(kind)` |
 | `ldp workflow plan FILE [--window W] [--json]` | Check a workflow file, or a dataset config with a schedule, and every config it names, and print its tasks in the order they run with each pipeline task's idempotency key for the window | `orchestration.plan_workflow(path, window=...)` |
+| `ldp backfill FILE --from START [--to END] [--dry-run] [--replace] [--run-backwards] [--max-windows N] [--stop-on-failure] [--json]` | Run a workflow, or a config with a window, for every window of a range, oldest first, each pipeline under the key of its window. A window that is done is skipped without being read, so running it again resumes where it stopped; `--dry-run` lists the windows with their keys and states, and `--replace` writes them again under a replace key; exit status 0, 1, or 3 for a data gate | `orchestration.backfill(path, start, end, ...)` |
 | `ldp workflow run FILE --window W [--json]` | Run the tasks of a workflow one at a time for a window. A failed or blocked task stops the tasks that depend on it and the rest still run, and a second run skips what published or was built; exit status 0, 1, or 3 for a data gate | `orchestration.run_workflow(path, window=...)` |
 | `ldp plan CONFIG [--window WINDOW] [--json]` | Validate a config (or a folder of files, each as its kind) and print its spec hash, route, target, sinks, schedule, and the source path and idempotency key of a window | `spec.validate_spec(data)`, `spec.plan(config, window=...)` |
 | `ldp runs CONFIG [--run RUN_ID] [--events] [--attempts]` | List the runs a config's sinks recorded, the last attempt of a run that was retried, or every attempt with `--attempts` | `events.summarize_runs(events.read_jsonl(path))` or `read_iceberg_events(catalog)` |
@@ -286,8 +287,9 @@ window picks what the run reads, and when the config runs:
 - `window.column` keeps only the rows at or after the start of the window and before its end, before the transforms and
   the quality checks. `run.extracted` reports the rows read and the rows kept.
 - With `window.column` and the write mode `overwrite`, a run replaces only the rows of its window, so one changed day can
-  be redone and the other days stay. A published window is skipped when it runs again, so redo a day with a key of your
-  own: `ldp run daily_orders.json --window 2026-08-02/2026-08-03 --idempotency-key orders-2026-08-02-v2`.
+  be redone and the other days stay. A published window is skipped when it runs again, so to redo a day that changed at
+  the source, replace it with `ldp backfill daily_orders.json --from 2026-08-02 --to 2026-08-03 --replace`, or run it with a
+  key of your own: `ldp run daily_orders.json --window 2026-08-02/2026-08-03 --idempotency-key orders-2026-08-02-v2`.
 - A `freshness` check in a windowed run measures the age of the data at the end of the window.
 - A config with a schedule that appends, and that has neither a placeholder nor a `window.column`, would load the same
   rows in every window. `ldp plan` reports that as an error and `ldp run --window` logs a warning.
@@ -350,6 +352,46 @@ ldp runs .ldp/events.jsonl                                           # the workf
 
 The [contract](docs/design/v0_1_1.md#workflow-files-013) has the full file format. `ldp schema --kind Workflow` prints its JSON
 Schema.
+
+### Backfill a range of windows
+
+`ldp backfill` runs a workflow, or a config that has a window, for every window of a range. It is how a new pipeline loads
+its history, and how a load that stopped halfway finishes:
+
+```bash
+ldp backfill daily_orders.json --from 2026-06-01 --to 2026-09-01 --dry-run   # every window, with its key and its state
+ldp backfill daily_orders.json --from 2026-06-01 --to 2026-09-01             # load them, oldest first
+ldp backfill daily_orders.json --from 2026-06-01 --to 2026-09-01             # again: it skips every window that is done
+ldp backfill daily_orders.json --from 2026-08-02 --to 2026-08-03 --replace   # redo a day that changed at the source
+```
+
+- The windows are the windows of `metadata.window.size` (`day`, `hour` or `15m`), or of the size the schedule means, a day for
+  `@daily` and an hour for `@hourly`. `--from` and `--to` are dates or datetimes in the time zone of the workflow. Each of them
+  has to start a window, and the window that starts at `--to` is not part of the range, so `--from 2026-06-01 --to
+  2026-06-04` is the three days of June 1st, 2nd and 3rd. Without `--to` the range ends with the last complete window. A
+  range of more than `--max-windows` windows, 1000 by default, is refused, to catch a typo.
+- Each window runs as `ldp workflow run` runs it, so each pipeline publishes under the key that `ldp plan CONFIG --window W`
+  prints, and a task with `retries` is retried. A window whose keys are on the table is skipped without being read, planned
+  or written to the ledger, so a finished backfill that runs again does nothing, and one that stopped at window 40 starts
+  again at window 40. A workflow with a task that a key cannot vouch for, such as a dbt task or a pipeline that writes a file,
+  also needs the last run of the window in the ledger to have succeeded for every task.
+- A window that fails, or that a quality check blocks, does not stop the others, and it is listed with what went wrong,
+  such as the check that failed. The summary counts the windows that published, were skipped, were blocked and failed.
+  The exit status is 0 when no window failed or was blocked, 3 when a data gate is the only problem, and 1 otherwise.
+  `--stop-on-failure` stops at the first window that failed instead, and a window that a quality check blocked does not
+  stop it.
+- `--dry-run` prints every window with its key and its state, which is `published` (done, so it is skipped), `partial`,
+  `missing`, `failed` or `blocked` (the last run of it in the ledger failed or was held back by a data gate), and runs
+  nothing, not even the creation of a table. `--run-backwards` runs the newest window first, and `--json` prints the result.
+- `--replace` writes each window again under a replace key, the sha256 of its key, the word `replace` and the spec hash of
+  its config, with a window overwrite. The rows that a window has are replaced by the rows the source has now, a window that
+  has none is loaded, a window that was replaced under the same spec is skipped, and one that was replaced under an older
+  spec is replaced again. It needs a `metadata.window.column` in every pipeline that writes to Iceberg, and without one it
+  exits with 1 and changes nothing. A window that is replaced has to have rows in the source. An empty one is not written,
+  because the run fails with "No data to write", or is blocked by a `row_count` check, and the table keeps its rows.
+- From Python, `from local_data_platform.orchestration import backfill` runs the same, and `backfill(path, start, end,
+  dry_run=True)` returns the windows with their keys and states. The [contract](docs/design/v0_1_1.md#backfills-013) has the
+  rest.
 
 ### A DuckDB file as a source
 

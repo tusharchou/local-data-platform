@@ -25,7 +25,8 @@ made relative to the config's folder. The descriptive ``who``, ``what`` and
 
 ``idempotency_key`` follows SaaS design section 7.3: it hashes the pipeline, the
 target table and the logical window, never the spec hash, so redeploying a spec and
-re-running a window finds the earlier commit instead of appending twice.
+re-running a window finds the earlier commit instead of appending twice. ``replace_key`` is the key of the run that
+replaces a window that is already there: it hashes that key and the spec hash.
 """
 
 import argparse
@@ -339,6 +340,31 @@ def idempotency_key(config: Any, window: Any = None, *, table_uuid: str | None =
     bounds = window_bounds(config, window)
     start, end = (format_instant(bounds[0]), format_instant(bounds[1])) if bounds else ("", "")
     return hashlib.sha256(canonical_json([API_VERSION, "idempotency", pipeline, target, start, end])).hexdigest()
+
+
+def replace_key(key: str, spec_hash: str) -> str:
+    """Return the idempotency key of the run that replaces a window, from the key of the run it replaces.
+
+    ``R = sha256(canonical JSON of ["ldp/v1", "replace", K, spec_hash])``, where ``K`` is the key that
+    :func:`idempotency_key` gives the window and ``spec_hash`` is the :func:`spec_hash` of the config. A published
+    window is skipped when it runs again, so redoing one needs a key that is not on the table. This one is the same
+    for the same window under the same spec, so a window that was replaced is not replaced again, and it is new when
+    the spec changes, so a window is replaced once more after the config was fixed.
+
+    Args:
+        key: The idempotency key of the window, 64 hex characters.
+        spec_hash: The spec hash of the config that replaces it.
+
+    Returns:
+        64 lowercase hex characters.
+
+    Raises:
+        ConfigError: If ``key`` or ``spec_hash`` is not a non-empty string.
+    """
+    for name, value in (("key", key), ("spec_hash", spec_hash)):
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"{name} must be a non-empty string, got {value!r}")
+    return hashlib.sha256(canonical_json([API_VERSION, "replace", key, spec_hash])).hexdigest()
 
 
 # ---------------------------------------------------------------------- kinds
@@ -1302,6 +1328,7 @@ __all__ = [
     "plan",
     "register_kind",
     "registered_kinds",
+    "replace_key",
     "spec_hash",
     "target_identity",
     "validate_spec",

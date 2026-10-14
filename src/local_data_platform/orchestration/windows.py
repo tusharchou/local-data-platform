@@ -30,6 +30,10 @@ combine:
 The window shortcuts ``yesterday``, ``last-week`` (the last full Monday-to-Monday week) and ``last-month`` stand for
 a window that depends on today's date, and :func:`shortcut_window` computes them.
 
+A range of windows, such as the days of a backfill, is the windows of one size laid end to end between two instants that
+each start a window. :func:`iter_windows` lists them, :func:`is_aligned` says whether an instant starts one, and
+:func:`window_size_of` says how long the windows of a config or a workflow are.
+
 This module needs only the standard library when it is imported, so the spec and the config can use it. PyArrow and
 pyiceberg are imported inside the functions that need them.
 """
@@ -37,7 +41,7 @@ pyiceberg are imported inside the functions that need them.
 import dataclasses
 import datetime as dt
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -146,6 +150,98 @@ def shortcut_window(name: str, timezone: Any = None, now: dt.datetime | None = N
         end = today.replace(day=1)
         first = (end - dt.timedelta(days=1)).replace(day=1)
     return _midnight(first, tz).astimezone(_UTC), _midnight(end, tz).astimezone(_UTC)
+
+
+# ---------------------------------------------------------------------- ranges of windows
+
+STEP_MINUTES = {"hour": 60, "15m": 15}
+"""How long, in minutes, a window of each size is, but for a day, which is counted in the calendar of its zone."""
+
+
+def parse_boundary(value: Any, timezone: Any = None, what: str = "boundary") -> dt.datetime:
+    """Read one end of a range of windows as an aware UTC datetime.
+
+    A date is midnight of that day in ``timezone``. A datetime, or ISO-8601 text, with no offset is read in
+    ``timezone`` too, so ``2026-06-01`` starts the day that a ``Europe/Paris`` workflow calls June 1st. One with an
+    offset, such as ``+02:00`` or ``Z``, is taken as written.
+
+    Args:
+        value: A ``date``, a ``datetime``, or ISO-8601 text.
+        timezone: The time zone a value without an offset is read in: a name or a ``tzinfo``; UTC by default.
+        what: What the value is, for the message of an error.
+
+    Raises:
+        ConfigError: If ``value`` is not a date, a datetime or ISO-8601 text, or the time zone is unknown.
+    """
+    tz = get_timezone(timezone)
+    if isinstance(value, dt.datetime):
+        moment = value
+    elif isinstance(value, dt.date):
+        return _midnight(value, tz).astimezone(_UTC)
+    elif isinstance(value, str) and value.strip():
+        try:
+            moment = dt.datetime.fromisoformat(value.strip().replace("Z", "+00:00").replace("z", "+00:00"))
+        except ValueError:
+            raise ConfigError(f"{what} {value!r} is not an ISO-8601 date or datetime, such as 2026-06-01 or "
+                              "2026-06-01T06:00:00+02:00") from None
+    else:
+        raise ConfigError(f"{what} must be a date, a datetime or ISO-8601 text, got {value!r}")
+    return (moment.replace(tzinfo=tz) if moment.tzinfo is None else moment).astimezone(_UTC)
+
+
+def is_aligned(moment: dt.datetime, size: str, timezone: Any = None) -> bool:
+    """Whether ``moment`` starts a window of ``size`` in ``timezone``.
+
+    A day starts at local midnight, an hour at the start of a local hour and a ``15m`` window at a quarter of one.
+    """
+    tz = get_timezone(timezone)
+    moment = moment.astimezone(_UTC)
+    local = moment.astimezone(tz)
+    if size == "day":
+        return _midnight(local.date(), tz).astimezone(_UTC) == moment
+    return local.second == 0 and local.microsecond == 0 and local.minute % STEP_MINUTES[size] == 0
+
+
+def floor_boundary(moment: dt.datetime, size: str, timezone: Any = None) -> dt.datetime:
+    """The start of the window of ``size`` that ``moment`` falls in, as an aware UTC datetime."""
+    tz = get_timezone(timezone)
+    local = moment.astimezone(tz)
+    if size == "day":
+        return _midnight(local.date(), tz).astimezone(_UTC)
+    return local.replace(minute=local.minute - local.minute % STEP_MINUTES[size], second=0,
+                         microsecond=0).astimezone(_UTC)
+
+
+def iter_windows(start: dt.datetime, end: dt.datetime, size: str,
+                 timezone: Any = None) -> Iterator[tuple[dt.datetime, dt.datetime]]:
+    """The windows of ``size`` from ``start`` to ``end``, oldest first, as ``(start, end)`` pairs in aware UTC.
+
+    The windows are laid end to end and each one is whole, so the last window ends at ``end`` when ``end`` starts a
+    window and before it when it does not. A day runs from one local midnight to the next, so across a clock change it
+    is 23 or 25 hours long. An hour and a quarter of an hour are as long as they say.
+
+    Args:
+        start: Where the first window starts. It should start a window, see :func:`is_aligned`.
+        end: Where the range ends. No window ends after it.
+        size: One of :data:`WINDOW_SIZES`.
+        timezone: The time zone the days are counted in: a name or a ``tzinfo``; UTC by default.
+    """
+    tz = get_timezone(timezone)
+    if size == "day":
+        day = start.astimezone(tz).date()
+        while True:
+            lower = _midnight(day, tz).astimezone(_UTC)
+            day += dt.timedelta(days=1)
+            upper = _midnight(day, tz).astimezone(_UTC)
+            if upper > end:
+                return
+            yield lower, upper
+    else:
+        step = dt.timedelta(minutes=STEP_MINUTES[size])
+        lower = start.astimezone(_UTC)
+        while lower + step <= end:
+            yield lower, lower + step
+            lower += step
 
 
 # ---------------------------------------------------------------------- schedules
@@ -285,6 +381,31 @@ def parse_window_spec(value: Any) -> WindowSpec | None:
     if value is None or value == "none":
         return None
     return WindowSpec(size=value["size"], column=value.get("column"), timezone=value.get("timezone") or "UTC")
+
+
+SCHEDULE_SIZES = {"0 * * * *": "hour", "0 0 * * *": "day"}
+"""The size that a schedule means when ``metadata.window`` gives none: ``@hourly`` is an hour and ``@daily`` a day."""
+
+
+def window_size_of(metadata: Any, when: Any = None) -> str | None:
+    """How long the windows of a config or a workflow are: its ``metadata.window.size``, else what its schedule means.
+
+    A schedule of ``@hourly`` or ``@daily`` (or the cron expression that stands for it) means windows of an hour or a
+    day. Any other schedule says when a run starts, and not how long the window it reads is, so there the size is
+    ``None`` unless ``metadata.window`` gives it.
+
+    Args:
+        metadata: The ``metadata`` of the config or the workflow.
+        when: Its ``when``, which means a schedule when ``metadata.schedule`` is absent.
+
+    Raises:
+        ConfigError: If ``metadata.window`` or ``metadata.schedule`` is not valid.
+    """
+    declared = parse_window_spec(metadata.get("window") if isinstance(metadata, Mapping) else None)
+    if declared is not None:
+        return declared.size
+    schedule = effective_schedule(metadata, when)
+    return SCHEDULE_SIZES.get(schedule.cron) if schedule is not None else None
 
 
 # ---------------------------------------------------------------------- path placeholders
@@ -474,7 +595,9 @@ def overwrite_filter(column: str, bounds: tuple[dt.datetime, dt.datetime], timez
 __all__ = [
     "PLACEHOLDER_NAMES",
     "SCHEDULE_ALIASES",
+    "SCHEDULE_SIZES",
     "SHORTCUTS",
+    "STEP_MINUTES",
     "WHEN_SCHEDULES",
     "WINDOW_KEYS",
     "WINDOW_SIZES",
@@ -483,13 +606,17 @@ __all__ = [
     "bind_config",
     "effective_schedule",
     "filter_rows",
+    "floor_boundary",
     "get_timezone",
     "ignored_when",
+    "is_aligned",
     "is_shortcut",
+    "iter_windows",
     "lacks_window_selection",
     "mentions_placeholder",
     "now_utc",
     "overwrite_filter",
+    "parse_boundary",
     "parse_schedule",
     "parse_window_spec",
     "placeholder_problems",
@@ -499,4 +626,5 @@ __all__ = [
     "source_path",
     "timezone_of",
     "window_problems",
+    "window_size_of",
 ]
