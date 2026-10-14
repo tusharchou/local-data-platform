@@ -182,7 +182,7 @@ def find_dbt(dbt_bin: str | os.PathLike | None = None) -> str:
     return found
 
 
-def run_dbt(project: DbtProject, binary: str, arguments: Sequence[str]) -> int:
+def run_dbt(project: DbtProject, binary: str, arguments: Sequence[str], *, stdout: int | None = None) -> int:
     """Run ``dbt ARGUMENTS`` on the project and return its exit status.
 
     ``arguments`` start with the dbt command, such as ``["build", "--select", "orders"]``. The project
@@ -190,9 +190,13 @@ def run_dbt(project: DbtProject, binary: str, arguments: Sequence[str]) -> int:
     dbt runs with the project folder as its working directory, because dbt resolves a relative profile
     ``path`` against it. Its output goes straight to the terminal, in colour only when that is a
     terminal. ``--no-version-check`` stops dbt from contacting PyPI on every run.
+
+    ``stdout`` is a file descriptor that dbt's standard output goes to instead, such as ``2`` for the standard error
+    of this process. A caller that prints a result of its own on standard output, as ``ldp workflow run --json`` does,
+    uses it to keep dbt's progress lines out of that result.
     """
     flags = ["--no-version-check"]
-    if not sys.stdout.isatty():
+    if not (sys.stdout.isatty() if stdout is None else os.isatty(stdout)):
         flags.append("--no-use-colors")  # keep escape codes out of log files and pipes
     argv = [binary, *flags, *arguments, "--project-dir", str(project.directory),
             "--profiles-dir", str(project.directory)]
@@ -200,7 +204,7 @@ def run_dbt(project: DbtProject, binary: str, arguments: Sequence[str]) -> int:
     # dbt writes to the same terminal or pipe, so what LDP printed before it must come out first.
     sys.stdout.flush()
     sys.stderr.flush()
-    return subprocess.run(argv, cwd=project.directory, check=False).returncode
+    return subprocess.run(argv, cwd=project.directory, stdout=stdout, check=False).returncode
 
 
 def find_target_path(project: DbtProject, extra: Sequence[str] = ()) -> str:

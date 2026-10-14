@@ -142,6 +142,76 @@ the file before it returns.
   dbt run is reported as `ldp: error: dbt build failed with exit status N, so nothing was published`,
   followed by one line for each failed node.
 
+## Running dbt from a workflow
+
+A [workflow file](v0_1_1.md#workflow-files-013) runs a dbt project with a `dbt` task. The task does what `ldp dbt build`
+does, with the same code (`dbt_layer.build`), for the window of the run:
+
+```json
+{"id": "gold", "depends_on": ["orders"], "dbt": {"project": "dbt", "select": "+daily_revenue", "vars": {"min_orders": 5}}}
+```
+
+- **Options.** `project` is the folder with the project's `ldp_dbt.json`, relative to the workflow file. `command` is
+  `build`, the default, or `test`, which runs the data tests and publishes nothing. `select` and `exclude` are dbt
+  selectors, as a string or a list, and a string is split at spaces, as dbt splits it. `vars` are dbt variables.
+  `dbt_bin` is `--dbt-bin`, and it runs the program it names, so read a workflow file from someone else as you would
+  read a script. `skip_unchanged` is described below. There is no way to pass any other flag to dbt: a flag that a
+  workflow needs becomes an option.
+- **The window.** dbt gets `--vars` with the variables of the task and two more, `window_start` and `window_end`, as UTC
+  instants in ISO 8601 with a `Z`, such as `2026-08-01T00:00:00Z`. DuckDB casts them to `timestamp`, `timestamptz` and
+  `date`, so a model reads its window with `where ordered_at >= '{{ var("window_start") }}'::timestamp and ordered_at <
+  '{{ var("window_end") }}'::timestamp`. A task cannot set either name, and the check of the workflow file says so. A model that ignores them
+  rebuilds from everything, as it does under `ldp dbt build`.
+- **Order.** Sources are registered first, then dbt runs, then the models marked `ldp_publish` are written, as for the
+  command. A missing project, a missing dbt or a profile that points at another build file is a problem of the plan, so
+  `ldp workflow run` starts no task, not even the pipelines before it.
+- **Output.** dbt's output goes to standard error, so `ldp workflow run --json` keeps standard output for its result.
+  The result lists each table the task published, as `ldp dbt build` does. Each model the task publishes is also a run of
+  its own in the events, with the `workflow`, `workflow_run_id` and `task_id` of the task, and its own sinks from
+  `ldp_dbt.json` still get it.
+
+**How it ends.**
+
+| Status | When | Exit of the workflow |
+|---|---|---|
+| `succeeded` | dbt exited with 0 and every model marked `ldp_publish` was written | 0 |
+| `skipped_duplicate` | The window was built before, as below | 0 |
+| `blocked_quality` | dbt failed and every failed node is a data test that found data breaking its rule, or the quality check of a model held back its write | 3 |
+| `failed` | Anything else: a model that raised an error, a test whose own SQL failed, a unit test, a dbt that crashed or wrote no artifacts, a write that failed | 1 |
+
+A data gate needs the data to change, so a scheduler must not retry it. A failed test beside an erroring model is a
+failure, because something is broken, and so is a failed unit test, which says the logic of a model is wrong and not the
+data. Nothing is published when dbt fails. A write that fails after others leaves those published, as under the command,
+and the events name the models that were and were not written. `ldp dbt build` itself exits with 1 for failing data
+tests, as it did in 0.1.2.
+
+**Running a window again.** A pipeline task skips a window it already published, by its idempotency key. A model has no
+key, because it is a function of its inputs and its publish is an `overwrite` or an `upsert`, so the runner decides from
+the ledger, `.ldp/events.jsonl`. The task is skipped, with the status `skipped_duplicate`, when all three hold.
+
+1. The last build of this task for this window, from another run, ended `succeeded`. A skip does not count as a build,
+   so a skip never hides a failure before it.
+2. The fingerprint of that build equals the one of this run. The fingerprint is 16 hex characters of a SHA-256 over the
+   content of every file in the project folder, the command, the selection and the variables of the task. It leaves out
+   dbt's target and log folders, packages, the build file, the generated sources file and configs, and hidden files. The
+   path of the project is not part of it, so a copy of the project has the same fingerprint.
+3. No task that ran earlier in this run may have written data. A task that was skipped or did not run wrote none, and
+   neither did a `maintain` task that succeeded. Any other task counts, including one that failed or was blocked,
+   because it may have written part of its data before it stopped.
+
+So a changed model, test or variable, a window whose last build failed, and an upstream pipeline that published again
+all run the build. The rule sees only the project folder and the run itself. It does not see a file that a model reads
+from outside the folder, and it does not see rows that someone loaded by hand between two runs, so a project that depends
+on either sets `skip_unchanged: false`, which runs the task every time. Hashing reads every file of the folder, so keep
+large data files outside it. If the ledger is deleted the task runs again, which is safe. The rule is a way to avoid a
+repeat, not a guarantee. The exactly-once protocol is the guarantee, and it covers loads.
+
+**The plan.** `ldp workflow plan` loads the project, finds dbt, checks the profile, and shows the command, the selection,
+the two variables and the fingerprint. It lists the Iceberg tables of the project's sources as the tables the task reads,
+so it warns when a pipeline that writes one is not in the `depends_on` of the task. It cannot say what the task writes,
+because which models are published is known only after dbt has run, so it cannot warn about a task that reads those
+tables. Name the dbt task in the `depends_on` of every task that does.
+
 ## The publish contract
 
 **Which models.** A model is published when all three are true.
@@ -220,8 +290,8 @@ model ran with the mark, `ldp` says so and exits with 0.
 
 - Publishing partially after a failed node, as said above.
 - dbt snapshots (slowly changing dimensions), Python models and the `external` materialization.
-- Scheduling dbt runs, which is [0.1.3](../roadmap.md). The `ldp dbt build -- ARGS` pass-through
-  exists for it.
+- Scheduling dbt runs, which is [0.1.3](../roadmap.md). A workflow already runs a project with a `dbt` task,
+  [above](#running-dbt-from-a-workflow), and `ldp schedule` will run the workflow.
 - Lineage from the dbt manifest into OpenLineage, and descriptions and owners from dbt into the
   published tables. Those are 0.1.4, the gold layer.
 
@@ -238,3 +308,8 @@ project in `tests/fixtures/dbt_project` end to end, and cover a build that publi
 test or model that publishes nothing, an incremental second build that upserts only the new rows, a
 `--select` build that publishes only the selected models, a project with no published models, a view
 over the sources, and `init`, `test`, `docs` and `exec`.
+
+The steps the command and a workflow share (`dbt_layer.build`) are tested in `test_dbt_build.py`. The `dbt` task is tested
+without dbt in `test_workflow_dbt.py`, against the same stand-in script: the arguments dbt gets, the window variables, every
+way a run ends, the skip rule and the fingerprint. `test_workflow_dbt_run.py` runs it with the real dbt on
+`tests/fixtures/dbt_gold`, a model that reads its window from the variables and accumulates a row for each day.

@@ -18,35 +18,17 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 from collections.abc import Sequence
 from typing import Any
 
-from local_data_platform.dbt_layer.project import (
-    INSTALL_HINT,
-    DbtProject,
-    check_profile,
-    find_dbt,
-    find_target_path,
-    init_project,
-    run_dbt,
-)
-from local_data_platform.dbt_layer.publish import (
-    Published,
-    PublishOutcome,
-    failed_nodes,
-    plan_publish,
-    publish,
-    read_artifacts,
-)
-from local_data_platform.dbt_layer.sources import MODES, SourceRegistration, register_sources
+from local_data_platform.dbt_layer.build import prepare, register, registration_summary, run_build, run_test
+from local_data_platform.dbt_layer.project import INSTALL_HINT, DbtProject, init_project, run_dbt
+from local_data_platform.dbt_layer.publish import Published
+from local_data_platform.dbt_layer.sources import MODES, SourceRegistration
 from local_data_platform.exceptions import ConfigError, LDPError
 
 DOCS_HOST = "127.0.0.1"
 DEFAULT_DOCS_PORT = 8080
-MAX_FAILED_LINES = 10
-CLOCK_SLACK_S = 2.0
-"""How much older than the start of a dbt run an artifact may be and still count as written by it."""
 
 
 def _out(text: str = "") -> None:
@@ -74,44 +56,16 @@ def _dbt_arguments(args: argparse.Namespace) -> list[str]:
 
 def _prepare(args: argparse.Namespace) -> tuple[DbtProject, str]:
     """Load the project, find dbt, and register the sources, in that order, so a missing dbt changes nothing."""
-    project = DbtProject.load(args.project_dir)
-    binary = find_dbt(args.dbt_bin)
-    check_profile(project)
+    prepared = prepare(args.project_dir, dbt_bin=args.dbt_bin)
     if not args.no_sources:
-        _report_sources(register_sources(project.database, project.source_configs, project.source_catalogs,
-                                         mode=args.sources_mode, sources_file=project.sources_file))
-    return project, binary
-
-
-def _plural(count: int, one: str, many: str) -> str:
-    return f"{count} {one if count == 1 else many}"
+        _report_sources(register(prepared.project, mode=args.sources_mode))
+    return prepared.project, prepared.binary
 
 
 def _report_sources(registration: SourceRegistration) -> None:
     for item in registration.unavailable:
         print(f"ldp: warning: {item['table']} is not a source yet: {item['reason']}", file=sys.stderr)
-    views = sum(source.kind == "view" for source in registration.sources)
-    copies = len(registration.sources) - views
-    total = _plural(len(registration.sources), "source", "sources")
-    if not registration.sources:
-        summary = "no sources (no Iceberg tables were found)"
-    elif not copies:
-        summary = f"{total} as views over Iceberg snapshots"
-    elif not views:
-        summary = f"{total} as copies of Iceberg snapshots"
-    else:
-        summary = f"{total} ({_plural(views, 'view', 'views')}, {_plural(copies, 'copy', 'copies')})"
-    dropped = f", removed {len(registration.dropped)} that no longer exist" if registration.dropped else ""
-    _out(f"ldp: registered {summary}{dropped}")
-
-
-def _run_plain(args: argparse.Namespace, command: list[str]) -> int:
-    """Run a dbt command that publishes nothing and map a failure to exit status 1."""
-    project, binary = _prepare(args)
-    status = run_dbt(project, binary, [*command, *_dbt_arguments(args)])
-    if status != 0:
-        raise LDPError(f"dbt {command[0]} exited with status {status}")
-    return 0
+    _out(f"ldp: {registration_summary(registration)}")
 
 
 # --------------------------------------------------------------------------- commands
@@ -129,25 +83,16 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
 def _cmd_build(args: argparse.Namespace) -> int:
     project, binary = _prepare(args)
-    extra = _dbt_arguments(args)
-    started = time.time() - CLOCK_SLACK_S
-    status = run_dbt(project, binary, ["build", *extra])
-    target = find_target_path(project, extra)
-    if status != 0:
-        raise _dbt_failed(project, target, started, status)
-    manifest, run_results = read_artifacts(project, target, since=started)
-    plan = plan_publish(project, manifest, run_results)
-    if not plan:
+    result = run_build(project, binary, _dbt_arguments(args), report=_report_published)
+    if not result.planned:
         _out("ldp: no model marked ldp_publish: true ran in this build, so nothing was published")
-        return 0
-    outcome = publish(plan, report=_report_published)
-    if outcome.failed:
-        raise _publish_failed(outcome)
     return 0
 
 
 def _cmd_test(args: argparse.Namespace) -> int:
-    return _run_plain(args, ["test"])
+    project, binary = _prepare(args)
+    run_test(project, binary, _dbt_arguments(args))
+    return 0
 
 
 def _cmd_exec(args: argparse.Namespace) -> int:
@@ -185,33 +130,6 @@ def _report_published(item: Published) -> None:
          f"snapshot {item.snapshot_id}")
     for line in item.quality:
         _out(f"  {line}")
-
-
-def _dbt_failed(project: DbtProject, target: str, started: float, status: int) -> LDPError:
-    """The error for a dbt build that exited with ``status``, naming the nodes that failed when dbt wrote them."""
-    lines = [f"dbt build failed with exit status {status}, so nothing was published"]
-    try:
-        _, run_results = read_artifacts(project, target, since=started)
-    except (ConfigError, ValueError, OSError):
-        return LDPError("\n".join(lines))
-    failed = failed_nodes(run_results)
-    for node in failed[:MAX_FAILED_LINES]:
-        lines.append(f"  - {node['node']}: {node['status']}" + (f", {node['message']}" if node["message"] else ""))
-    if len(failed) > MAX_FAILED_LINES:
-        lines.append(f"  ... and {len(failed) - MAX_FAILED_LINES} more")
-    return LDPError("\n".join(lines))
-
-
-def _publish_failed(outcome: PublishOutcome) -> LDPError:
-    model, error = outcome.failed
-    detail = str(error) if isinstance(error, LDPError) else f"{type(error).__name__}: {error}"
-    lines = [f"publishing {model} failed, so the models after it were not tried"]
-    lines += [f"  {line}" for line in detail.splitlines()]
-    if outcome.published:
-        lines.append("  published: " + ", ".join(item.table for item in outcome.published))
-    lines.append("  not published: " + ", ".join([model, *(outcome.pending or [])]))
-    lines.append(f"  to retry {model} by hand: ldp run {outcome.failed_config}")
-    return LDPError("\n".join(lines))
 
 
 # --------------------------------------------------------------------------- argparse

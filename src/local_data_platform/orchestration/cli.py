@@ -3,7 +3,7 @@
 ``plan`` checks a workflow file, or a dataset config with a schedule, and every config it names, and prints the tasks
 in the order they run with the idempotency key of each pipeline task for the window. It runs nothing and exits with 1
 when anything is invalid. ``run`` runs the tasks one at a time and exits with 0 when every task succeeded, with 3 when
-the only problem is a data gate that held a pipeline back, and with 1 when anything else went wrong.
+the only problem is a data gate that held a task back, and with 1 when anything else went wrong.
 
 ``cli.py`` wires this in with :func:`add_cli`. Heavy imports happen inside the commands.
 """
@@ -38,10 +38,10 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
     parents = list(parents)
     workflow = subparsers.add_parser(
         "workflow", parents=parents, help="plan and run a workflow file",
-        description="A workflow file lists the pipelines and maintenance that run for each window, and in what order. "
-                    "A dataset config that has a schedule is a workflow of one task.",
+        description="A workflow file lists the pipelines, dbt models and maintenance that run for each window, and in "
+                    "what order. A dataset config that has a schedule is a workflow of one task.",
         epilog="Exit status is 0 on success, 1 on an error or an invalid workflow, and 3 when the only problem of a "
-               "run is a data gate that held a pipeline back.")
+               "run is a data gate that held a task back.")
     actions = workflow.add_subparsers(dest="workflow_command", metavar="COMMAND")
 
     def usage(args: Any) -> int:
@@ -76,6 +76,11 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
     return workflow
 
 
+def _cell(value: Any) -> Any:
+    """A table cell: a dash for what the task has none of, such as the rows of a dbt task, where a table says NULL."""
+    return "-" if value is None else value
+
+
 def _short(value: Any, width: int = 12) -> Any:
     return value[:width] if isinstance(value, str) and len(value) > width else value
 
@@ -97,7 +102,8 @@ def _print_plan(result: dict[str, Any]) -> None:
         _out()
         rows = [{"order": task["order"], "id": task["id"], "kind": task["kind"],
                  "depends_on": ", ".join(task["depends_on"]) or "-",
-                 "runs": task.get("config") or "-", "target": task.get("target") or task.get("table") or "-",
+                 "runs": task.get("config") or task.get("project") or "-",
+                 "target": task.get("target") or task.get("table") or "-",
                  "key": _short(task.get("idempotency_key")) or "-"} for task in result["tasks"]]
         _out(format_table(rows))
     if result["errors"]:
@@ -128,9 +134,15 @@ def _print_result(result: Any) -> None:
     rows = []
     for task in result.tasks.values():
         rows.append({"id": task.id, "kind": task.kind, "status": task.status,
-                     "rows_read": task.detail.get("rows_read"), "rows_written": task.detail.get("rows_written"),
-                     "snapshot": task.detail.get("snapshot_id"), "seconds": round(task.duration_s, 2)})
+                     "rows_read": _cell(task.detail.get("rows_read")),
+                     "rows_written": _cell(task.detail.get("rows_written")),
+                     "snapshot": _cell(task.detail.get("snapshot_id")), "seconds": round(task.duration_s, 2)})
     _out(format_table(rows))
+    for task in result.tasks.values():
+        for item in task.detail.get("published", []):
+            if isinstance(item, dict):  # the tables a dbt task wrote, as `ldp dbt build` prints them
+                _out(f"{task.id} published {item['table']}: {item['mode']}, {item['rows_before']} -> "
+                     f"{item['rows_after']} rows, snapshot {item['snapshot_id']}")
     counted = ", ".join(f"{count} {status}" for status, count in result.counts().items())
     _out(f"{result.status}: {counted} in {result.duration_s:.1f}s. Events: {result.ledger}")
     for task in result.tasks.values():

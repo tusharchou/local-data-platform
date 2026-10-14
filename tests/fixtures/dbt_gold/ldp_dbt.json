@@ -1,0 +1,8 @@
+{
+  "database": "target/ldp_build.duckdb",
+  "sources": {"configs": ["../config"]},
+  "publish": {
+    "catalog": {"identifier": "gold", "warehouse_path": "../warehouse"},
+    "config_dir": "target/ldp"
+  }
+}

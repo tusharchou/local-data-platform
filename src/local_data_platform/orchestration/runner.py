@@ -13,14 +13,16 @@ A run checks the whole workflow first, with :func:`~local_data_platform.orchestr
 refuses to start when anything in it is invalid. Then it runs the tasks with ``graphlib.TopologicalSorter``, one at a
 time, which also respects DuckDB's single writer. Every pipeline task runs with the window of the workflow run, so its
 idempotency key is the one ``ldp plan CONFIG --window`` prints. Running the same window again after fixing a cause
-skips every pipeline task that already published, by its key, without reading its source, and runs the tasks that
-failed or did not run.
+skips every pipeline task that already published, by its key, without reading its source, and a dbt task that already
+built the window, and runs the tasks that failed or did not run.
 
 A task ends with one of these statuses:
 
-* ``published`` or ``skipped_duplicate``: a pipeline task wrote its rows, or found them already written.
+* ``published`` or ``skipped_duplicate``: a pipeline task wrote its rows, or found them already written. A ``dbt`` task
+  is ``skipped_duplicate`` when it already built the window.
 * ``succeeded``: a task of another kind did its work.
-* ``blocked_quality``: a quality check held a pipeline back. The data has to change, so a scheduler must not retry.
+* ``blocked_quality``: a data gate held a task back, such as a quality check of a pipeline or the data tests of a dbt
+  task. The data has to change, so a scheduler must not retry.
 * ``failed``: the task raised any other error.
 * ``upstream_failed``: a task it depends on did not succeed, so it did not run. Tasks that do not depend on a task that
   did not succeed still run.
@@ -40,6 +42,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from graphlib import TopologicalSorter
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from local_data_platform.exceptions import ConfigError, DataQualityError
@@ -163,6 +166,12 @@ def _message(error: BaseException) -> str:
     return redact_text(f"{type(error).__name__}: {error}")
 
 
+def _detail_of(error: BaseException) -> dict[str, Any]:
+    """The facts a task kind attached to the error it raised, which go into the events and the result of the task."""
+    detail = getattr(error, "detail", None)
+    return dict(detail) if isinstance(detail, Mapping) else {}
+
+
 def _task_emitter(ctx: RunContext, task: Task) -> Any:
     """An emitter for the run events of a task whose kind leaves them to the runner."""
     from local_data_platform.events import MultiSink, RunEmitter, TaggedSink, uuid7
@@ -196,7 +205,7 @@ def _run_task(task: Task, ctx: RunContext, results: Mapping[str, TaskResult], co
     kind = task_registry.get_task_kind(task.kind)
     seen = _Counting(ctx.sink, counts, task.id)
     scoped = RunContext(workflow=ctx.workflow, bounds=ctx.bounds, run_id=ctx.run_id, sink=seen, policy=ctx.policy,
-                        search_since_ms=ctx.search_since_ms)
+                        search_since_ms=ctx.search_since_ms, finished=MappingProxyType(results))
     emitter = None if kind.emits_events else _task_emitter(ctx, task)
     started = time.perf_counter()
     error: BaseException | None = None
@@ -206,9 +215,9 @@ def _run_task(task: Task, ctx: RunContext, results: Mapping[str, TaskResult], co
             raise TypeError(f"the {task.kind} task kind returned {type(outcome).__name__}, not a TaskOutcome")
         status, detail = outcome.status, dict(outcome.detail)
     except DataQualityError as caught:
-        error, status, detail = caught, "blocked_quality", {}
+        error, status, detail = caught, "blocked_quality", _detail_of(caught)
     except Exception as caught:  # noqa: BLE001 - any error of a task fails the task, and the workflow goes on
-        error, status, detail = caught, "failed", {}
+        error, status, detail = caught, "failed", _detail_of(caught)
     took = time.perf_counter() - started
     if emitter is None and error is not None and counts.get(task.id, 0) == 0:
         emitter = _task_emitter(ctx, task)  # a pipeline task that failed before its run left any event

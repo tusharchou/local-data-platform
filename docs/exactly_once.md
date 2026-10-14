@@ -186,6 +186,13 @@ can be run again as it is: the tasks that published are skipped, and only the ta
 A task whose target is a file is the exception. A file is replaced whole by every run and cannot take a key, so that task runs
 again. The [contract](design/v0_1_1.md#workflow-files-013) has the rest.
 
+A `dbt` task has no key either, and for another reason. A model is a function of its inputs, and its publish is an
+`overwrite` or an `upsert`, so a second build leaves the same rows and does no harm. An `overwrite` adds snapshots, and
+every build takes time. So the runner skips the task when it would repeat a build. The last build of this task for this
+window has to have succeeded, the project has to have the same fingerprint, and no task that ran earlier in this run may
+have written data. A changed model, a failed last build or a pipeline that published again runs the build again.
+[Running dbt from a workflow](design/warehousing.md#running-dbt-from-a-workflow) has the rule.
+
 ### Long backfills and late re-runs
 
 A staged run looks for its idempotency key twice, and the two searches answer different questions.
