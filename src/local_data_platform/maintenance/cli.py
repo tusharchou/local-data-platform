@@ -139,26 +139,73 @@ def _print_orphans(report: dict[str, Any]) -> None:
          f"hidden {stats['hidden']}, other tables {stats['other_tables']}")
 
 
-def _cmd_maintain(args: argparse.Namespace) -> int:
-    from local_data_platform.maintenance.orphans import remove_orphans
-    from local_data_platform.maintenance.snapshots import expire_snapshots
+def run_maintenance(config: str, *, expire: float | None = None, orphans: bool = False, apply: bool = False,
+                    retain_last: int | None = None, orphan_age_hours: float | None = None,
+                    keep_metadata_versions: int | None = None) -> dict[str, Any]:
+    """Maintain the Iceberg table of a config, as ``ldp maintain`` and the maintain task of a workflow do.
 
-    run_expire = args.expire is not None
-    run_orphans = bool(args.orphans)
+    Args:
+        config: Path to a JSON dataset config. Its Iceberg target, else its source, is the table.
+        expire: Expire snapshots committed more than this many days ago. With neither ``expire`` nor ``orphans``, both
+            run and ``expire`` is :data:`DEFAULT_EXPIRE_DAYS`.
+        orphans: Find, and with ``apply`` delete, files that no metadata references.
+        apply: Make the changes. Everything is a dry run without it.
+        retain_last: Keep ``main``'s last N snapshots. The ``DEFAULT_RETAIN_LAST`` of
+            :mod:`~local_data_platform.maintenance.snapshots` when ``None``.
+        orphan_age_hours: Only files older than this are orphans. The module's default when ``None``.
+        keep_metadata_versions: Files reachable from this many previous metadata versions are kept. The module's default
+            when ``None``.
+
+    Returns:
+        ``{"table", "dry_run"}`` and, for each part that ran, ``"expire"`` (the report of ``expire_snapshots``) and
+        ``"orphans"`` (the report of ``remove_orphans``). :func:`maintenance_failed` says whether a file could not be
+        deleted.
+
+    Raises:
+        ConfigError: If the config has no Iceberg table.
+        TableNotFound: If the table or its SQLite catalog file doesn't exist.
+    """
+    from local_data_platform.maintenance.orphans import (
+        DEFAULT_KEEP_METADATA_VERSIONS,
+        DEFAULT_OLDER_THAN_HOURS,
+        remove_orphans,
+    )
+    from local_data_platform.maintenance.snapshots import DEFAULT_RETAIN_LAST, expire_snapshots
+
+    run_expire, run_orphans = expire is not None, bool(orphans)
     if not run_expire and not run_orphans:
         run_expire = run_orphans = True
-    days = args.expire if args.expire is not None else DEFAULT_EXPIRE_DAYS
-    dry_run = not args.apply
+    days = expire if expire is not None else DEFAULT_EXPIRE_DAYS
+    dry_run = not apply
 
-    table = config_table(args.config)
+    table = config_table(config)
     result: dict[str, Any] = {"table": ".".join(table.name()), "dry_run": dry_run}
     if run_expire:
-        result["expire"] = expire_snapshots(table, older_than=dt.timedelta(days=days), retain_last=args.retain_last,
+        result["expire"] = expire_snapshots(table, older_than=dt.timedelta(days=days),
+                                            retain_last=DEFAULT_RETAIN_LAST if retain_last is None else retain_last,
                                             dry_run=dry_run)
     if run_orphans:
-        result["orphans"] = remove_orphans(table, older_than_hours=args.orphan_age_hours, dry_run=dry_run,
-                                           keep_metadata_versions=args.keep_metadata_versions)
-    failed = bool(result.get("orphans", {}).get("failed"))
+        result["orphans"] = remove_orphans(
+            table, older_than_hours=DEFAULT_OLDER_THAN_HOURS if orphan_age_hours is None else orphan_age_hours,
+            dry_run=dry_run,
+            keep_metadata_versions=(DEFAULT_KEEP_METADATA_VERSIONS if keep_metadata_versions is None
+                                    else keep_metadata_versions))
+    return result
+
+
+def maintenance_failed(result: dict[str, Any]) -> bool:
+    """Whether a :func:`run_maintenance` result has a file that could not be deleted."""
+    return bool(result.get("orphans", {}).get("failed"))
+
+
+def _cmd_maintain(args: argparse.Namespace) -> int:
+    result = run_maintenance(args.config, expire=args.expire, orphans=args.orphans, apply=args.apply,
+                             retain_last=args.retain_last, orphan_age_hours=args.orphan_age_hours,
+                             keep_metadata_versions=args.keep_metadata_versions)
+    run_expire, run_orphans = "expire" in result, "orphans" in result
+    days = args.expire if args.expire is not None else DEFAULT_EXPIRE_DAYS
+    dry_run = result["dry_run"]
+    failed = maintenance_failed(result)
 
     if args.json:
         _out(json.dumps(result, indent=2, sort_keys=True))
@@ -175,4 +222,4 @@ def _cmd_maintain(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
-__all__ = ["DEFAULT_EXPIRE_DAYS", "add_cli", "config_table"]
+__all__ = ["DEFAULT_EXPIRE_DAYS", "add_cli", "config_table", "maintenance_failed", "run_maintenance"]

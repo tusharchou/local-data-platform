@@ -23,6 +23,10 @@ run.started ─► run.extracted ─► quality.evaluated ─┬─► run.publi
   Its `run.finished` has no `rows_read`, and `PipelineResult.rows_read` is 0.
 - `run.blocked_quality` means a check failed with `on_failure: "fail"`. The pipeline still raises
   `DataQualityError`, as it does without run events, and writes nothing.
+- A [workflow](design/v0_1_1.md#workflow-files-013) run wraps the runs of its tasks in `workflow.started` and
+  `workflow.finished`. Every event of a task carries `workflow`, `workflow_run_id` and `task_id` in its payload, and
+  the runner writes all of them to `.ldp/events.jsonl` next to the workflow file, see
+  [Workflow runs](#workflow-runs).
 - `run.finished` always comes last and carries the final `status`: `published`,
   `skipped_duplicate`, `blocked_quality` or `failed`.
 
@@ -54,8 +58,28 @@ depends on the type:
 | `run.published`, `run.skipped_duplicate` | `rows_written`, `snapshot_id`, `idempotency_key`, `write` (the `WriteResult`), `snapshot_summary` |
 | `run.blocked_quality` | `checks_failed`, `failures` (check names), `on_failure` |
 | `run.failed` | `stage` (`search`, `extract`, `transform`, `validate`, `write`), `error_type`, `message` |
-| `run.finished` | `status`, `duration_s`, `rows_read`, `rows_written`, `published_snapshot_id`, `idempotency_key`, `quality_passed` |
+| `run.finished` | `status`, `duration_s`, `rows_read`, `rows_written`, `published_snapshot_id`, `idempotency_key`, `quality_passed`. A task of a workflow that did not run a pipeline has `succeeded`, `failed` or `upstream_failed` as its `status`, and `upstream_failed` adds `blocked_by`, the ids of the tasks that did not succeed |
+| `workflow.started` | `workflow` and `pipeline` (the workflow's identifier), `workflow_run_id`, `window` (start and end), `schedule`, `tasks` (the `id`, `kind` and `depends_on` of each, in the order they run), `ldp_version` |
+| `workflow.finished` | `status` (`succeeded`, `blocked_quality` when a data gate is the only problem, or `failed`), `duration_s`, `counts` (tasks per status), `tasks` (the status of each task) |
 
+### Workflow runs
+
+A workflow run has its own `run_id`, the `workflow_run_id`, and its events are `workflow.started` and
+`workflow.finished`. Each task of the workflow runs as an ordinary run with a `run_id` of its own, and every event of it
+carries these fields in its payload, wherever the event ends up:
+
+| Field | Meaning |
+|---|---|
+| `workflow` | The identifier of the workflow |
+| `workflow_run_id` | The `run_id` of the workflow run |
+| `task_id` | The id of the task |
+
+A run writes all of its events, `workflow.started`, the events of every task and `workflow.finished`, to
+`.ldp/events.jsonl` next to the workflow file, whatever else is configured, and to the sinks of the workflow's
+`metadata.observability`. A pipeline task's events also go to the sinks of its own config, and only that task's. A task that
+is not a pipeline, and a task that did not run because one it depends on did not succeed, get a `run.started` and a
+`run.finished` from the runner. `ldp runs .ldp/events.jsonl` lists the workflow run and each task's run, with a `workflow`
+and a `task` column.
 ### What never goes into an event
 
 Payloads follow the SaaS boundary allowlist (§10.2): specs, schemas, counts, snapshot ids and
@@ -179,7 +203,7 @@ failed) when it finishes.
 | `job.namespace`, `job.name` | The sink's `namespace`, the pipeline name; a `jobType` facet says `BATCH`/`LDP`/`PIPELINE` |
 | `inputs[0]` | The source: `file` + absolute path, `s3://bucket` + key, or the Iceberg warehouse + table; with a `schema` facet |
 | `outputs[0]` | The target, with `schema`, `dataQualityMetrics` (row count and null counts of the validated batch) and `dataQualityAssertions` (one per check); plus an `outputStatistics` output facet (rows, bytes and files written) when published |
-| `run.facets` | `nominalTime` for a logical window, `errorMessage` on `FAIL`, and `ldp_run` (attempt, status, idempotency key, spec hash, snapshot id) |
+| `run.facets` | `nominalTime` for a logical window, `errorMessage` on `FAIL`, `ldp_run` (attempt, status, idempotency key, spec hash, snapshot id), and for a task of a workflow a `parent` run facet (`ParentRunFacet`) whose `run.runId` is the workflow run and whose `job` is the sink's `namespace` and the workflow's name |
 
 Give it a file path to write one JSON event per line, or an `http(s)://` URL to POST each event.
 A URL without a path posts to `/api/v1/lineage`, the Marquez endpoint:

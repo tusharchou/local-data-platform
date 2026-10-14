@@ -219,6 +219,8 @@ call:
 |---|---|---|
 | `ldp catalog test SPEC` | Connect to a catalog (a spec file, or a config's catalog block) and list its namespaces and tables | `catalog.provider.create_catalog(spec).list_namespaces()` |
 | `ldp schema [--kind KIND]` | Print the `ldp/v1` JSON Schema of a kind of file, the dataset config by default | `spec.json_schema()`, `spec.kind_schema(kind)` |
+| `ldp workflow plan FILE [--window W] [--json]` | Check a workflow file, or a dataset config with a schedule, and every config it names, and print its tasks in the order they run with each pipeline task's idempotency key for the window | `orchestration.plan_workflow(path, window=...)` |
+| `ldp workflow run FILE --window W [--json]` | Run the tasks of a workflow one at a time for a window. A failed or blocked task stops the tasks that depend on it and the rest still run, and a second run skips what published; exit status 0, 1, or 3 for a data gate | `orchestration.run_workflow(path, window=...)` |
 | `ldp plan CONFIG [--window WINDOW] [--json]` | Validate a config (or a folder of files, each as its kind) and print its spec hash, route, target, sinks, schedule, and the source path and idempotency key of a window | `spec.validate_spec(data)`, `spec.plan(config, window=...)` |
 | `ldp runs CONFIG [--run RUN_ID] [--events]` | List the runs a config's sinks recorded | `events.summarize_runs(events.read_jsonl(path))` or `read_iceberg_events(catalog)` |
 | `ldp commits CONFIG [--key KEY] [--branches]` | List the staged publishes on a table, newest first | `format.iceberg.commit.commit_log(iceberg.table())` and `staged_branches(...)` |
@@ -291,6 +293,47 @@ window picks what the run reads, and when the config runs:
 
 The [contract](docs/design/v0_1_1.md#windows-and-schedules-013) has the full rules, including how each column type is
 compared.
+
+### Workflow files
+
+A workflow file lists the pipelines and maintenance that run for each window, and in what order:
+
+```json
+{
+  "apiVersion": "ldp/v1",
+  "kind": "Workflow",
+  "identifier": "daily_orders",
+  "metadata": {"schedule": "5 2 * * *", "window": {"size": "day"}},
+  "tasks": [
+    {"id": "orders", "pipeline": "config/orders.json"},
+    {"id": "customers", "pipeline": "config/customers.json"},
+    {"id": "export", "pipeline": "config/export.json", "depends_on": ["orders"]},
+    {"id": "tidy", "maintain": {"config": "config/orders.json", "expire": 7}, "depends_on": ["export"]}
+  ]
+}
+```
+
+```bash
+ldp workflow plan daily_orders.json --window 2026-08-01/2026-08-02   # the tasks in run order, with each key
+ldp workflow run daily_orders.json --window 2026-08-01/2026-08-02    # run them for that day
+ldp runs .ldp/events.jsonl                                           # the workflow run and the run of each task
+```
+
+- Each task has an `id`, an optional `depends_on`, and exactly one kind: `pipeline` (the path of a dataset config,
+  relative to the workflow file) or `maintain` (a config's Iceberg table and the options of `ldp maintain`, a dry run unless
+  `apply` is true). Later milestones add kinds without changing the file format.
+- Tasks run one at a time, in dependency order. A pipeline task runs with the window of the workflow, so its idempotency key
+  is the one `ldp plan CONFIG --window` prints.
+- A task that fails, or that a quality check blocks, makes the tasks that depend on it `upstream_failed`, and they do not run.
+  The tasks that do not depend on it still run. The exit status is 1 when a task failed and 3 when the only problem is a
+  data gate.
+- Run the same window again after fixing the cause: the pipeline tasks that published are skipped by their keys, without
+  reading their sources, and only the tasks that failed or did not run do their work.
+- Every event of a run goes to `.ldp/events.jsonl` next to the workflow file, with the `workflow`, `workflow_run_id` and
+  `task_id` of the task in its payload. A dataset config that has a `metadata.schedule` runs as a workflow of one task.
+
+The [contract](docs/design/v0_1_1.md#workflow-files-013) has the full file format. `ldp schema --kind Workflow` prints its JSON
+Schema.
 
 ### A DuckDB file as a source
 

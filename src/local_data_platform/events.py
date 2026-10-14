@@ -7,7 +7,9 @@ Every :meth:`~local_data_platform.pipeline.Pipeline.run` emits events to an
         -> run.published | run.skipped_duplicate | run.blocked_quality | run.failed
         -> run.finished
 
-A run that fails before its checks jumps straight to ``run.failed``. The envelope is
+A run that fails before its checks jumps straight to ``run.failed``. A workflow run adds
+``workflow.started`` and ``workflow.finished`` around the runs of its tasks, and each of those runs carries the
+``workflow``, ``workflow_run_id`` and ``task_id`` of the workflow in its payload. The envelope is
 the one in ``docs/design/saas_architecture.md`` section 6.5, shared by the laptop and
 the cloud: consumers apply each event at most once per ``(run_id, attempt, seq)`` and
 ignore fields they don't know.
@@ -24,6 +26,7 @@ Sinks:
   Its :meth:`~IcebergSink.emit_audit` also takes the MCP server's audit records, for
   ``_ldp.audit``.
 * :class:`MultiSink` fans out to several sinks.
+* :class:`TaggedSink` adds fixed fields to the payload of every event it passes on.
 
 Payloads follow the boundary allowlist (SaaS section 10.2): specs, schemas, counts,
 snapshot ids and summaries, and check verdicts. They never carry rows, failing-row
@@ -63,12 +66,20 @@ EVENT_TYPES = (
     "run.blocked_quality",
     "run.failed",
     "run.finished",
+    "workflow.started",
+    "workflow.finished",
     "table.maintained",
 )
 """The event types LDP emits. Consumers must ignore types they don't know."""
 
-RUN_STATUSES = ("published", "skipped_duplicate", "blocked_quality", "failed")
-"""The ``status`` a ``run.finished`` event reports."""
+RUN_STATUSES = ("published", "skipped_duplicate", "blocked_quality", "failed", "succeeded", "upstream_failed")
+"""The ``status`` a ``run.finished`` event reports. A pipeline run is ``published``, ``skipped_duplicate``,
+``blocked_quality`` or ``failed``. A task of a workflow that is not a pipeline run is ``succeeded`` or ``failed``, and a
+task that did not run because one it depends on did not succeed is ``upstream_failed``."""
+
+WORKFLOW_STATUSES = ("succeeded", "blocked_quality", "failed")
+"""The ``status`` a ``workflow.finished`` event reports: every task succeeded, or the only problem was a data gate that
+held a pipeline back, or at least one task failed."""
 
 SYSTEM_NAMESPACE = "_ldp"
 """The namespace LDP's own tables live in, inside the customer's catalog."""
@@ -100,6 +111,7 @@ _OL_FACET_SCHEMAS = {
     "errorMessage": f"{_OL_FACETS}/1-0-1/ErrorMessageRunFacet.json#/$defs/ErrorMessageRunFacet",
     "nominalTime": f"{_OL_FACETS}/1-0-1/NominalTimeRunFacet.json#/$defs/NominalTimeRunFacet",
     "jobType": f"{_OL_FACETS}/2-0-4/JobTypeJobFacet.json#/$defs/JobTypeJobFacet",
+    "parent": f"{_OL_FACETS}/1-1-0/ParentRunFacet.json#/$defs/ParentRunFacet",
 }
 _OL_LINEAGE_PATH = "/api/v1/lineage"
 
@@ -586,6 +598,34 @@ class MultiSink:
         return f"MultiSink({self.sinks!r})"
 
 
+class TaggedSink:
+    """Adds fixed fields to the payload of every event it passes on to another sink.
+
+    A workflow wraps the sinks of each task with the ``workflow``, ``workflow_run_id`` and ``task_id`` of the task, so
+    every event of the task's run says which workflow run it belongs to, wherever the event ends up.
+
+    Args:
+        sink: The sink that receives the tagged events.
+        tags: The fields to add. They replace a field of the same name that the payload already has.
+    """
+
+    def __init__(self, sink: EventSink, tags: Mapping[str, Any]):
+        _check_sink(sink)
+        self.sink = sink
+        self.tags = dict(tags)
+
+    def emit(self, event: RunEvent) -> None:
+        """Pass the event on with the tags in its payload."""
+        self.sink.emit(dataclasses.replace(event, payload={**event.payload, **self.tags}))
+
+    def flush(self) -> None:
+        """Flush the sink behind this one."""
+        self.sink.flush()
+
+    def __repr__(self) -> str:
+        return f"TaggedSink({self.sink!r}, tags={self.tags!r})"
+
+
 def _check_sink(sink: Any) -> None:
     if not (callable(getattr(sink, "emit", None)) and callable(getattr(sink, "flush", None))):
         raise TypeError(f"an event sink needs emit(event) and flush() methods, got {type(sink).__name__}")
@@ -628,7 +668,8 @@ class OpenLineageSink:
       ``outputStatistics`` output facet (rows, bytes and files written) when published.
     * The run carries ``nominalTime`` for a logical window, ``errorMessage`` on
       failure, and an ``ldp_run`` facet with the attempt, status, idempotency key,
-      spec hash and snapshot id.
+      spec hash and snapshot id. A run that belongs to a workflow also carries a ``parent`` run facet that points at
+      the workflow run, with the workflow's run id and its name as the job.
 
     Args:
         path_or_url: A local file (one JSON event per line) or an ``http(s)://``
@@ -712,6 +753,13 @@ class OpenLineageSink:
         if isinstance(window, (list, tuple)) and len(window) == 2 and window[0]:
             run_facets["nominalTime"] = _ol_facet("nominalTime", producer, nominalStartTime=window[0],
                                                   **({"nominalEndTime": window[1]} if window[1] else {}))
+        parent = start.get("workflow_run_id")
+        if parent:
+            run_facets["parent"] = {
+                "_producer": producer, "_schemaURL": _OL_FACET_SCHEMAS["parent"],
+                "run": {"runId": _ol_run_id(str(parent))},
+                "job": {"namespace": self.namespace, "name": str(start.get("workflow") or "workflow")},
+            }
         failed = state.get("run.failed")
         if failed is not None and event_type == "FAIL":
             message = f"{failed.payload.get('error_type', 'Error')}: {failed.payload.get('message', '')}"
@@ -1170,7 +1218,10 @@ def summarize_runs(events: Iterable[RunEvent]) -> list[dict[str, Any]]:
         Dicts with ``run_id``, ``attempt``, ``pipeline``, ``table``, ``started_at``,
         ``status`` (``running`` until a terminal event is seen), ``rows_read``,
         ``rows_written``, ``snapshot_id``, ``idempotency_key``, ``duration_s`` and
-        ``checks`` (``"passed/run"``).
+        ``checks`` (``"passed/run"``). A run that belongs to a workflow also has the ``workflow``, its ``task_id`` and
+        the ``workflow_run_id``, and the run of a workflow itself, which has ``workflow.started`` and
+        ``workflow.finished`` events, has ``is_workflow`` true, the workflow's name as its ``pipeline`` and the
+        status of the workflow.
     """
     runs: dict[tuple[str, int], dict[str, Any]] = {}
     for event in sorted(events, key=lambda item: (item.run_id, item.attempt, item.seq)):
@@ -1178,12 +1229,15 @@ def summarize_runs(events: Iterable[RunEvent]) -> list[dict[str, Any]]:
             "run_id": event.run_id, "attempt": event.attempt, "pipeline": None, "table": None,
             "started_at": event.ts, "status": "running", "rows_read": None, "rows_written": None,
             "snapshot_id": None, "idempotency_key": None, "duration_s": None, "checks": None,
+            "workflow": None, "task_id": None, "workflow_run_id": None, "is_workflow": False,
         })
         payload = event.payload
         run["pipeline"] = run["pipeline"] or payload.get("pipeline")
         run["table"] = run["table"] or payload.get("table")
         run["started_at"] = min(run["started_at"], event.ts)
         run["idempotency_key"] = run["idempotency_key"] or payload.get("idempotency_key")
+        for name in ("workflow", "task_id", "workflow_run_id"):
+            run[name] = run[name] or payload.get(name)
         if event.type == "run.extracted":
             run["rows_read"] = payload.get("rows_read")
         elif event.type == "quality.evaluated":
@@ -1193,6 +1247,11 @@ def summarize_runs(events: Iterable[RunEvent]) -> list[dict[str, Any]]:
             run["snapshot_id"] = payload.get("snapshot_id", run["snapshot_id"])
             if "rows_written" in payload:
                 run["rows_written"] = payload["rows_written"]
+        elif event.type in ("workflow.started", "workflow.finished"):
+            run["is_workflow"] = True
+            if event.type == "workflow.finished":
+                run["status"] = payload.get("status") or run["status"]
+                run["duration_s"] = payload.get("duration_s")
         elif event.type == "run.finished":
             run["status"] = payload.get("status") or run["status"]
             run["duration_s"] = payload.get("duration_s")
@@ -1473,14 +1532,20 @@ def _cmd_runs(args: Any) -> int:
         print(format_table(rows[-args.limit:] if args.run is None else rows), file=sys.stdout)
         return 0
     rows = []
-    for run in summarize_runs(events)[: args.limit]:
-        rows.append({
-            "run_id": run["run_id"], "attempt": run["attempt"], "pipeline": run["pipeline"],
+    shown = summarize_runs(events)[: args.limit]
+    in_workflows = any(run["workflow"] for run in shown)
+    for run in shown:
+        row = {"run_id": run["run_id"], "attempt": run["attempt"], "pipeline": run["pipeline"]}
+        if in_workflows:  # a ledger that holds workflow runs says which workflow and task each run is
+            row["workflow"] = run["workflow"]
+            row["task"] = "(workflow)" if run["is_workflow"] else run["task_id"]
+        row.update({
             "started_utc": run["started_at"].replace(tzinfo=None).isoformat(sep=" ", timespec="seconds"),
             "status": run["status"], "rows_read": run["rows_read"], "rows_written": run["rows_written"],
             "checks": run["checks"], "snapshot_id": run["snapshot_id"],
             "idempotency_key": _short(run["idempotency_key"]), "duration_s": run["duration_s"],
         })
+        rows.append(row)
     print(f"Runs recorded in {where}, newest first:", file=sys.stdout)
     print(format_table(rows), file=sys.stdout)
     return 0
@@ -1489,6 +1554,8 @@ def _cmd_runs(args: Any) -> int:
 def _event_detail(event: RunEvent) -> str:
     payload = event.payload
     if event.type == "run.started":
+        if payload.get("task_kind") and "mode" not in payload:  # a task of a workflow that is no pipeline
+            return f"task_kind={payload['task_kind']}"
         return f"mode={payload.get('mode')} publish={payload.get('publish')}"
     if event.type == "run.extracted":
         return f"rows_read={payload.get('rows_read')}"
@@ -1501,6 +1568,10 @@ def _event_detail(event: RunEvent) -> str:
     if event.type == "run.failed":
         return f"{payload.get('stage')}: {payload.get('error_type')}: {_short(payload.get('message'), 80)}"
     if event.type == "run.finished":
+        return f"status={payload.get('status')} duration_s={payload.get('duration_s')}"
+    if event.type == "workflow.started":
+        return f"window={payload.get('window')} tasks={len(payload.get('tasks') or [])}"
+    if event.type == "workflow.finished":
         return f"status={payload.get('status')} duration_s={payload.get('duration_s')}"
     return ""
 
@@ -1557,6 +1628,8 @@ __all__ = [
     "SCHEMA_VERSION",
     "SINK_TYPES",
     "SYSTEM_NAMESPACE",
+    "TaggedSink",
+    "WORKFLOW_STATUSES",
     "add_cli",
     "build_sink",
     "dataset_ref",
