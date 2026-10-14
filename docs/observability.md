@@ -89,6 +89,13 @@ failed twice and then got through shows `run.started`, `run.failed` and `run.fin
 a successful run for attempt 3. The `run.finished` of an attempt says how that attempt ended. `ldp runs` lists the last
 attempt of each run, and `--attempts` lists every attempt.
 
+A run can also be carried on by a later process. `ldp schedule tick` runs a window that failed on the tick before as the next
+attempt of the same run, so the `workflow.started` and `workflow.finished` of the window repeat with the same `run_id` and an
+`attempt` that goes up by one, and each task goes on under its own `run_id` with the attempts after its last one. A window
+that failed on tick one with a task that made attempts 1 to 3 shows attempt 1 of the workflow and attempts 1 to 3 of the task,
+then attempt 2 of the workflow and attempt 4 of the task on tick two. The `workflow.started` of attempt 2 has the same
+`window` as the first. `ldp backfill` does not carry a run on, and starts a run of its own for a window it runs again.
+
 A `dbt` task is one of those tasks, so its `run.started` and `run.finished` come from the runner, and the `run.finished`
 carries what the task did. Each model that the task published is a run of its own, with the `workflow`, `workflow_run_id`
 and `task_id` of the task, so `ldp runs` lists it under the task and OpenLineage links it to the workflow run as its parent.

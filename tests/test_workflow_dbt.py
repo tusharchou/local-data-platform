@@ -419,10 +419,10 @@ def test_the_fingerprint_notices_a_file_that_cannot_be_read(tmp_path):
 
 
 def _line(status="succeeded", *, workflow="w", task="gold", window=("a", "b"), run="r1", kind="dbt",
-          fingerprint="f", type_="run.finished") -> str:
+          fingerprint="f", type_="run.finished", attempt=1) -> str:
     payload = {"workflow": workflow, "task_id": task, "window": list(window), "workflow_run_id": run,
                "task_kind": kind, "status": status, "fingerprint": fingerprint}
-    return json.dumps({"type": type_, "payload": payload})
+    return json.dumps({"type": type_, "attempt": attempt, "payload": payload})
 
 
 def _ledger_file(tmp_path, *lines: str) -> Path:
@@ -441,6 +441,34 @@ def test_last_build_is_the_last_matching_build_of_the_window(tmp_path):
     assert found["workflow_run_id"] == "r3" and found["status"] == "blocked_quality"
     earlier = last_build(ledger, "w", "gold", ["a", "b"], "r3")
     assert earlier["workflow_run_id"] == "r2", "the run that is asking is not an earlier one"
+
+
+def test_an_earlier_attempt_of_the_asking_run_is_an_earlier_build_and_the_attempt_that_asks_is_not(tmp_path):
+    ledger = _ledger_file(tmp_path, _line("succeeded", run="r1", attempt=1), _line("failed", run="r1", attempt=2))
+
+    assert last_build(ledger, "w", "gold", ["a", "b"], "r1") is None, "by default, the whole run is left out"
+    assert last_build(ledger, "w", "gold", ["a", "b"], "r1", 2)["status"] == "succeeded", "attempt 1 is earlier than 2"
+    assert last_build(ledger, "w", "gold", ["a", "b"], "r1", 3)["status"] == "failed", "and attempt 2 is earlier than 3"
+    assert last_build(ledger, "w", "gold", ["a", "b"], "r2", 1)["status"] == "failed", "another run is always earlier"
+
+
+def test_the_builds_of_other_runs_count_next_to_the_earlier_attempts_of_the_asking_run(tmp_path):
+    ledger = _ledger_file(tmp_path, _line("succeeded", run="r1", attempt=1), _line("failed", run="r2", attempt=3),
+                          _line("blocked_quality", run="r2", attempt=4))
+
+    assert last_build(ledger, "w", "gold", ["a", "b"], "r2", 3)["workflow_run_id"] == "r1"
+    assert last_build(ledger, "w", "gold", ["a", "b"], "r2", 4)["status"] == "failed"
+    assert last_build(ledger, "w", "gold", ["a", "b"], "r2", 5)["status"] == "blocked_quality"
+
+
+@pytest.mark.parametrize("attempt", [None, "two", 0, True])
+def test_a_build_with_no_usable_attempt_reads_as_the_first(tmp_path, attempt):
+    line = json.loads(_line("succeeded", run="r2"))
+    line["attempt"] = attempt
+    ledger = _ledger_file(tmp_path, json.dumps(line))
+
+    assert last_build(ledger, "w", "gold", ["a", "b"], "r2", 1) is None, "the first attempt is not an earlier one"
+    assert last_build(ledger, "w", "gold", ["a", "b"], "r2", 2)["workflow_run_id"] == "r2"
 
 
 @pytest.mark.parametrize("line", [

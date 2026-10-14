@@ -222,6 +222,9 @@ call:
 | `ldp workflow plan FILE [--window W] [--json]` | Check a workflow file, or a dataset config with a schedule, and every config it names, and print its tasks in the order they run with each pipeline task's idempotency key for the window | `orchestration.plan_workflow(path, window=...)` |
 | `ldp backfill FILE --from START [--to END] [--dry-run] [--replace] [--run-backwards] [--max-windows N] [--stop-on-failure] [--json]` | Run a workflow, or a config with a window, for every window of a range, oldest first, each pipeline under the key of its window. A window that is done is skipped without being read, so running it again resumes where it stopped; `--dry-run` lists the windows with their keys and states, and `--replace` writes them again under a replace key; exit status 0, 1, or 3 for a data gate | `orchestration.backfill(path, start, end, ...)` |
 | `ldp workflow run FILE --window W [--json]` | Run the tasks of a workflow one at a time for a window. A failed or blocked task stops the tasks that depend on it and the rest still run, and a second run skips what published or was built; exit status 0, 1, or 3 for a data gate | `orchestration.run_workflow(path, window=...)` |
+| `ldp schedule tick DIR [--now TIME] [--max-windows N] [--json]` | Run every window that is due and not done, for every workflow and config under DIR that has a schedule, then exit. cron or launchd calls it every 5 minutes. A window that failed is carried on by the next tick as the same run with the next attempt, and a tick that starts while another runs does nothing; exit status 0, 1, or 3 for a data gate | `orchestration.schedule.tick(dir, now=...)` |
+| `ldp schedule list DIR [--now TIME] [--max-windows N] [--json]` | List every scheduled workflow and config under DIR with its cron expression, time zone, next fire in UTC and in local time, last window and how it ended, the windows that are due, and the windows it missed with the `ldp backfill` command that fills them | `orchestration.schedule.list_scheduled(dir)` |
+| `ldp schedule install --print {cron,launchd} DIR [--ldp PATH]` | Print the crontab line or the launchd plist that ticks DIR every 5 minutes. It never writes to a system location | `orchestration.recipes.recipe(kind, dir)` |
 | `ldp plan CONFIG [--window WINDOW] [--json]` | Validate a config (or a folder of files, each as its kind) and print its spec hash, route, target, sinks, schedule, and the source path and idempotency key of a window | `spec.validate_spec(data)`, `spec.plan(config, window=...)` |
 | `ldp runs CONFIG [--run RUN_ID] [--events] [--attempts]` | List the runs a config's sinks recorded, the last attempt of a run that was retried, or every attempt with `--attempts` | `events.summarize_runs(events.read_jsonl(path))` or `read_iceberg_events(catalog)` |
 | `ldp commits CONFIG [--key KEY] [--branches]` | List the staged publishes on a table, newest first | `format.iceberg.commit.commit_log(iceberg.table())` and `staged_branches(...)` |
@@ -392,6 +395,42 @@ ldp backfill daily_orders.json --from 2026-08-02 --to 2026-08-03 --replace   # r
 - From Python, `from local_data_platform.orchestration import backfill` runs the same, and `backfill(path, start, end,
   dry_run=True)` returns the windows with their keys and states. The [contract](docs/design/v0_1_1.md#backfills-013) has the
   rest.
+
+### Run on a schedule
+
+`ldp schedule tick` is a scheduler with no server and no daemon. cron or launchd calls it every 5 minutes, it runs every
+window that is due and not done, and it exits, so a laptop that was asleep catches up at the first tick after it wakes:
+
+```bash
+ldp schedule list ldp_demo/restaurant                                    # what is scheduled, when it fires, what it missed
+ldp schedule tick ldp_demo/restaurant --now 2026-08-05T02:05:00Z         # run what is due at that time, then exit
+ldp schedule install --print launchd ldp_demo/restaurant > ~/Library/LaunchAgents/restaurant.plist   # macOS
+(crontab -l 2>/dev/null; ldp schedule install --print cron ldp_demo/restaurant) | crontab -         # Linux
+```
+
+- A tick looks at every `.json` file under the folder that is a workflow file, or a dataset config, and has a schedule in
+  `metadata.schedule` or in a `when` such as `daily`. A config with a schedule is a workflow of one task. A file that has a
+  schedule and is not valid is printed with its problems and makes the tick exit with 1, and the other files still run.
+- The schedule is a cron expression read in `metadata.window.timezone`, UTC without one. The window a fire owns is the
+  interval between the previous fire and this fire. When the workflow has a window size, in `metadata.window.size` or implied
+  by `@daily` and `@hourly`, it is the last complete window of that size at or before the fire, so the fire of `5 2 * * *` on
+  5 August owns 4 August. A fixed time that a clock change skips fires right after the gap, and one that happens twice fires
+  once.
+- Without `catchup`, a tick runs the window of the latest fire if it is not done, and `ldp schedule list` prints the
+  `ldp backfill` command for any windows before it that were missed. With `"catchup": true` and a `"start"` in the metadata of
+  the workflow, a tick runs every window since `start` that is not done, oldest first, up to `--max-windows` (1000) a tick.
+- A window that failed, was blocked by a data gate, or never finished is run again by the next tick, as the next attempt of
+  the same run. The workflow and each task keep their run ids and the attempts go up by one, so the first commit of the new
+  attempt fences every older one and the window is loaded once however many ticks it takes. `retries` are the retries within
+  one tick.
+- A tick takes the lock `DIR/.ldp/locks/schedule.lock` without waiting for it. A tick that starts while another runs does
+  nothing and exits with 0, and a crash leaves no lock. The exit status is 0 when nothing failed or was blocked, 3 when a data
+  gate is the only problem, and 1 otherwise.
+- The cron line and the plist call `ldp` by its absolute path and write a log, `DIR/.ldp/schedule.log` or a file in
+  `~/Library/Logs`. cron does not run while a Mac sleeps, and launchd runs an interval that passed during sleep once when the
+  Mac wakes, so launchd is the recipe for macOS and cron the recipe for Linux.
+- From Python, `from local_data_platform.orchestration.schedule import tick, list_scheduled` does the same. The
+  [contract](docs/design/v0_1_1.md#schedules-013) has the rest.
 
 ### A DuckDB file as a source
 

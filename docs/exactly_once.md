@@ -229,6 +229,18 @@ window with a plain run first and replace it afterwards.
 It needs `metadata.window.column` in every pipeline that writes to Iceberg, because without it an overwrite would replace the
 whole table with the rows of one window. A backfill without it exits with 1 before it runs anything.
 
+### Scheduled runs
+
+`ldp schedule tick DIR` runs the windows that are due, and a window that failed on one tick is run again by the next, so the
+retry crosses processes, which the retries inside a run do not. It leans on the fence. The next tick carries on the run the
+last one started. The run id of the workflow and of each task is the one in the ledger, and the attempt is one more than the
+highest the ledger holds, so the first commit of the new attempt fences every older attempt of the run, with the markers that
+attempts 1 to N - 1 would have left. An attempt that a crashed tick left half done, or one that is still alive somewhere,
+cannot publish after that, and a load that reached the table before the error came back is found by its key and skipped. So a
+window is written once however many ticks it takes. A window that no run has started, and one whose last run succeeded, starts
+a run of its own. `ldp schedule tick` takes a lock on the folder, so two ticks of one folder never run at once, and the fence
+covers the rest.
+
 ### Long backfills and late re-runs
 
 A staged run looks for its idempotency key twice, and the two searches answer different questions.

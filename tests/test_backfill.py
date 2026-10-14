@@ -30,12 +30,8 @@ from local_data_platform.orchestration import (
     windows,
 )
 from local_data_platform.orchestration import backfills as backfill_module
-from local_data_platform.orchestration.backfills import (
-    DEFAULT_MAX_WINDOWS,
-    _ledger_status,
-    _outcome_of,
-    _read_ledger,
-)
+from local_data_platform.orchestration.backfills import DEFAULT_MAX_WINDOWS, _outcome_of, _read_ledger
+from local_data_platform.orchestration.ledger import run_status
 from local_data_platform.orchestration.runner import TaskResult, WorkflowResult
 from local_data_platform.pipeline import Pipeline
 from local_data_platform.spec import (
@@ -1497,7 +1493,7 @@ def test_a_workflow_with_no_ledger_has_no_runs(tmp_path):
     ({}, "incomplete"),
 ])
 def test_what_the_last_run_of_a_window_says(tasks, expected):
-    assert _ledger_status(tasks, ["a", "b"]) == expected
+    assert run_status(tasks, ["a", "b"]) == expected
 
 
 @pytest.mark.parametrize("tasks, expected", [

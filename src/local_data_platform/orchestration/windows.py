@@ -31,8 +31,9 @@ The window shortcuts ``yesterday``, ``last-week`` (the last full Monday-to-Monda
 a window that depends on today's date, and :func:`shortcut_window` computes them.
 
 A range of windows, such as the days of a backfill, is the windows of one size laid end to end between two instants that
-each start a window. :func:`iter_windows` lists them, :func:`is_aligned` says whether an instant starts one, and
-:func:`window_size_of` says how long the windows of a config or a workflow are.
+each start a window. :func:`iter_windows` lists them, :func:`is_aligned` says whether an instant starts one,
+:func:`window_ending_at` gives the window before a boundary, and :func:`window_size_of` says how long the windows of a
+config or a workflow are.
 
 This module needs only the standard library when it is imported, so the spec and the config can use it. PyArrow and
 pyiceberg are imported inside the functions that need them.
@@ -210,6 +211,20 @@ def floor_boundary(moment: dt.datetime, size: str, timezone: Any = None) -> dt.d
         return _midnight(local.date(), tz).astimezone(_UTC)
     return local.replace(minute=local.minute - local.minute % STEP_MINUTES[size], second=0,
                          microsecond=0).astimezone(_UTC)
+
+
+def window_ending_at(end: dt.datetime, size: str, timezone: Any = None) -> tuple[dt.datetime, dt.datetime]:
+    """The window of ``size`` that ends at ``end``, as ``(start, end)`` in aware UTC. ``end`` should start a window.
+
+    A day starts at the local midnight before ``end``, so across a clock change it is 23 or 25 hours long. An hour and a
+    quarter of an hour are as long as they say.
+    """
+    tz = get_timezone(timezone)
+    end = end.astimezone(_UTC)
+    if size == "day":
+        local = end.astimezone(tz)
+        return _midnight(local.date() - dt.timedelta(days=1), tz).astimezone(_UTC), end
+    return end - dt.timedelta(minutes=STEP_MINUTES[size]), end
 
 
 def iter_windows(start: dt.datetime, end: dt.datetime, size: str,
@@ -625,6 +640,7 @@ __all__ = [
     "shortcut_window",
     "source_path",
     "timezone_of",
+    "window_ending_at",
     "window_problems",
     "window_size_of",
 ]

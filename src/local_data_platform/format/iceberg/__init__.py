@@ -51,6 +51,7 @@ from pyiceberg.transforms import (
 from local_data_platform.catalog import provider as catalog_provider
 from local_data_platform.catalog.local.iceberg import LocalIcebergCatalog
 from local_data_platform.exceptions import ConfigError, TableNotFound
+from local_data_platform.filelock import file_lock
 from local_data_platform.format import Format
 from local_data_platform.format.iceberg.commit import (
     CommitConflict,
@@ -225,35 +226,6 @@ def _is_local_spec(spec: dict[str, Any]) -> bool:
         return True
     # The original local catalog also accepted "sql" / "sqlite" on a local block; the provider keeps that alias.
     return kind in ("sql", "sqlite") and not spec.get("uri") and bool(spec.get("warehouse_path"))
-
-
-def _lock_file(handle) -> None:
-    """Block until this process holds an exclusive lock on the open file ``handle``."""
-    if os.name == "nt":  # pragma: no cover - exercised on Windows only
-        import msvcrt
-
-        handle.seek(0)
-        while True:
-            try:
-                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-                return
-            except OSError:  # LK_LOCK gives up after about 10 seconds; keep waiting
-                continue
-    import fcntl
-
-    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-
-
-def _unlock_file(handle) -> None:
-    if os.name == "nt":  # pragma: no cover - exercised on Windows only
-        import msvcrt
-
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        return
-    import fcntl
-
-    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 class Iceberg(Format):
@@ -637,13 +609,8 @@ class Iceberg(Format):
         if path is None:
             yield None
             return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a+b") as handle:
-            _lock_file(handle)
-            try:
-                yield path
-            finally:
-                _unlock_file(handle)
+        with file_lock(path):
+            yield path
 
     def lock_path(self) -> Path | None:
         """The lock file of a ``local`` catalog's table, or ``None`` for other catalogs."""

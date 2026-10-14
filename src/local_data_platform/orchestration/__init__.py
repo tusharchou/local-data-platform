@@ -13,6 +13,11 @@
 * :mod:`~local_data_platform.orchestration.runner`: the runner, :func:`run_workflow`.
 * :mod:`~local_data_platform.orchestration.backfills`: :func:`backfill`, which runs a workflow for every window of a
   range and resumes where it stopped.
+* :mod:`~local_data_platform.orchestration.ledger`: what the events of a workflow say about each window, and the ids
+  that carry on a run that did not succeed.
+* :mod:`~local_data_platform.orchestration.schedule`: :func:`tick`, which runs the windows that are due, and
+  :func:`list_scheduled`, which shows what is scheduled and what was missed.
+* :mod:`~local_data_platform.orchestration.recipes`: the crontab line and the launchd plist that call the tick.
 
 The names below are loaded when they are first used, so importing this package, which ``local_data_platform.spec`` does
 for the windows, does not import pyiceberg::
@@ -28,9 +33,13 @@ from typing import Any
 _LAZY = {
     "BackfillResult": "backfills",
     "BackfillWindow": "backfills",
+    "Continuation": "ledger",
     "RetryPolicy": "retries",
+    "TickResult": "schedule",
     "backfill": "backfills",
     "is_retriable": "retries",
+    "list_scheduled": "schedule",
+    "tick": "schedule",
     "run_workflow": "runner",
     "TaskResult": "runner",
     "WorkflowResult": "runner",

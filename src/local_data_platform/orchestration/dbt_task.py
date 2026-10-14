@@ -277,9 +277,13 @@ def plan(task: Task, ctx: PlanContext) -> TaskPlan:
 # ---------------------------------------------------------------------- the ledger
 
 
-def last_build(ledger: Path, workflow: str, task_id: str, window: list[str],
-               current_run: str) -> Mapping[str, Any] | None:
+def last_build(ledger: Path, workflow: str, task_id: str, window: list[str], current_run: str,
+               attempt: int = 1) -> Mapping[str, Any] | None:
     """The payload of the last ``run.finished`` of a dbt task for a window, from another run, or ``None``.
+
+    A build of the current run does not count, unless it was an earlier attempt of the task: a run that a later tick
+    carries on goes on with the attempts after the last one, so ``attempt`` is the one that is asking and a build of
+    this run with a lower attempt is an earlier build. The default, 1, leaves out the whole run.
 
     Only a build that ended with ``succeeded``, ``failed`` or ``blocked_quality`` counts, so a skip and an
     ``upstream_failed`` do not hide what the last real build did. A line that is not valid JSON, such as one cut short
@@ -301,15 +305,21 @@ def last_build(ledger: Path, workflow: str, task_id: str, window: list[str],
                 continue
             if (event.get("type") == "run.finished" and isinstance(payload, Mapping)
                     and payload.get("workflow") == workflow and payload.get("task_id") == task_id
-                    and payload.get("task_kind") == "dbt" and payload.get("workflow_run_id") != current_run
+                    and payload.get("task_kind") == "dbt"
+                    and (payload.get("workflow_run_id") != current_run or _attempt_of(event) < attempt)
                     and payload.get("window") == window and payload.get("status") in _LEDGER_STATUSES):
                 last = payload
     return last
 
 
+def _attempt_of(event: Mapping[str, Any]) -> int:
+    attempt = event.get("attempt")
+    return attempt if isinstance(attempt, int) and attempt >= 1 else 1
+
+
 def _built_before(ctx: RunContext, task: Task, window: list[str], fingerprint: str) -> str | None:
     """The id of the workflow run whose build this run would repeat, or ``None`` when the task has to run."""
-    earlier = last_build(ctx.workflow.ledger_path, ctx.workflow.identifier, task.id, window, ctx.run_id)
+    earlier = last_build(ctx.workflow.ledger_path, ctx.workflow.identifier, task.id, window, ctx.run_id, ctx.attempt)
     if earlier is None or earlier.get("status") != "succeeded" or earlier.get("fingerprint") != fingerprint:
         return None
     if ctx.wrote_data():
