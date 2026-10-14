@@ -59,7 +59,7 @@ depends on the type:
 | `run.blocked_quality` | `checks_failed`, `failures` (check names), `on_failure` |
 | `run.failed` | `stage` (`search`, `extract`, `transform`, `validate`, `write`), `error_type`, `message` |
 | `run.finished` | `status`, `duration_s`, `rows_read`, `rows_written`, `published_snapshot_id`, `idempotency_key`, `quality_passed`. A task of a workflow that did not run a pipeline has `succeeded`, `failed` or `upstream_failed` as its `status`, and `upstream_failed` adds `blocked_by`, the ids of the tasks that did not succeed |
-| `workflow.started` | `workflow` and `pipeline` (the workflow's identifier), `workflow_run_id`, `window` (start and end), `schedule`, `tasks` (the `id`, `kind` and `depends_on` of each, in the order they run), `ldp_version` |
+| `workflow.started` | `workflow` and `pipeline` (the workflow's identifier), `workflow_run_id`, `window` (start and end), `schedule`, `tasks` (the `id`, `kind` and `depends_on` of each, in the order they run, and `max_attempts` for a task that is retried), `ldp_version` |
 | `workflow.finished` | `status` (`succeeded`, `blocked_quality` when a data gate is the only problem, or `failed`), `duration_s`, `counts` (tasks per status), `tasks` (the status of each task) |
 
 ### Workflow runs
@@ -80,6 +80,12 @@ A run writes all of its events, `workflow.started`, the events of every task and
 is not a pipeline, and a task that did not run because one it depends on did not succeed, get a `run.started` and a
 `run.finished` from the runner. `ldp runs .ldp/events.jsonl` lists the workflow run and each task's run, with a `workflow`
 and a `task` column.
+
+A task that is retried is one run with several attempts. A task with `retries` that fails with an error that another
+attempt may fix runs again with the same `run_id` and the next `attempt`, and each attempt emits its own events, so a task that
+failed twice and then got through shows `run.started`, `run.failed` and `run.finished` for attempts 1 and 2, and the events of
+a successful run for attempt 3. The `run.finished` of an attempt says how that attempt ended. `ldp runs` lists the last
+attempt of each run, and `--attempts` lists every attempt.
 
 A `dbt` task is one of those tasks, so its `run.started` and `run.finished` come from the runner, and the `run.finished`
 carries what the task did. Each model that the task published is a run of its own, with the `workflow`, `workflow_run_id`

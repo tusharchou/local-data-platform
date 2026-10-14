@@ -18,9 +18,10 @@ A workflow file is a spec of the kind ``Workflow``::
 ``metadata`` may have ``schedule`` (a cron expression, or ``@hourly``, ``@daily``, ``@weekly`` or ``@monthly``),
 ``window`` (``"none"``, or the ``size`` of a window and the ``timezone`` its days are counted in), ``catchup`` (whether
 the scheduler runs the windows it missed, which a later item reads), ``start`` (the first window), ``retries``
-(``max_attempts``, ``delay_s`` and ``backoff``) and ``observability`` (sinks for the events of the whole workflow
-run). Each task has a unique ``id``, an optional ``depends_on`` that lists the ids it waits for, and exactly one task
-kind, which is the key that holds what it does. The kinds come from the registry of
+(``max_attempts``, ``delay_s`` and ``backoff``, which :mod:`local_data_platform.orchestration.retries` describes) and
+``observability`` (sinks for the events of the whole workflow run). Each task has a unique ``id``, an optional
+``depends_on`` that lists the ids it waits for, an optional ``retries`` of its own, and exactly one task kind, which is
+the key that holds what it does. The kinds come from the registry of
 :mod:`local_data_platform.orchestration.tasks`. Paths are relative to the workflow file.
 
 A dataset config that has a schedule, in ``metadata.schedule`` or in a ``when`` such as ``daily``, is a workflow of one
@@ -40,8 +41,8 @@ from pathlib import Path
 from typing import Any
 
 from local_data_platform.exceptions import ConfigError
+from local_data_platform.orchestration import retries, windows
 from local_data_platform.orchestration import tasks as task_registry
-from local_data_platform.orchestration import windows
 from local_data_platform.orchestration.tasks import TASK_KEYS, PlanContext, Task, TaskPlan
 from local_data_platform.paths import resolve_path
 from local_data_platform.spec import (
@@ -57,7 +58,7 @@ from local_data_platform.spec import (
 METADATA_KEYS = ("schedule", "window", "catchup", "start", "retries", "observability")
 """The keys of the ``metadata`` of a workflow."""
 
-RETRY_KEYS = ("max_attempts", "delay_s", "backoff")
+RETRY_KEYS = retries.RETRY_KEYS
 """The keys of a ``retries`` object."""
 
 LEDGER_PATH = Path(".ldp") / "events.jsonl"
@@ -153,28 +154,20 @@ class Workflow:
                 pending.extend(graph[current])
         return found
 
-    def retries_of(self, task: Task) -> Mapping[str, Any] | None:
-        """The ``retries`` that apply to a task: its own, else the workflow's, else ``None``."""
-        return task.retries if task.retries is not None else self.metadata.get("retries")
+    def retries_of(self, task: Task) -> retries.RetryPolicy:
+        """How a task is retried: the ``retries`` of the workflow, with each key that the task sets replaced.
+
+        A workflow and a task that set nothing give one attempt, which is no retry.
+        """
+        return retries.RetryPolicy.from_settings(self.metadata.get("retries"), task.retries)
 
 
 # ---------------------------------------------------------------------- validation
 
 
 def _retries_problems(value: Any, where: str, problems: _Problems) -> None:
-    if not isinstance(value, Mapping):
-        problems.add(where, f"must be an object such as {{'max_attempts': 3, 'delay_s': 30}}, got {value!r}")
-        return
-    unknown = sorted(set(map(str, value)) - set(RETRY_KEYS))
-    if unknown:
-        problems.add(where, f"has unknown keys {unknown}; allowed: {list(RETRY_KEYS)}")
-    attempts = value.get("max_attempts")
-    if "max_attempts" in value and not (isinstance(attempts, int) and not isinstance(attempts, bool) and attempts >= 1):
-        problems.add(f"{where}.max_attempts", f"must be a whole number from 1, got {attempts!r}")
-    for key, least in (("delay_s", 0), ("backoff", 1)):
-        item = value.get(key)
-        if key in value and not (isinstance(item, (int, float)) and not isinstance(item, bool) and item >= least):
-            problems.add(f"{where}.{key}", f"must be a number from {least}, got {item!r}")
+    for path, message in retries.retries_problems(value):
+        problems.add(f"{where}{path}", message)
 
 
 def _start_problem(value: Any) -> str | None:
@@ -372,12 +365,7 @@ def workflow_schema() -> dict[str, Any]:
                       "description": "The tasks, each with a unique id and exactly one task kind."},
         },
         "$defs": {
-            "retries": {
-                "type": "object", "additionalProperties": False,
-                "properties": {"max_attempts": {"type": "integer", "minimum": 1},
-                               "delay_s": {"type": "number", "minimum": 0},
-                               "backoff": {"type": "number", "minimum": 1}},
-            },
+            "retries": retries.retries_schema(),
             "task": {"type": "object", "required": ["id"], "additionalProperties": False,
                      "properties": task_properties, "oneOf": [{"required": [name]} for name in kinds]},
             "observability": defs["observability"],
@@ -437,6 +425,8 @@ def _workflow_of_config(data: Mapping[str, Any], path: Path) -> Workflow:
     metadata: dict[str, Any] = {"schedule": schedule.expression}
     if config.window is not None:
         metadata["window"] = {"size": config.window.size, "timezone": config.window.timezone}
+    if config.metadata.get("retries") is not None:
+        metadata["retries"] = config.metadata["retries"]
     spec = {"apiVersion": API_VERSION, "kind": "Workflow", "identifier": config.identifier, "metadata": metadata,
             "tasks": [{"id": config.identifier, "pipeline": path.name}]}
     return Workflow(identifier=config.identifier, spec=spec,
@@ -488,15 +478,6 @@ def load_workflow(path: str | Path) -> Workflow:
 # ---------------------------------------------------------------------- plan
 
 
-def retries_note(workflow: Workflow) -> str | None:
-    """A note when retries are set, because a task still runs once. A later item of the milestone applies them."""
-    settings = [workflow.metadata.get("retries")] + [item.retries for item in workflow.tasks]
-    if any(isinstance(item, Mapping) and int(item.get("max_attempts", 1)) > 1 for item in settings):
-        return ("retries is read and checked, but every task still runs once; the retry of a failed task arrives "
-                "with a later item of 0.1.3")
-    return None
-
-
 def _connection_warnings(workflow: Workflow, plans: Mapping[str, TaskPlan]) -> list[str]:
     """Warn for each table that a task reads and another writes with no ``depends_on`` between them."""
     found = []
@@ -527,8 +508,9 @@ def plan_workflow(source: "str | Path | Workflow", *, window: Any = None) -> dic
         ``{"workflow", "file", "kind", "valid", "errors", "warnings", "schedule", "schedule_from", "timezone",
         "window", "tasks"}``. ``tasks`` lists the tasks in the order they run, each with its ``order``, ``id``,
         ``kind``, ``depends_on``, ``valid``, ``errors`` and the details its kind reports, such as ``config``,
-        ``target`` and ``idempotency_key``. ``errors`` lists every problem, and ``warnings`` lists what is worth
-        knowing, such as a table that a task reads and another writes with nothing that orders them.
+        ``target`` and ``idempotency_key``, and its ``retries`` when it is tried again after a failure. ``errors``
+        lists every problem, and ``warnings`` lists what is worth knowing, such as a table that a task reads and
+        another writes with nothing that orders them.
     """
     result: dict[str, Any] = {"workflow": None, "file": None, "kind": "Workflow", "valid": False, "errors": [],
                               "warnings": [], "schedule": None, "schedule_from": None, "timezone": None,
@@ -564,13 +546,14 @@ def plan_workflow(source: "str | Path | Workflow", *, window: Any = None) -> dic
         except Exception as exc:  # noqa: BLE001 - a kind that cannot plan its task makes the task invalid
             plan = TaskPlan(errors=[f"could not be planned: {type(exc).__name__}: {exc}"])
         plans[task.id] = plan
-        result["tasks"].append({"order": number, "id": task.id, "kind": task.kind, "depends_on": list(task.depends_on),
-                                "valid": not plan.errors, "errors": list(plan.errors), **plan.details})
+        entry = {"order": number, "id": task.id, "kind": task.kind, "depends_on": list(task.depends_on),
+                 "valid": not plan.errors, "errors": list(plan.errors), **plan.details}
+        if (policy := workflow.retries_of(task)).enabled:
+            entry["retries"] = policy.to_dict()
+        result["tasks"].append(entry)
         errors.extend(f"task {task.id!r}: {message}" for message in plan.errors)
         result["warnings"].extend(f"task {task.id!r}: {message}" for message in plan.notes)
     result["warnings"].extend(_connection_warnings(workflow, plans))
-    if (note := retries_note(workflow)) is not None:
-        result["warnings"].append(note)
     result["errors"] = errors
     result["valid"] = not errors
     return result
@@ -581,7 +564,6 @@ __all__ = [
     "METADATA_KEYS",
     "RETRY_KEYS",
     "Workflow",
-    "retries_note",
     "describe_workflow",
     "load_workflow",
     "plan_workflow",

@@ -114,7 +114,8 @@ with `retriable=False` and must stop.
 
 **Retries and zombies.** A retry of a run uses the same `run_id` with `attempt + 1`. Its first
 commit fences every older attempt of that run, so if the old attempt wakes up later, its publish
-fails, and re-running it finds the key the retry published and writes nothing.
+fails, and re-running it finds the key the retry published and writes nothing. A [workflow](#workflows)
+does this by itself for a task that has `retries`.
 
 ## Pipelines and configs
 
@@ -185,6 +186,12 @@ one `ldp plan CONFIG --window W` prints, and the run looks for it before it read
 can be run again as it is: the tasks that published are skipped, and only the tasks that failed or did not run do their work.
 A task whose target is a file is the exception. A file is replaced whole by every run and cannot take a key, so that task runs
 again. The [contract](design/v0_1_1.md#workflow-files-013) has the rest.
+
+A task with `retries` runs again after a failure that another attempt may fix, such as a dropped connection or a file that
+has not landed yet. The retry is the next attempt of the same run: the run id stays, the attempt counts up and the key is
+the same. The first commit of the new attempt fences the old one, which removes a branch the old attempt left staged. A
+load that reached the table before the error came back, for example a commit whose answer was lost, is found by its key,
+and the retry ends `skipped_duplicate` instead of writing the rows twice. A data gate and a wrong config are never retried.
 
 A `dbt` task has no key either, and for another reason. A model is a function of its inputs, and its publish is an
 `overwrite` or an `upsert`, so a second build leaves the same rows and does no harm. An `overwrite` adds snapshots, and

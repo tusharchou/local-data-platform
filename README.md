@@ -222,7 +222,7 @@ call:
 | `ldp workflow plan FILE [--window W] [--json]` | Check a workflow file, or a dataset config with a schedule, and every config it names, and print its tasks in the order they run with each pipeline task's idempotency key for the window | `orchestration.plan_workflow(path, window=...)` |
 | `ldp workflow run FILE --window W [--json]` | Run the tasks of a workflow one at a time for a window. A failed or blocked task stops the tasks that depend on it and the rest still run, and a second run skips what published or was built; exit status 0, 1, or 3 for a data gate | `orchestration.run_workflow(path, window=...)` |
 | `ldp plan CONFIG [--window WINDOW] [--json]` | Validate a config (or a folder of files, each as its kind) and print its spec hash, route, target, sinks, schedule, and the source path and idempotency key of a window | `spec.validate_spec(data)`, `spec.plan(config, window=...)` |
-| `ldp runs CONFIG [--run RUN_ID] [--events]` | List the runs a config's sinks recorded | `events.summarize_runs(events.read_jsonl(path))` or `read_iceberg_events(catalog)` |
+| `ldp runs CONFIG [--run RUN_ID] [--events] [--attempts]` | List the runs a config's sinks recorded, the last attempt of a run that was retried, or every attempt with `--attempts` | `events.summarize_runs(events.read_jsonl(path))` or `read_iceberg_events(catalog)` |
 | `ldp commits CONFIG [--key KEY] [--branches]` | List the staged publishes on a table, newest first | `format.iceberg.commit.commit_log(iceberg.table())` and `staged_branches(...)` |
 | `ldp datasets pin\|list\|export` | Pin, list and export dataset versions | `datasets.pin`, `list_versions`, `export` |
 | `ldp maintain CONFIG [--expire DAYS] [--orphans] [--apply]` | Expire snapshots and find orphan files; a dry run unless `--apply` | `maintenance.expire_snapshots`, `find_orphans`, `remove_orphans` |
@@ -244,6 +244,7 @@ and a `metadata` block:
 | `metadata.observability` | Where run events go, for example `{"sinks": ["iceberg", "jsonl"]}`. The default sends them nowhere |
 | `metadata.schedule` | When the config runs: a 5-field cron expression, or `@hourly`, `@daily`, `@weekly` or `@monthly`. Without it, a `when` of `hourly`, `daily`, `weekly` or `monthly` means the alias. Editing it does not change the spec hash |
 | `metadata.window` | `"none"`, or `size` (`day`, `hour` or `15m`), an optional `column` that selects the rows of a window, and an optional `timezone` (UTC by default); see [Windows](#windows) |
+| `metadata.retries` | How a workflow tries the run again after a failure: `max_attempts` (1 by default, which is no retry), `delay_s` (30) and `backoff` (2.0); see [Workflow files](#workflow-files). Editing it does not change the spec hash |
 
 A config may also say `"apiVersion": "ldp/v1"` and `"kind": "Pipeline"`. `kind` says what a JSON file is. `Pipeline`
 is the default, so every config here is one, and a config has the same spec hash with and without it. `Workflow` is
@@ -303,7 +304,7 @@ A workflow file lists the pipelines, dbt models and maintenance that run for eac
   "apiVersion": "ldp/v1",
   "kind": "Workflow",
   "identifier": "daily_orders",
-  "metadata": {"schedule": "5 2 * * *", "window": {"size": "day"}},
+  "metadata": {"schedule": "5 2 * * *", "window": {"size": "day"}, "retries": {"max_attempts": 3, "delay_s": 30}},
   "tasks": [
     {"id": "orders", "pipeline": "config/orders.json"},
     {"id": "customers", "pipeline": "config/customers.json"},
@@ -331,6 +332,13 @@ ldp runs .ldp/events.jsonl                                           # the workf
   data gate.
 - Run the same window again after fixing the cause: the pipeline tasks that published are skipped by their keys, without
   reading their sources, and only the tasks that failed or did not run do their work.
+- A task that fails with an error that another attempt may fix runs again by itself, as `retries` says, in the workflow
+  or in the task, and a key of the task overrides the same key of the workflow. These are retried: a dropped connection,
+  a timeout, a file that has not landed yet (any `OSError`) and the commit errors of pyiceberg. A data gate, a wrong
+  config and a fenced attempt never are. A retry is the next attempt of the same run, with the same run id and the same
+  idempotency key, so the new attempt fences the old one and a load that already landed is found and not written
+  twice. The wait is a random time from 0 to `delay_s * backoff ** (n - 1)` seconds after attempt n. `ldp runs` lists the
+  last attempt of each run, and `ldp runs LEDGER --attempts` lists them all.
 - A `dbt` task does what [`ldp dbt build`](#transform-with-dbt) does, for the window: dbt gets `window_start` and
   `window_end` as variables (`'{{ var("window_start") }}'::timestamp` in a model), and the models marked `ldp_publish` are
   written to Iceberg. Failing data tests are a data gate, so the task is `blocked_quality` and the exit status is 3. Run the

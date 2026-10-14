@@ -1211,8 +1211,13 @@ def _checks_text(payload: Mapping[str, Any]) -> str:
     return f"{run - int(payload.get('checks_failed') or 0)}/{run}"
 
 
-def summarize_runs(events: Iterable[RunEvent]) -> list[dict[str, Any]]:
+def summarize_runs(events: Iterable[RunEvent], *, final_attempts_only: bool = False) -> list[dict[str, Any]]:
     """Fold events into one summary per ``(run_id, attempt)``, newest first.
+
+    Args:
+        events: The events of any number of runs.
+        final_attempts_only: Keep only the last attempt of each run. A task of a workflow that was retried is one run
+            with several attempts, and this leaves the attempt that decided how the run ended.
 
     Returns:
         Dicts with ``run_id``, ``attempt``, ``pipeline``, ``table``, ``started_at``,
@@ -1260,7 +1265,14 @@ def summarize_runs(events: Iterable[RunEvent]) -> list[dict[str, Any]]:
                     run[key] = payload[key]
             if payload.get("published_snapshot_id") is not None:
                 run["snapshot_id"] = payload["published_snapshot_id"]
-    return sorted(runs.values(), key=lambda run: (run["started_at"], run["run_id"], run["attempt"]), reverse=True)
+    summaries = list(runs.values())
+    if final_attempts_only:
+        last: dict[str, dict[str, Any]] = {}
+        for run in summaries:
+            if run["run_id"] not in last or run["attempt"] > last[run["run_id"]]["attempt"]:
+                last[run["run_id"]] = run
+        summaries = list(last.values())
+    return sorted(summaries, key=lambda run: (run["started_at"], run["run_id"], run["attempt"]), reverse=True)
 
 
 # ---------------------------------------------------------------------- emitting
@@ -1532,7 +1544,7 @@ def _cmd_runs(args: Any) -> int:
         print(format_table(rows[-args.limit:] if args.run is None else rows), file=sys.stdout)
         return 0
     rows = []
-    shown = summarize_runs(events)[: args.limit]
+    shown = summarize_runs(events, final_attempts_only=not args.attempts)[: args.limit]
     in_workflows = any(run["workflow"] for run in shown)
     for run in shown:
         row = {"run_id": run["run_id"], "attempt": run["attempt"], "pipeline": run["pipeline"]}
@@ -1598,11 +1610,14 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> None:
     runs = subparsers.add_parser(
         "runs", parents=list(parents), help="list recorded pipeline runs",
         description="List the runs recorded by a config's event sinks: _ldp.runs in its Iceberg catalog, or its "
-                    "JSONL events file. CONFIG may also be a .jsonl events file.")
+                    "JSONL events file. CONFIG may also be a .jsonl events file. A run that was tried again is shown "
+                    "with its last attempt, and --attempts shows every one.")
     runs.add_argument("config", metavar="CONFIG", help="a JSON dataset config, or a .jsonl events file")
     runs.add_argument("--jsonl", metavar="FILE", help="read this JSONL events file instead")
     runs.add_argument("--run", metavar="RUN_ID", help="show every event of one run")
     runs.add_argument("--events", action="store_true", help="show events instead of one line per run")
+    runs.add_argument("--attempts", action="store_true",
+                      help="show a line for every attempt of a run that was retried, not only for the last one")
     runs.add_argument("--limit", type=_positive, default=20, help="show at most this many runs (default 20)")
     runs.set_defaults(handler=_cmd_runs)
 
