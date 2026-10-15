@@ -162,6 +162,34 @@ def test_episodes_are_partitioned_by_day_and_robot_bucket(walkthrough):
     assert bronze.table().inspect.partitions().num_rows > 3  # 3 days x several robot buckets
 
 
+def test_the_gold_tables_carry_their_contracts_and_describe_table_returns_the_column_docs(walkthrough):
+    from local_data_platform.mcp_server.tools import LakeTools
+
+    workdir, _ = walkthrough
+    with LakeTools.from_sources(configs=[workdir]) as tools:
+        stats = tools.describe_table("robots.gold_episode_stats")
+        daily = tools.describe_table("robots.gold_robot_daily")
+
+    for described, columns in ((stats, 16), (daily, 9)):
+        assert [field["doc"] is not None for field in described["schema"]["fields"]] == [True] * columns
+        assert described["properties"]["ldp.layer"] == "gold" and described["properties"]["comment"]
+    assert stats["properties"]["ldp.owner"] == "robot learning researchers"
+    assert stats["properties"]["ldp.grain"] == "one row per episode"
+    assert stats["properties"]["ldp.primary-key"] == "episode_id"
+    assert daily["properties"]["ldp.owner"] == "fleet operations"
+    assert daily["properties"]["ldp.primary-key"] == "robot_id,recorded_on"
+    assert {field["name"]: field["doc"] for field in daily["schema"]["fields"]}["success_rate"] == \
+        "successes divided by episodes, from 0 to 1."
+    assert stats["snapshot_count"] == 3, "the contract adds no snapshot to the three overwrites"
+
+
+def test_the_gold_configs_have_complete_contracts():
+    for name in ("gold_episode_stats", "gold_robot_daily"):
+        config = Config.from_json(EXAMPLE / "configs" / f"{name}.json")
+        assert config.docs is not None and config.docs.gold
+        assert config.docs.owner == config.who and config.docs.grain and config.docs.primary_key
+
+
 def test_the_pinned_split_is_reproducible(walkthrough):
     workdir, summary = walkthrough
     warehouse = workdir / "warehouse"

@@ -366,7 +366,7 @@ def test_init_writes_a_project_that_loads_and_points_at_the_lake(tmp_path, lake)
 
     folder = tmp_path / "shop"
     assert sorted(path.relative_to(folder).as_posix() for path in written) == [
-        ".gitignore", "dbt_project.yml", "ldp_dbt.json", "models/gold/gold_example.sql",
+        ".gitignore", "dbt_project.yml", "ldp_dbt.json", "models/gold/gold_example.sql", "models/schema.yml",
         "models/staging/stg_example.sql", "profiles.yml"]
     project = DbtProject.load(folder)
     assert project.source_configs == (lake,)

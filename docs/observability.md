@@ -21,8 +21,10 @@ run.started ─► run.extracted ─► quality.evaluated ─┬─► run.publi
   the whole retained history of the table before it reads its source, so a run that finds it emits `run.started`,
   `run.skipped_duplicate` and `run.finished` and nothing else, with no `run.extracted` and no `quality.evaluated`.
   Its `run.finished` has no `rows_read`, and `PipelineResult.rows_read` is 0.
-- `run.blocked_quality` means a check failed with `on_failure: "fail"`. The pipeline still raises
-  `DataQualityError`, as it does without run events, and writes nothing.
+- `run.blocked_quality` means a check failed with `on_failure: "fail"`, or the contract of a gold table does not
+  hold, which is when a column has no description or the docs describe a column that the table does not have. The
+  pipeline still raises `DataQualityError`, or its subclass `ContractError`, as it does without run events, and
+  writes nothing.
 - A [workflow](design/v0_1_1.md#workflow-files-013) run wraps the runs of its tasks in `workflow.started` and
   `workflow.finished`. Every event of a task carries `workflow`, `workflow_run_id` and `task_id` in its payload, and
   the runner writes all of them to `.ldp/events.jsonl` next to the workflow file, see
@@ -55,10 +57,10 @@ depends on the type:
 | `run.started` | `mode`, `publish` (`direct` or `staged`), `idempotency_key`, `spec_hash`, `logical_window`, `source` and `target` (dataset names), `ldp_version` |
 | `run.extracted` | `rows_read`, `rows_kept` (only when the config names a `metadata.window.column` and the run has a window: the rows inside the window), `schema` (names and types) |
 | `quality.evaluated` | `rows`, `schema`, `null_counts` per column, `on_failure`, `passed`, `checks_run`, `checks_failed`, and `results`: one entry per check with `name`, `column`, `passed`, `failing_rows`, `details` and numeric `metrics` |
-| `run.published`, `run.skipped_duplicate` | `rows_written`, `snapshot_id`, `idempotency_key`, `write` (the `WriteResult`), `snapshot_summary` |
-| `run.blocked_quality` | `checks_failed`, `failures` (check names), `on_failure` |
-| `run.failed` | `stage` (`search`, `extract`, `transform`, `validate`, `write`), `error_type`, `message` |
-| `run.finished` | `status`, `duration_s`, `rows_read`, `rows_written`, `published_snapshot_id`, `idempotency_key`, `quality_passed`. A task of a workflow that did not run a pipeline has `succeeded`, `failed` or `upstream_failed` as its `status`, and `upstream_failed` adds `blocked_by`, the ids of the tasks that did not succeed |
+| `run.published`, `run.skipped_duplicate` | `rows_written`, `snapshot_id`, `idempotency_key`, `write` (the `WriteResult`), `snapshot_summary`. A `run.published` of a config with a `metadata.docs` block and an Iceberg target also has `contract`, with `layer`, `applied`, `changed`, `properties` and `columns` (what the commit set), `documented` (columns that have a doc), `ignored` and `attempts`, or `applied: false` and the `error` when the contract could not be written |
+| `run.blocked_quality` | `checks_failed`, `failures` (check names, and `contract` when the contract of a gold table does not hold), `on_failure`, and `contract_problems` (one sentence for each problem) |
+| `run.failed` | `stage` (`search`, `extract`, `transform`, `validate`, `contract`, `write`), `error_type`, `message` |
+| `run.finished` | `status`, `duration_s`, `rows_read`, `rows_written`, `published_snapshot_id`, `idempotency_key`, `quality_passed`, and `contract_passed` (false) when the contract blocked the run. A task of a workflow that did not run a pipeline has `succeeded`, `failed` or `upstream_failed` as its `status`, and `upstream_failed` adds `blocked_by`, the ids of the tasks that did not succeed |
 | `workflow.started` | `workflow` and `pipeline` (the workflow's identifier), `workflow_run_id`, `window` (start and end), `schedule`, `tasks` (the `id`, `kind` and `depends_on` of each, in the order they run, and `max_attempts` for a task that is retried), `ldp_version`, and `replace` (true) when the run replaces the window, as `ldp backfill --replace` does |
 | `workflow.finished` | `status` (`succeeded`, `blocked_quality` when a data gate is the only problem, or `failed`), `duration_s`, `counts` (tasks per status), `tasks` (the status of each task) |
 

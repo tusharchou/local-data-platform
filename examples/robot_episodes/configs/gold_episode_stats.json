@@ -59,6 +59,34 @@
           "max": 20
         }
       ]
+    },
+    "docs": {
+      "layer": "gold",
+      "description": "One row for each promoted episode, with its outcome, the health of its frames and the sync of its cameras. A clip is clean when it dropped under 2% of its frames and its RGB and depth cameras never drifted 20 ms apart.",
+      "grain": "one row per episode",
+      "primary_key": "episode_id",
+      "tags": [
+        "robotics",
+        "episodes"
+      ],
+      "columns": {
+        "episode_id": "The episode, one teleoperated attempt at a task. It starts with the id of its upload batch.",
+        "batch_id": "The upload batch the episode arrived in.",
+        "robot_id": "The robot that recorded the episode.",
+        "task": "The task the robot was asked to do.",
+        "operator": "Who teleoperated the robot.",
+        "start_ts": "When the episode started, in UTC.",
+        "end_ts": "When the episode ended, in UTC.",
+        "duration_s": "How long the episode lasted, in seconds.",
+        "success": "Whether the robot completed the task.",
+        "frame_count": "How many frames the episode says it has.",
+        "frames_recorded": "How many frames of the episode silver holds.",
+        "dropped_frames": "How many of those frames were dropped by the recorder.",
+        "drop_rate": "The share of its frames that were dropped, from 0 to 1.",
+        "max_skew_ms": "The largest gap between the RGB and depth timestamps of any frame, in milliseconds.",
+        "p95_skew_ms": "The 95th percentile of that gap over the frames of the episode, in milliseconds.",
+        "clean": "True when the drop rate is under 2% and the skew never reached 20 ms."
+      }
     }
   }
 }

@@ -20,6 +20,8 @@ from local_data_platform.cli import build_parser, main
 from local_data_platform.dbt_layer import cli as dbt_cli
 from local_data_platform.format.iceberg import Iceberg
 from tests.support import (
+    GOLD_META,
+    TOTALS_DOCS,
     FakeDbt,
     build_lake,
     copy_fixture_project,
@@ -61,7 +63,7 @@ def build(capfd, fake, project, *options, dbt_args=()):
 
 ORDERS = {"materialized": "incremental", "unique_key": "order_id",
           "meta": {"ldp_publish": True, "ldp_namespace": "silver"}}
-TOTALS = {"meta": {"ldp_publish": True, "ldp_namespace": "gold"}, "depends_on": ["fct_orders"]}
+TOTALS = {"meta": GOLD_META, "depends_on": ["fct_orders"], **TOTALS_DOCS}
 BUILT = [
     "CREATE OR REPLACE TABLE main.fct_orders AS SELECT i::BIGINT AS order_id, 'o' || i AS label, i * 1.5 AS amount "
     "FROM range(1, 4) t(i)",
@@ -328,8 +330,8 @@ def test_a_bad_meta_key_fails_after_dbt_ran_and_before_anything_is_written(capfd
 
 def test_a_blocked_quality_check_stops_the_run_and_says_what_was_and_was_not_published(capfd, fake, project, tmp_path):
     blocked = {"checks": [{"check": "row_count", "min": 100}], "on_failure": "fail"}
-    totals = dbt_model("gold_totals", meta={"ldp_publish": True, "ldp_namespace": "gold", "ldp_quality": blocked},
-                       depends_on=["fct_orders"])
+    totals = dbt_model("gold_totals", meta={**GOLD_META, "ldp_quality": blocked}, depends_on=["fct_orders"],
+                       **TOTALS_DOCS)
     succeed(fake, project, models=(dbt_model("fct_orders", **ORDERS), totals))
 
     status, out, err = build(capfd, fake, project)

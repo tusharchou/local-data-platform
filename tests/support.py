@@ -127,15 +127,24 @@ def write_dbt_project(folder: Path, models: dict[str, str], *, schema_yml: str |
 
 
 def dbt_model(name, *, materialized="table", unique_key=None, meta=None, schema="main", alias=None, description="",
-              depends_on=()):
-    """A model node as dbt 1.12 writes it to ``manifest.json``."""
+              depends_on=(), columns=None, tags=()):
+    """A model node as dbt 1.12 writes it to ``manifest.json``. ``columns`` maps a column name to its description."""
     return {
         "unique_id": f"model.shop.{name}", "resource_type": "model", "name": name, "alias": alias or name,
-        "schema": schema, "description": description,
+        "schema": schema, "description": description, "tags": list(tags),
+        "columns": {column: {"name": column, "description": text} for column, text in (columns or {}).items()},
         "config": {"materialized": materialized, "unique_key": unique_key, "meta": dict(meta or {})},
         "meta": dict(meta or {}),
         "depends_on": {"macros": [], "nodes": [f"model.shop.{parent}" for parent in depends_on]},
     }
+
+
+GOLD_META = {"ldp_publish": True, "ldp_namespace": "gold", "owner": "shop analytics", "grain": "one row per day"}
+"""The meta of a model that is published to the gold namespace. A gold table needs an owner and a grain."""
+
+TOTALS_DOCS = {"description": "Orders and revenue.",
+               "columns": {"orders": "How many orders.", "revenue": "What they cost."}}
+"""The description and the column descriptions that a gold model with the columns ``orders`` and ``revenue`` needs."""
 
 
 def dbt_artifacts(*models, statuses=None, args=None):

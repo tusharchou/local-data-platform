@@ -16,8 +16,8 @@ which the later milestones do for metrics, reports and profiles::
 ``apiVersion``, ``identifier``, ``when``, ``how`` and ``metadata`` except
 ``observability`` (where events go doesn't change what a run does), ``schedule`` (when a run starts doesn't change
 what it does, though ``window`` does, because its column picks the rows a run reads), ``retries`` (how often a failed
-run is tried again doesn't change what it does) and ``kind`` (a pipeline hashes the same with ``"kind": "Pipeline"`` as
-without it). Keys are
+run is tried again doesn't change what it does), ``docs`` (what a table is called and described doesn't change what a
+run writes) and ``kind`` (a pipeline hashes the same with ``"kind": "Pipeline"`` as without it). Keys are
 sorted, there is no whitespace, formats are upper-case, write modes lower-case, the
 quality block is normalised to ``{"on_failure", "checks"}``, and local paths are
 made relative to the config's folder. The descriptive ``who``, ``what`` and
@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any
 
+from local_data_platform import contracts
 from local_data_platform.exceptions import ConfigError, PipelineNotFound
 from local_data_platform.orchestration import retries, windows
 
@@ -57,7 +58,7 @@ TOP_LEVEL_KEYS = ("apiVersion", "kind", "identifier", "who", "what", "where", "w
 FORMATS = ("CSV", "PARQUET", "JSON", "ICEBERG", "DUCKDB", "XLSX")
 WRITE_MODES = ("append", "overwrite", "upsert")
 ON_FAILURE = ("fail", "warn")
-HASH_EXCLUDED_METADATA = ("observability", "schedule", "retries")
+HASH_EXCLUDED_METADATA = ("observability", "schedule", "retries", "docs")
 """``metadata`` keys that don't change what a run does, so :func:`spec_hash` ignores them."""
 
 _BUILTIN_CATALOG_TYPES = ("local", "sql", "rest", "glue")
@@ -554,7 +555,32 @@ def json_schema() -> dict[str, Any]:
                     },
                     "window": {"$ref": "#/$defs/window"},
                     "retries": {"$ref": "#/$defs/retries"},
+                    "docs": {"$ref": "#/$defs/docs"},
                 },
+            },
+            "docs": {
+                "type": "object",
+                "additionalProperties": False,
+                "description": "The contract of the table: what it means, who owns it, what one row is and what each "
+                               "column holds. A run writes it into the Iceberg table as the properties comment, "
+                               "ldp.owner, ldp.layer, ldp.grain and ldp.primary-key and the doc of each column. A "
+                               "gold table needs a description, an owner (or a 'who' in the config) and a grain, "
+                               "and a description for every column it writes. Editing it does not change the spec "
+                               "hash.",
+                "properties": {
+                    "layer": {"enum": list(contracts.LAYERS), "description": "Only gold is held to its contract."},
+                    "description": {**non_empty, "description": "What the table means."},
+                    "owner": {**non_empty, "description": "Who owns it. The config's 'who' by default."},
+                    "grain": {**non_empty, "description": "What one row is, such as one row per restaurant per day."},
+                    "primary_key": {"oneOf": [non_empty, {"type": "array", "items": non_empty, "minItems": 1}],
+                                    "description": "The column or columns that identify a row."},
+                    "columns": {"type": "object", "additionalProperties": non_empty,
+                                "description": "Column name to what it holds."},
+                    "tags": {"type": "array", "items": non_empty},
+                    "refresh": {**non_empty, "description": "How often it is rebuilt. The config's 'when' by default."},
+                },
+                "allOf": [{"if": {"properties": {"layer": {"const": "gold"}}, "required": ["layer"]},
+                           "then": {"required": ["description", "grain"]}}],
             },
             "retries": {**retries.retries_schema(),
                         "description": "How the run is tried again after a failure, when a workflow runs it. Editing "
@@ -884,6 +910,12 @@ def _check_schedule_and_window(problems: _Problems, metadata: Mapping[str, Any])
     _check_placeholder_places(problems, metadata, "metadata")
 
 
+def _check_docs(problems: _Problems, metadata: Mapping[str, Any], who: Any) -> None:
+    """Check ``metadata.docs``, the contract of the table, with the owner that ``who`` gives when it names none."""
+    for path, message in contracts.docs_problems(metadata.get("docs"), who=who):
+        problems.add(f"metadata.docs{path}", message)
+
+
 def _check_placeholder_places(problems: _Problems, value: Any, where: str) -> None:
     """A window placeholder works only in ``metadata.source.path``, so flag one anywhere else."""
     if isinstance(value, Mapping):
@@ -907,7 +939,8 @@ def _check_secrets(problems: _Problems, value: Any, where: str, key: str = "") -
             _check_secrets(problems, child, f"{where}[{index}]", key)
     elif isinstance(value, str):
         lowered = key.lower()
-        named_secret = any(word in lowered for word in _SECRET_WORDS) and not lowered.endswith(_REFERENCE_SUFFIXES)
+        named_secret = (any(word in lowered for word in _SECRET_WORDS) and not lowered.endswith(_REFERENCE_SUFFIXES)
+                        and not where.startswith("metadata.docs"))  # a column called token is described, not a secret
         if (named_secret and value.strip()) or _INLINE_SECRET.search(value):
             problems.add(where, "looks like an inline secret; keep secrets out of specs and reference an "
                                 "environment variable instead (e.g. 'token_env': 'MY_TOKEN')")
@@ -962,6 +995,7 @@ def _validate_pipeline(spec: Mapping[str, Any]) -> list[ConfigError]:
         _check_block(problems, metadata.get("target"), "target")
         _check_quality(problems, metadata.get("quality"))
         _check_schedule_and_window(problems, metadata)
+        _check_docs(problems, metadata, spec.get("who"))
         if "retries" in metadata:
             for path, message in retries.retries_problems(metadata["retries"]):
                 problems.add(f"metadata.retries{path}", message)

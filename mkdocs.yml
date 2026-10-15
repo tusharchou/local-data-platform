@@ -25,6 +25,7 @@ nav:
       - "SaaS architecture": design/saas_architecture.md
       - "Pipeline registry and factory": design/factory_registry.md
       - "Warehousing with dbt": design/warehousing.md
+      - "v0.1.4 gold layer contract": design/v0_1_4.md
   - Roadmap: roadmap.md
   - API Docs: api.md
   - "About LDP": wiki/VISION.md

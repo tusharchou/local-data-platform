@@ -9,6 +9,10 @@ models:
     description: Orders and revenue of each day that a workflow run has built.
     columns:
       - name: day
+        description: The day.
         data_tests: [unique, not_null]
+      - name: orders
+        description: How many orders the day had.
       - name: revenue
+        description: What they cost.
         data_tests: [not_null]

@@ -19,9 +19,10 @@ from local_data_platform.exceptions import ConfigError
 from local_data_platform.format.iceberg import Iceberg
 from local_data_platform.spec import validate_spec
 from tests.support import dbt_artifacts as artifacts
+from tests.support import GOLD_META, TOTALS_DOCS
 from tests.support import dbt_model as model
 
-LAKE_CATALOG = {"identifier": "gold", "warehouse_path": "../lake/warehouse"}
+LAKE_CATALOG = {"identifier": "lake", "warehouse_path": "../lake/warehouse"}
 
 
 @pytest.fixture
@@ -171,7 +172,7 @@ def test_a_model_with_no_relation_to_read_is_an_error(project, materialized):
 def test_the_table_is_named_after_the_alias_in_the_namespace_of_the_publish_catalog(project):
     [item] = plan(project, model("totals", alias="revenue_totals", schema="analytics", meta=PUBLISH))
 
-    assert item.table == "gold.revenue_totals"
+    assert item.table == "lake.revenue_totals"
     assert item.relation == "analytics.revenue_totals"  # the relation dbt built, in the model's schema
     assert item.config["metadata"]["source"]["relation"] == "analytics.revenue_totals"
     assert item.config["metadata"]["target"]["name"] == "revenue_totals"
@@ -189,14 +190,14 @@ def test_ldp_namespace_sets_the_namespace_of_a_catalog_that_is_not_local(tmp_pat
     folder = tmp_path / "proj"
     folder.mkdir()
     sql_catalog = {"type": "sql", "uri": "sqlite:///../lake/catalog.db", "warehouse": "../lake/warehouse",
-                   "namespace": "gold"}
+                   "namespace": "lake"}
     (folder / "ldp_dbt.json").write_text(json.dumps({"publish": {"catalog": sql_catalog, "config_dir": "gen"}}))
     project = DbtProject.load(folder)
 
     [plain] = plan(project, model("a", meta=PUBLISH))
     [moved] = plan(project, model("b", meta={**PUBLISH, "ldp_namespace": "silver"}))
 
-    assert plain.table == "gold.a" and moved.table == "silver.b"
+    assert plain.table == "lake.a" and moved.table == "silver.b"
     assert moved.config["metadata"]["target"]["catalog"]["namespace"] == "silver"
     assert "identifier" not in moved.config["metadata"]["target"]["catalog"]
 
@@ -214,7 +215,7 @@ def test_two_models_that_would_write_one_table_are_an_error(project):
         plan(project, model("a", alias="same", schema="one", meta=PUBLISH),
              model("b", alias="same", schema="two", meta=PUBLISH))
 
-    assert any("models a, b would all write the table gold.same" in problem for problem in problems(error))
+    assert any("models a, b would all write the table lake.same" in problem for problem in problems(error))
 
 
 # --------------------------------------------------------------------------- the generated config
@@ -230,7 +231,8 @@ def test_the_generated_config_is_an_ordinary_dataset_config(project, tmp_path):
             "source": {"name": "totals", "format": "DUCKDB", "path": "../../proj/target/ldp_build.duckdb",
                        "relation": "main.totals"},
             "target": {"name": "totals", "format": "ICEBERG", "write_mode": "overwrite",
-                       "catalog": {"identifier": "gold", "warehouse_path": "../warehouse"}},
+                       "catalog": {"identifier": "lake", "warehouse_path": "../warehouse"}},
+            "docs": {"description": "Orders and revenue."},
         },
     }
     assert validate_spec(item.config) == []
@@ -444,6 +446,86 @@ def test_read_artifacts_refuses_files_that_an_earlier_run_wrote(project):
     read_artifacts(project, since=long_ago - 1)
 
 
+# --------------------------------------------------------------------------- the table contract
+
+
+def test_the_generated_config_carries_the_docs_of_the_model(project):
+    [item] = plan(project, model("orders", materialized="incremental", unique_key="order_id", tags=["core"],
+                                 meta={**PUBLISH, "ldp_namespace": "silver", "owner": "ops"},
+                                 description="Every order.",
+                                 columns={"order_id": "The key.", "amount": "What it cost."}))
+
+    assert item.config["metadata"]["docs"] == {
+        "layer": "silver", "description": "Every order.", "owner": "ops", "primary_key": ["order_id"],
+        "columns": {"order_id": "The key.", "amount": "What it cost."}, "tags": ["core"]}
+    assert validate_spec(item.config) == []
+
+
+def test_a_model_with_nothing_to_document_gets_no_block(project):
+    [item] = plan(project, model("totals", meta=PUBLISH))
+
+    assert "docs" not in item.config["metadata"]
+
+
+def test_ldp_layer_sets_the_layer_and_is_a_meta_key_that_ldp_knows(project):
+    [item] = plan(project, model("totals", meta={**PUBLISH, "ldp_layer": "silver", "ldp_namespace": "gold"}))
+
+    assert item.config["metadata"]["docs"] == {"layer": "silver"}
+
+
+def test_a_model_for_the_gold_namespace_needs_what_a_gold_table_needs_and_every_gap_is_named(project):
+    with pytest.raises(ConfigError) as error:
+        plan(project, model("totals", meta={**PUBLISH, "ldp_namespace": "gold"}),
+             model("daily", meta={**PUBLISH, "ldp_namespace": "gold", "owner": "ops"}, description="Daily."))
+
+    assert str(error.value).startswith("cannot publish, 4 problems in the dbt models' meta, and nothing was published:")
+    assert problems(error) == [
+        "model daily: metadata.docs.grain: is required for a gold table, to say what one row is",
+        "model totals: metadata.docs.description: is required for a gold table, to say what the table means",
+        "model totals: metadata.docs.grain: is required for a gold table, to say what one row is",
+        "model totals: metadata.docs.owner: is required for a gold table, to say who owns it. "
+        "Set it here, or set 'who' in the config",
+    ]
+
+
+def test_a_gold_model_that_has_all_of_it_is_planned(project):
+    [item] = plan(project, model("totals", meta=GOLD_META, **TOTALS_DOCS))
+
+    assert item.table == "gold.totals"
+    assert item.config["metadata"]["docs"] == {
+        "layer": "gold", "description": "Orders and revenue.", "owner": "shop analytics", "grain": "one row per day",
+        "columns": {"orders": "How many orders.", "revenue": "What they cost."}}
+
+
+def test_a_published_model_carries_its_contract_in_its_table(project, build_file, tmp_path):
+    outcome = publish(plan(project, *two_models()))
+
+    assert outcome.failed is None
+    totals = table(tmp_path, "gold", "totals").table()
+    assert totals.properties["comment"] == "Orders and revenue." and totals.properties["ldp.layer"] == "gold"
+    assert totals.properties["ldp.owner"] == "shop analytics" and totals.properties["ldp.grain"] == "one row per day"
+    assert [(item.name, item.doc) for item in totals.schema().fields] == [("orders", "How many orders."),
+                                                                          ("revenue", "What they cost.")]
+    orders = table(tmp_path, "silver", "orders").table()
+    assert orders.properties["ldp.layer"] == "silver" and orders.properties["ldp.primary-key"] == "order_id"
+    assert len(totals.snapshots()) == 1, "the contract adds no snapshot"
+
+
+def test_a_gold_model_with_a_column_that_has_no_description_is_stopped_at_the_write(project, build_file, tmp_path):
+    half = {"description": "Orders and revenue.", "columns": {"orders": "How many orders."}}
+    items = plan(project, model("orders", materialized="incremental", unique_key="order_id",
+                                meta={**PUBLISH, "ldp_namespace": "silver"}),
+                 model("totals", meta=GOLD_META, depends_on=["orders"], **half))
+
+    outcome = publish(items)
+
+    assert [item.model for item in outcome.published] == ["orders"]
+    failed_model, error = outcome.failed
+    assert failed_model == "totals" and "1 column written without a description" in str(error)
+    assert "revenue" in str(error)
+    assert not table(tmp_path, "gold", "totals").exists()
+
+
 # --------------------------------------------------------------------------- writing to Iceberg
 
 
@@ -465,7 +547,7 @@ def table(tmp_path, namespace, name) -> Iceberg:
 def two_models():
     return (model("orders", materialized="incremental", unique_key="order_id",
                   meta={**PUBLISH, "ldp_namespace": "silver"}),
-            model("totals", meta={**PUBLISH, "ldp_namespace": "gold"}, depends_on=["orders"]))
+            model("totals", meta=GOLD_META, depends_on=["orders"], **TOTALS_DOCS))
 
 
 def test_publish_writes_every_config_and_runs_them_in_order(project, build_file, tmp_path):
@@ -508,8 +590,8 @@ def test_the_generated_config_runs_again_with_ldp_run(project, build_file, tmp_p
 
     assert main(["run", str(first.config)]) == 0
 
-    assert table(tmp_path, "gold", "totals").get().to_pylist() == [{"orders": 4, "revenue": 7.5}]
-    assert "gold.totals: overwrite, 1 -> 1 rows" in capsys.readouterr().out
+    assert table(tmp_path, "lake", "totals").get().to_pylist() == [{"orders": 4, "revenue": 7.5}]
+    assert "lake.totals: overwrite, 1 -> 1 rows" in capsys.readouterr().out
 
 
 def test_a_failing_write_stops_the_run_and_says_what_was_and_was_not_published(project, build_file, tmp_path):
@@ -517,8 +599,7 @@ def test_a_failing_write_stops_the_run_and_says_what_was_and_was_not_published(p
     items = plan(project,
                  model("orders", materialized="incremental", unique_key="order_id",
                        meta={**PUBLISH, "ldp_namespace": "silver"}),
-                 model("totals", meta={**PUBLISH, "ldp_namespace": "gold", "ldp_quality": blocked},
-                       depends_on=["orders"]),
+                 model("totals", meta={**GOLD_META, "ldp_quality": blocked}, depends_on=["orders"], **TOTALS_DOCS),
                  model("after", alias="orders", schema="main", meta={**PUBLISH, "ldp_namespace": "last"},
                        depends_on=["totals"]))
 

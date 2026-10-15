@@ -2,7 +2,11 @@
 
 After a successful ``dbt build`` this reads ``target/manifest.json`` (what each model is) and
 ``target/run_results.json`` (what ran), decides which models to publish and how, writes an ordinary
-dataset config for each one, and runs it. The contract is ``docs/design/warehousing.md``.
+dataset config for each one, and runs it. The contract is ``docs/design/warehousing.md``. Each config also gets a
+``metadata.docs`` block from the manifest, which is the table contract of ``docs/design/v0_1_4.md``: the description of
+the model and of its columns, its ``owner`` and ``grain`` meta, its tags and its layer. A model published to a ``gold``
+namespace is a gold table, so it needs all of that, and a model that lacks something stops the build before anything is
+published.
 
 Nothing here imports dbt. Planning is pure: it reads two dicts, so it is tested without dbt.
 """
@@ -16,12 +20,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from local_data_platform import contracts
 from local_data_platform.catalog.provider import catalog_namespace, catalog_type
 from local_data_platform.dbt_layer.project import DbtProject
 from local_data_platform.exceptions import ConfigError
 
 WRITE_MODES = ("append", "overwrite", "upsert")
-META_KEYS = ("ldp_publish", "ldp_write_mode", "ldp_join_cols", "ldp_namespace", "ldp_partition_by", "ldp_quality")
+META_KEYS = ("ldp_publish", "ldp_write_mode", "ldp_join_cols", "ldp_namespace", "ldp_partition_by", "ldp_quality",
+             "ldp_layer")
 PUBLISHABLE = ("table", "view", "incremental")
 FAILED_STATUSES = ("error", "fail", "runtime error")
 
@@ -285,6 +291,10 @@ def _plan_one(project: DbtProject, node: Mapping[str, Any], meta: Mapping[str, A
         metadata["quality"] = meta["ldp_quality"]
     if project.observability:
         metadata["observability"] = project.observability
+    docs = contracts.docs_from_dbt_node(node, namespace=catalog_namespace(catalog),
+                                        primary_key=join_cols if mode == "upsert" else ())
+    if docs:
+        metadata["docs"] = docs
     dataset: dict[str, Any] = {"identifier": name}
     if node.get("description"):
         dataset["what"] = str(node["description"])

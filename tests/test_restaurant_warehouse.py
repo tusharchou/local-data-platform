@@ -121,6 +121,21 @@ def test_every_published_table_has_a_snapshot_for_each_build_that_changed_it(wal
                                                                                                "snapshots": 3}}
 
 
+def test_every_published_model_carries_its_contract_in_its_table(walkthrough):
+    workdir = walkthrough[0]
+    expected = {"churn_by_month": ("gold", "customer insights"),
+                "revenue_by_restaurant_day": ("gold", "restaurant operations"), "fct_orders": ("silver", None)}
+
+    for name, (layer, owner) in expected.items():
+        table = table_of(workdir, name).table()
+        assert table.properties["ldp.layer"] == layer and table.properties.get("ldp.owner") == owner, name
+        assert table.properties["comment"], name
+        assert all(field.doc for field in table.schema().fields), f"{name} describes every column"
+    revenue = table_of(workdir, "revenue_by_restaurant_day").table()
+    assert revenue.properties["ldp.grain"] == "one row for each restaurant on each day it had an order"
+    assert table_of(workdir, "fct_orders").table().properties["ldp.primary-key"] == "order_id"
+
+
 def test_the_narrative_tells_the_story_in_order(walkthrough):
     narrative = walkthrough[2]
     steps = ["== 1. Excel to CSV: the restaurant list", "== 2. Ingest the raw tables into Iceberg (namespace raw)",

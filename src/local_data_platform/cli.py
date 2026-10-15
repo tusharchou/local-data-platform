@@ -32,7 +32,8 @@ Every command follows one exit-code table::
     0  success, including a run that published and a run that skipped a duplicate
     1  an error: a bad config, a usage error, a failed write
     2  reserved for an SLA breach that ``ldp monitor`` reports (0.1.5)
-    3  a data gate held the run back, such as a quality check that blocked a write
+    3  a data gate held the run back, such as a quality check that blocked a write, or a gold table whose
+       contract does not hold
 
 A scheduler retries a run that exits with 1, because the cause may pass, and never retries one that exits with 3,
 because the data has to change first.
@@ -86,6 +87,7 @@ MODULE_COMMANDS = (
     ("local_data_platform.dbt_layer.cli", ("dbt",)),
     ("local_data_platform.orchestration.cli", ("workflow", "backfill")),
     ("local_data_platform.orchestration.schedule_cli", ("schedule",)),
+    ("local_data_platform.gold.cli", ("gold",)),
 )
 """``(module, commands)``: each module's ``add_cli(subparsers, parents=...)`` registers its commands."""
 
