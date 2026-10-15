@@ -7,7 +7,7 @@ Commands::
                    [--idempotency-key KEY|auto] [--run-id ID [--attempt N]] [--json]
     ldp pipelines
     ldp snapshots CONFIG
-    ldp query CONFIG [CONFIG ...] SQL [--max-rows N] [--snapshot ID | --as-of TIME]
+    ldp query CONFIG [CONFIG ...] SQL [--max-rows N] [--snapshot ID | --as-of TIME | --release RN | --live]
     ldp demo [--workdir DIR] [--rows N] [--seed N]
 
     ldp catalog test SPEC                  (catalog.provider)
@@ -16,6 +16,7 @@ Commands::
     ldp runs CONFIG                        (events)
     ldp commits CONFIG                     (format.iceberg.commit)
     ldp datasets pin|list|export ...       (datasets)
+    ldp gold sync|build|releases ...       (gold.cli)
     ldp maintain CONFIG                    (maintenance)
     ldp spark CONFIG                       (engine.spark)
     ldp mcp --config DIR_OR_FILE           (mcp_server)
@@ -286,7 +287,7 @@ def _cmd_query(args: argparse.Namespace) -> int:
     from local_data_platform.engine.duckdb import DuckDBEngine
     from local_data_platform.etl import load_config
 
-    if len(args.config) == 1 and not os.path.isdir(args.config[0]):
+    if len(args.config) == 1 and not os.path.isdir(args.config[0]) and args.release is None:
         # One config file: its Iceberg table, named after target.name.
         config = load_config(args.config[0])
         table, alias = _iceberg_table(config, must_exist=True)
@@ -301,7 +302,7 @@ def _cmd_query(args: argparse.Namespace) -> int:
                 raise ConfigError(str(error)) from error
             result = duck.query(args.sql)
     else:
-        with lake.open_lake(args.config, snapshot_id=args.snapshot, as_of=args.as_of) as duck:
+        with lake.open_lake(args.config, snapshot_id=args.snapshot, as_of=args.as_of, release=args.release) as duck:
             result = duck.query(args.sql)
     _print(format_table(result, max_rows=args.max_rows))
     return 0
@@ -409,6 +410,11 @@ def build_parser(*, module_commands: bool = True) -> argparse.ArgumentParser:
     when.add_argument("--as-of", type=_moment, metavar="TIME",
                       help="read the newest snapshot committed at or before TIME, such as '2026-07-31 23:59:59' "
                            "(UTC unless it has an offset; a date alone is midnight)")
+    when.add_argument("--release", metavar="RELEASE",
+                      help="read the gold tables as release RELEASE of ldp gold build names them, such as r2. A table "
+                           "that the release does not hold is read at its current snapshot")
+    when.add_argument("--live", action="store_true",
+                      help="read the tables as they are now, which is what ldp query does when no release is named")
     query.set_defaults(handler=_cmd_query)
 
     demo = commands.add_parser("demo", parents=[common], help="run the offline end-to-end demo",

@@ -162,9 +162,11 @@ The file says four things.
 | `kind` and `apiVersion` | That this is a workflow and not a dataset config. Every JSON file of LDP can say what it is, and `ldp schema --kind Workflow` prints the schema of this one |
 | `metadata.schedule` | When it runs. `5 2 * * *` is five past two in the morning, and the run is for the day before. `metadata.window.size` says that a window is one day, and `window.timezone` counts the days in another time zone, with UTC as the default |
 | `metadata.retries` | How often a task that fails with an error that another try may fix is run again. `max_attempts` counts every try, so 2 is one retry, and `delay_s` is the longest wait before it. A task can have `retries` of its own |
-| `tasks` | The steps. Each has an `id`, an optional `depends_on`, and one kind. The kinds are `pipeline` (a dataset config), `dbt` (a dbt project, built for the window) and `maintain` (the options of `ldp maintain`). Paths are relative to the workflow file |
+| `tasks` | The steps. Each has an `id`, an optional `depends_on`, and one kind. The kinds are `pipeline` (a dataset config), `dbt` (a dbt project, built for the window), `maintain` (the options of `ldp maintain`) and `gold` (the gold tables of a folder, built for the window, with a release cut at the end). Paths are relative to the workflow file |
 
 Here the orders and their lines wait for nothing, the models wait for both, and the tidy task waits for the models. The `select` of the dbt task builds the daily revenue model, what it reads, and `stg_customers`, which a data test of `fct_orders` reads, and it runs their data tests. A model that fails a data test blocks the task, as a quality check blocks a pipeline. Tasks run one at a time, in dependency order.
+
+A `gold` task, `{"id": "gold", "depends_on": ["models"], "gold": {"dir": "config"}}`, builds the gold tables of a folder for the window, in the order that their inputs say, and cuts a release when every table passed its gate, so that readers of the gold layer see tables from one build. It runs each gold config as a pipeline task runs a config, so the same window again writes nothing and cuts no second release. It is described in [the gold releases design](design/v0_1_4.md#g3-gold-releases).
 
 `metadata` can also have `catchup` and `start`, which Part 7 uses, and `observability`, which adds event sinks to the ledger. `ldp workflow plan` checks the file and every config it names, and prints the tasks in the order they run with the key of each pipeline for a window.
 

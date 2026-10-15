@@ -69,8 +69,10 @@ EVENT_TYPES = (
     "workflow.started",
     "workflow.finished",
     "table.maintained",
+    "release.cut",
 )
-"""The event types LDP emits. Consumers must ignore types they don't know."""
+"""The event types LDP emits. Consumers must ignore types they don't know. ``release.cut`` says that a gold table is in
+a release, and one is emitted for each table of the release, with the table's own pipeline name."""
 
 RUN_STATUSES = ("published", "skipped_duplicate", "blocked_quality", "failed", "succeeded", "upstream_failed")
 """The ``status`` a ``run.finished`` event reports. A pipeline run is ``published``, ``skipped_duplicate``,
@@ -755,6 +757,8 @@ class OpenLineageSink:
 
     def emit(self, event: RunEvent) -> None:
         """Fold the event into its run and send an OpenLineage event at start and finish."""
+        if not (event.type.startswith("run.") or event.type == "quality.evaluated"):
+            return  # workflow, maintenance and release events are not part of a run's lineage, and no run ends them
         key = (event.run_id, event.attempt)
         with self._lock:
             state = self._runs.setdefault(key, {})
@@ -1277,7 +1281,8 @@ def summarize_runs(events: Iterable[RunEvent], *, final_attempts_only: bool = Fa
         ``checks`` (``"passed/run"``). A run that belongs to a workflow also has the ``workflow``, its ``task_id`` and
         the ``workflow_run_id``, and the run of a workflow itself, which has ``workflow.started`` and
         ``workflow.finished`` events, has ``is_workflow`` true, the workflow's name as its ``pipeline`` and the
-        status of the workflow.
+        status of the workflow. The ``release.cut`` event of a table in a gold release is a run of its own with the
+        status ``released``, the ``snapshot_id`` of the table in the release and the name of the ``release``.
     """
     runs: dict[tuple[str, int], dict[str, Any]] = {}
     for event in sorted(events, key=lambda item: (item.run_id, item.attempt, item.seq)):
@@ -1285,7 +1290,7 @@ def summarize_runs(events: Iterable[RunEvent], *, final_attempts_only: bool = Fa
             "run_id": event.run_id, "attempt": event.attempt, "pipeline": None, "table": None,
             "started_at": event.ts, "status": "running", "rows_read": None, "rows_written": None,
             "snapshot_id": None, "idempotency_key": None, "duration_s": None, "checks": None,
-            "workflow": None, "task_id": None, "workflow_run_id": None, "is_workflow": False,
+            "workflow": None, "task_id": None, "workflow_run_id": None, "is_workflow": False, "release": None,
         })
         payload = event.payload
         run["pipeline"] = run["pipeline"] or payload.get("pipeline")
@@ -1303,6 +1308,11 @@ def summarize_runs(events: Iterable[RunEvent], *, final_attempts_only: bool = Fa
             run["snapshot_id"] = payload.get("snapshot_id", run["snapshot_id"])
             if "rows_written" in payload:
                 run["rows_written"] = payload["rows_written"]
+        elif event.type == "release.cut":
+            run["status"] = "released"
+            run["release"] = payload.get("release")
+            run["snapshot_id"] = payload.get("snapshot_id", run["snapshot_id"])
+            run["rows_written"] = None
         elif event.type in ("workflow.started", "workflow.finished"):
             run["is_workflow"] = True
             if event.type == "workflow.finished":
@@ -1597,11 +1607,14 @@ def _cmd_runs(args: Any) -> int:
     rows = []
     shown = summarize_runs(events, final_attempts_only=not args.attempts)[: args.limit]
     in_workflows = any(run["workflow"] for run in shown)
+    in_releases = any(run["release"] for run in shown)
     for run in shown:
         row = {"run_id": run["run_id"], "attempt": run["attempt"], "pipeline": run["pipeline"]}
         if in_workflows:  # a ledger that holds workflow runs says which workflow and task each run is
             row["workflow"] = run["workflow"]
             row["task"] = "(workflow)" if run["is_workflow"] else run["task_id"]
+        if in_releases:  # a run that cut a release says which one
+            row["release"] = run["release"]
         row.update({
             "started_utc": run["started_at"].replace(tzinfo=None).isoformat(sep=" ", timespec="seconds"),
             "status": run["status"], "rows_read": run["rows_read"], "rows_written": run["rows_written"],
@@ -1632,6 +1645,8 @@ def _event_detail(event: RunEvent) -> str:
         return f"{payload.get('stage')}: {payload.get('error_type')}: {_short(payload.get('message'), 80)}"
     if event.type == "run.finished":
         return f"status={payload.get('status')} duration_s={payload.get('duration_s')}"
+    if event.type == "release.cut":
+        return f"release={payload.get('release')} snapshot={payload.get('snapshot_id')} rows={payload.get('rows')}"
     if event.type == "workflow.started":
         return f"window={payload.get('window')} tasks={len(payload.get('tasks') or [])}"
     if event.type == "workflow.finished":

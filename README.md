@@ -179,6 +179,7 @@ ldp query rides.json "SELECT * FROM rides" --max-rows 20   # print at most 20 ro
 ldp query rides.json "SELECT count(*) FROM rides" --snapshot 4437   # an older snapshot, from ldp snapshots
 ldp query rides.json "SELECT count(*) FROM rides" --as-of "2026-07-31 23:59:59"   # the newest snapshot at or before that time (UTC)
 ldp query config/ "SELECT o.id FROM raw.orders o JOIN raw.customers c ON c.id = o.id"   # a folder of configs: every table, joinable
+ldp query config/ "SELECT count(*) FROM gold.daily_sales" --release r2   # the gold tables as release r2 names them
 ldp demo --workdir /tmp/ldp_demo                 # also --rows N (default 1000) and --seed N (default 42)
 ```
 
@@ -234,7 +235,8 @@ call:
 | `ldp mcp --config CONFIG ...` | Serve tables to an agent over MCP (stdio) | `python -m local_data_platform.mcp_server ...`, same options |
 | `ldp dbt init\|build\|test\|docs\|exec PROJECT_DIR` | Run a dbt project over your Iceberg tables; `build` writes the models marked `ldp_publish` back to Iceberg (needs the `dbt` extra) | `dbt_layer.register_sources(...)`, `dbt_layer.publish.plan_publish(...)` and `publish(...)` |
 | `ldp gold sync CONFIG [--dbt-manifest FILE] [--dry-run] [--json]` | Write the contract of a config (its `metadata.docs`) into its existing Iceberg table, with no new data. `--dbt-manifest` reads it from a dbt manifest, for a table that dbt built, and `--dry-run` only says what would change. See [Table contracts](#table-contracts) | `gold.sync.sync_config(path)`, `contracts.apply_contract(table, docs)` |
-| `ldp gold build DIR [--json]` | Build the gold tables of a folder in the order that their `inputs` say, and check the ones that are built elsewhere. One line for each table, and a gate that blocks a table stops the build with exit status 3. See [Build the gold tables](#build-the-gold-tables) | `gold.build.build_gold(folder)` |
+| `ldp gold build DIR [--no-release] [--json]` | Build the gold tables of a folder in the order that their `inputs` say, and check the ones that are built elsewhere. One line for each table, and a gate that blocks a table stops the build with exit status 3. When every table passed, it cuts a release, unless `--no-release` says not to. See [Build the gold tables](#build-the-gold-tables) | `gold.build.build_gold(folder, release=True)` |
+| `ldp gold releases DIR [--show RELEASE] [--json]` | List the releases of the gold tables of a folder, newest first, or the tables of one release. See [Release the gold tables](#release-the-gold-tables) | `gold.release.list_releases(folder)`, `current_release(folder)`, `snapshot_for(table, release)` |
 | `ldp spark CONFIG` | Run the Scala Spark job on a config's table (needs scala-cli) | `engine.spark.ScalaSparkJob` |
 
 ## Config schema
@@ -332,9 +334,10 @@ ldp runs .ldp/events.jsonl                                           # the workf
 ```
 
 - Each task has an `id`, an optional `depends_on`, and exactly one kind: `pipeline` (the path of a dataset config,
-  relative to the workflow file), `dbt` (a dbt project, built for the window, see below) or `maintain` (a config's Iceberg
-  table and the options of `ldp maintain`, a dry run unless `apply` is true). Later milestones add kinds without changing the
-  file format.
+  relative to the workflow file), `dbt` (a dbt project, built for the window, see below), `maintain` (a config's Iceberg
+  table and the options of `ldp maintain`, a dry run unless `apply` is true) or `gold` (the gold tables of a folder, built
+  for the window, with a release cut at the end, see [Release the gold tables](#release-the-gold-tables)). Later
+  milestones add kinds without changing the file format.
 - Tasks run one at a time, in dependency order. A pipeline task runs with the window of the workflow, so its idempotency key
   is the one `ldp plan CONFIG --window` prints.
 - A task that fails, or that a quality check blocks, makes the tasks that depend on it `upstream_failed`, and they do not run.
@@ -574,7 +577,10 @@ ldp gold build examples/robot_episodes/data
 gold_episode_stats  built          96 rows  snapshot 3844274472678295321  4 of 4 checks passed
 gold_robot_daily    built          16 rows  snapshot 1985638678580193697  2 of 2 checks passed
 gold build examples/robot_episodes/data: 2 built, 0 checked, 0 blocked, 0 failed, 0 not run in 0.6s
+release r1 cut with 2 tables and 112 rows in robots
 ```
+
+The last line is the release that the build cuts, see [Release the gold tables](#release-the-gold-tables).
 
 - A cycle between configs is refused before anything runs, and the message names it.
 - The build stops at the first table that a gate blocks or that fails, and the tables after it are `not run`, because
@@ -586,6 +592,58 @@ gold build examples/robot_episodes/data: 2 built, 0 checked, 0 blocked, 0 failed
   `on_failure` `warn`.
 - The runs are recorded in `_ldp.runs` and `_ldp.quality_results`, through the `iceberg` sink, unless the config names
   sinks of its own, so the freshness and the gate status of a gold table show in `describe_table` of `ldp mcp`.
+
+### Release the gold tables
+
+A gold table is rebuilt on its own, so two tables that are read at the same moment can come from different builds. A
+release fixes that. When every gold table of a build was built or checked, `ldp gold build` cuts release `r1`, and then
+`r2` and so on. A release names the snapshot that each gold table ended the build with, so a reader that reads the
+current release sees tables that agree. A build that a gate blocks cuts no release, and the last release stays current.
+The build says which release readers still see.
+
+```bash
+ldp gold build examples/robot_episodes/data       # builds, and then cuts a release
+ldp gold releases examples/robot_episodes/data    # the releases, newest first
+ldp gold releases examples/robot_episodes/data --show r1
+ldp query examples/robot_episodes/data "SELECT count(*) FROM robots.gold_episode_stats" --release r1
+```
+
+```text
+gold_episode_stats  built          96 rows  snapshot 7902942047508908069  4 of 4 checks passed
+gold_robot_daily    built          16 rows  snapshot 7453607785734378588  2 of 2 checks passed
+gold build examples/robot_episodes/data: 2 built, 0 checked, 0 blocked, 0 failed, 0 not run in 0.6s
+release r1 cut with 2 tables and 112 rows in robots
+```
+
+- A release is a file in the warehouse, `<warehouse>/.ldp/releases/<namespace>/r1.json`. It lists each table with its
+  snapshot, the dataset version that pins it, the run that built it and its rows. The file is written to a temporary
+  path and renamed, so a reader sees all of it or none of it.
+- Each table is pinned with `datasets.pin` as the dataset `<namespace>.<table>`, with the property `release=r1`. A pin
+  tags its snapshot, and snapshot expiry never removes a tagged snapshot, so `ldp maintain` keeps every released
+  snapshot. That keeps its files too, so a table that is rebuilt in full for each release keeps a copy for each of them.
+- A release covers one namespace of one warehouse, because that is where its file is. A folder whose gold tables are in
+  more than one is refused before anything is built. Give each its own folder, or build with `--no-release`.
+- A build that finds the tables at the snapshots of the current release, as a workflow does when it runs a window that
+  it already ran, cuts no new release.
+- `ldp query DIR SQL --release r1` reads the gold tables as r1 names them. A table that the release does not hold, and
+  a table in a namespace that has no releases, is read at its current snapshot. Without `--release`, `ldp query` reads the
+  tables as they are now.
+- Code that reads the gold layer asks for the release with `local_data_platform.gold.release`. `current_release(dir)`
+  gives the release readers see, `snapshot_for(table, release)` gives the snapshot to read, and `register_release(engine,
+  dir)` registers every gold table in a `DuckDBEngine` at its snapshot in the release. Pass `release="r1"` for an older
+  one and `live=True` to read the tables as they are.
+- `ldp runs` shows a release in the history of each table, as a run with the status `released`.
+
+A workflow can build and release the gold layer as one of its tasks, after the pipelines and the dbt project that
+feed it. The task is one line.
+
+```json
+{"id": "gold", "depends_on": ["orders", "dbt"], "gold": {"dir": "config"}}
+```
+
+The task builds the gold tables of `config` for the window of the run, as a pipeline task runs a config, so running the
+same window again finds the tables already published and cuts no second release. It ends `blocked_quality` when a gate
+holds a table back, and then no release is cut.
 
 ## Catalogs and object storage
 

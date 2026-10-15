@@ -597,7 +597,7 @@ def test_a_build_refuses_a_cycle_before_it_builds_anything(tmp_path, capsys):
 def test_a_build_runs_the_gold_configs_in_order_and_prints_a_line_for_each_table(tmp_path, capsys):
     chain(tmp_path)
 
-    assert main(["gold", "build", str(tmp_path)]) == 0
+    assert main(["gold", "build", str(tmp_path), "--no-release"]) == 0
 
     out = capsys.readouterr().out.splitlines()
     assert len(out) == 6
@@ -605,7 +605,7 @@ def test_a_build_runs_the_gold_configs_in_order_and_prints_a_line_for_each_table
         assert re.fullmatch(rf"{name}\s+built\s+2 rows\s+snapshot \d+\s+2 of 2 checks passed|"
                             rf"{name}\s+built\s+2 rows\s+snapshot \d+\s+no checks", line), line
     assert out[-1].startswith(f"gold build {tmp_path}: 5 built, 0 checked, 0 blocked, 0 failed, 0 not run in ")
-    assert [row["restaurant"] for row in rows(tmp_path, "c")] == ["north", "south"]
+    assert sorted(row["restaurant"] for row in rows(tmp_path, "c")) == ["north", "south"]
 
 
 @pytest.mark.usefixtures("reading")
@@ -641,7 +641,7 @@ def test_the_runs_of_a_build_are_recorded_in_the_ldp_namespace_through_the_icebe
     events = read_iceberg_events({"identifier": "gold", "warehouse_path": str(tmp_path / "warehouse")},
                                  pipeline="gold_revenue")
     assert [event.type for event in events] == ["run.started", "run.extracted", "quality.evaluated", "run.published",
-                                                "run.finished"]
+                                                "run.finished", "release.cut"]
     assert main(["runs", str(path)]) == 0
     assert "published" in capsys.readouterr().out
 
@@ -685,7 +685,8 @@ def test_a_gate_that_blocks_a_table_stops_the_build_and_the_tables_after_it_are_
     assert [line.split()[:2] for line in lines[:5]] == [["a", "built"], ["b", "blocked"], ["c", "not"], ["d", "not"],
                                                         ["z", "not"]]
     assert "1 of 1 checks failed (row_count)" in lines[1]
-    assert lines[-1].endswith("1 built, 0 checked, 1 blocked, 0 failed, 3 not run in " + lines[-1].split(" in ")[1])
+    assert lines[-2].endswith("1 built, 0 checked, 1 blocked, 0 failed, 3 not run in " + lines[-2].split(" in ")[1])
+    assert lines[-1] == "no release cut, because b was blocked. There is no release yet."
     assert "ldp: b blocked" in captured.err and "row_count" in captured.err
     assert table(tmp_path, "a").exists() and not table(tmp_path, "b").exists() and not table(tmp_path, "c").exists()
 

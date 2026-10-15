@@ -96,7 +96,9 @@ Each version is a JSON manifest in `<warehouse>/.ldp/datasets/<name>/`, and its 
 ldp snapshots examples/robot_episodes/data/gold_episode_stats.json
 ldp query examples/robot_episodes/data/silver_frames.json \
     "SELECT robot_id, count(*) AS frames, max(abs(skew_ms)) AS worst_skew_ms FROM silver_frames GROUP BY 1"
-ldp gold build examples/robot_episodes/data       # rebuild both gold tables, in order, and print a line for each
+ldp gold build examples/robot_episodes/data       # rebuild both gold tables, in order, and cut a release of them
+ldp gold releases examples/robot_episodes/data    # the releases, newest first
+ldp query examples/robot_episodes/data "SELECT count(*) FROM robots.gold_episode_stats" --release r1
 ldp run examples/robot_episodes/data/gold_episode_stats.json   # or run one of them alone
 ldp datasets list --warehouse examples/robot_episodes/data/warehouse
 ldp datasets export humanoid_train@v1 /tmp/train.jsonl --format jsonl --warehouse examples/robot_episodes/data/warehouse

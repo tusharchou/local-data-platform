@@ -6,11 +6,12 @@ does::
     {"id": "orders", "pipeline": "config/orders.json"}
     {"id": "tidy", "depends_on": ["orders"], "maintain": {"config": "config/orders.json", "expire": 7, "apply": true}}
 
-This milestone ships three kinds, ``pipeline`` (the path of a dataset config, relative to the workflow file),
-``maintain`` (the path of a dataset config and the options of ``ldp maintain``) and ``dbt`` (a dbt project, run for the
-window, which :mod:`local_data_platform.orchestration.dbt_task` describes). Each is a :class:`TaskKind` in a small
-registry, and :func:`register_task_kind` adds more. A later milestone adds a ``gold`` task and a ``report`` task the
-same way, and neither the runner nor the workflow file format changes.
+This module ships four kinds, ``pipeline`` (the path of a dataset config, relative to the workflow file), ``maintain``
+(the path of a dataset config and the options of ``ldp maintain``), ``dbt`` (a dbt project, run for the window, which
+:mod:`local_data_platform.orchestration.dbt_task` describes) and ``gold`` (the gold tables of a folder, built for the
+window with a release cut at the end, which :mod:`local_data_platform.orchestration.gold_task` describes). Each is a
+:class:`TaskKind` in a small registry, and :func:`register_task_kind` adds more. A later milestone adds a ``report``
+task the same way, and neither the runner nor the workflow file format changes.
 
 A kind says how its value is checked (``validate`` and ``json_schema``), what ``ldp workflow plan`` shows and checks
 about it (``plan``), and what it does when a workflow runs (``run``). ``run`` returns a :class:`TaskOutcome` and raises
@@ -292,9 +293,17 @@ def unregister_task_kind(name: str) -> TaskKind:
     return _KINDS.pop(name)
 
 
+BUILTIN_KINDS = ("pipeline", "maintain", "dbt", "gold")
+"""The kinds this package registers, in the order that the docs, the schema and the messages list them."""
+
+
 def task_kinds() -> list[str]:
-    """The registered kinds, in the order they were registered."""
-    return list(_KINDS)
+    """The registered kinds: the built-in ones in their fixed order, then the others in the order they were registered.
+
+    The order does not depend on which module of the package was imported first, because the kinds register
+    themselves when their modules are imported.
+    """
+    return sorted(_KINDS, key=lambda name: BUILTIN_KINDS.index(name) if name in BUILTIN_KINDS else len(BUILTIN_KINDS))
 
 
 def get_task_kind(name: str) -> TaskKind:
@@ -357,7 +366,8 @@ def _pipeline_schema() -> dict[str, Any]:
                            "prints."}
 
 
-def _plan_pipeline(task: Task, ctx: PlanContext) -> TaskPlan:
+def plan_pipeline(task: Task, ctx: PlanContext) -> TaskPlan:
+    """Plan a ``pipeline`` task: check its config and say what a run of the window would write."""
     from local_data_platform import spec
 
     path = ctx.resolve(task.value)
@@ -421,23 +431,34 @@ def replace_key_of(config: Any, bounds: Any) -> str:
     return spec.replace_key(spec.idempotency_key(config, bounds), spec.spec_hash(config))
 
 
-def _run_pipeline(task: Task, ctx: RunContext) -> TaskOutcome:
-    from local_data_platform.etl import load_config, run_config
-    from local_data_platform.events import sink_from_config
+def run_pipeline_config(config: Any, ctx: RunContext, sink: Any, *, run_id: str | None, attempt: int) -> Any:
+    """Run a dataset config for the window of a workflow run, as a ``pipeline`` task does, and return its result.
+
+    An Iceberg target is written under the idempotency key of the window, or under its replace key for a run that
+    replaces the window. Every run of the same window with the same ``run_id`` is a retry of it, and ``attempt`` fences
+    the ones before it. The ``gold`` task runs each gold config this way, each with a run id of its own.
+    """
+    from local_data_platform.etl import run_config
     from local_data_platform.pipeline.registry import create_pipeline
 
-    config = load_config(ctx.resolve(task.value))
-    sink = ctx.task_sink(task, sink_from_config(config))
     if str(config.target.get("format", "")).strip().upper() == "ICEBERG":
         mode, key = None, None
         if ctx.replace:  # the window is written again under the replace key, over the rows it already has
             mode, key = "overwrite", replace_key_of(config, ctx.bounds)
-        result = run_config(config, mode, window=ctx.bounds, idempotency_key=key, sink=sink, policy=ctx.policy,
-                            search_since_ms=ctx.search_since_ms, run_id=ctx.task_run_id, attempt=ctx.attempt)
-    else:
-        # A file target is replaced whole by every run, so it needs no key and cannot take one. The window still picks
-        # the source path and the rows that the run reads.
-        result = create_pipeline(config, window=ctx.bounds).run(sink=sink, run_id=ctx.task_run_id, attempt=ctx.attempt)
+        return run_config(config, mode, window=ctx.bounds, idempotency_key=key, sink=sink, policy=ctx.policy,
+                          search_since_ms=ctx.search_since_ms, run_id=run_id, attempt=attempt)
+    # A file target is replaced whole by every run, so it needs no key and cannot take one. The window still picks the
+    # source path and the rows that the run reads.
+    return create_pipeline(config, window=ctx.bounds).run(sink=sink, run_id=run_id, attempt=attempt)
+
+
+def _run_pipeline(task: Task, ctx: RunContext) -> TaskOutcome:
+    from local_data_platform.etl import load_config
+    from local_data_platform.events import sink_from_config
+
+    config = load_config(ctx.resolve(task.value))
+    sink = ctx.task_sink(task, sink_from_config(config))
+    result = run_pipeline_config(config, ctx, sink, run_id=ctx.task_run_id, attempt=ctx.attempt)
     detail = {"run_id": result.run_id, "idempotency_key": result.idempotency_key,
               "snapshot_id": result.published_snapshot_id, "rows_read": result.rows_read,
               "rows_written": result.rows_written}
@@ -548,19 +569,22 @@ def _run_maintain(task: Task, ctx: RunContext) -> TaskOutcome:
 
 
 register_task_kind(
-    "pipeline", validate=_validate_pipeline, json_schema=_pipeline_schema, plan=_plan_pipeline, run=_run_pipeline,
+    "pipeline", validate=_validate_pipeline, json_schema=_pipeline_schema, plan=plan_pipeline, run=_run_pipeline,
     emits_events=True, description="Run a dataset config for the window of the workflow run.")
 register_task_kind(
     "maintain", validate=_validate_maintain, json_schema=_maintain_schema, plan=_plan_maintain, run=_run_maintain,
     changes_data=False,
     description="Expire snapshots and find orphan files of a config's Iceberg table, as ldp maintain does.")
 
-# The dbt kind lives in its own module and registers itself when that is imported, which has to come last: the module
-# imports from this one. Importing it first works too, because this import finds it half loaded and goes on.
+# The dbt and gold kinds live in their own modules and register themselves when those are imported, which has to come
+# last: the modules import from this one. Importing one first works too, because this import finds it half loaded and
+# goes on.
 from local_data_platform.orchestration import dbt_task  # noqa: E402,F401
+from local_data_platform.orchestration import gold_task  # noqa: E402,F401
 
 
 __all__ = [
+    "BUILTIN_KINDS",
     "MAINTAIN_OPTIONS",
     "PlanContext",
     "RunContext",
@@ -574,8 +598,10 @@ __all__ = [
     "TaskPlan",
     "config_tables",
     "get_task_kind",
+    "plan_pipeline",
     "replace_key_of",
     "register_task_kind",
+    "run_pipeline_config",
     "task_kinds",
     "unregister_task_kind",
 ]
