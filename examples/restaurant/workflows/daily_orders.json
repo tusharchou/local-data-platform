@@ -1,0 +1,24 @@
+{
+  "apiVersion": "ldp/v1",
+  "kind": "Workflow",
+  "identifier": "daily_orders",
+  "metadata": {
+    "schedule": "5 2 * * *",
+    "window": {"size": "day"},
+    "retries": {"max_attempts": 2, "delay_s": 1}
+  },
+  "tasks": [
+    {"id": "orders", "pipeline": "orders.json"},
+    {"id": "order_lines", "pipeline": "order_lines.json"},
+    {
+      "id": "models",
+      "depends_on": ["orders", "order_lines"],
+      "dbt": {"project": "../dbt", "select": ["+revenue_by_restaurant_day", "stg_customers"]}
+    },
+    {
+      "id": "tidy",
+      "depends_on": ["models"],
+      "maintain": {"config": "orders.json", "expire": 7, "apply": true}
+    }
+  ]
+}

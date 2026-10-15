@@ -674,7 +674,7 @@ month       churn_rate  orders
 
 That is part 3. The models are tested, the loads are incremental, and every build can be read again as it was.
 
-Running `ldp dbt build` on a schedule, so that a new batch is loaded and built without you, is not part of this chapter. It is the subject of 0.1.3 Orchestration, in the [roadmap](roadmap.md#013-orchestration).
+Running `ldp dbt build` on a schedule, so that a new batch is loaded and built without you, is not part of this chapter. It is the subject of the [orchestration guide](orchestration.md), which runs this project as a task of a workflow.
 
 ## When something goes wrong
 
@@ -691,5 +691,6 @@ Running `ldp dbt build` on a schedule, so that a new batch is loaded and built w
 
 - [Warehousing with dbt](design/warehousing.md) is the design behind `ldp dbt`. It has the contract for sources, the publish step, the meta keys and the schema rules.
 - [`examples/restaurant`](https://github.com/tusharchou/local-data-platform/tree/main/examples/restaurant) has the generator, the configs, the dbt project and the `run.py` walkthrough that this chapter did by hand. `make demo-warehouse` runs it in about 25 seconds.
+- [Orchestrating with workflows, backfills and a scheduler](orchestration.md) runs the loads and the dbt build of this chapter every night, backfills a range of days and retries what failed.
 - [MCP server for agents](agents.md) shows how to give an AI agent read-only access to the tables you published, with `ldp mcp --config config`.
 - [Recipes](recipes.md) has more small tasks, such as copying an Excel sheet into a Google Drive folder.

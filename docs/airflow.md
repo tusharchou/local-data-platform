@@ -247,4 +247,4 @@ The last two rows are what Airflow 3.3.2 did. `airflow dags trigger` with a logi
 
 - [Exactly-once writes](exactly_once.md) explains the key, the run id, the attempt and the fence that this guide leans on.
 - The [contract](design/v0_1_1.md#airflow-013) lists the rules of the operator and its mapping.
-- `ldp schedule tick` runs windows without Airflow, with cron or launchd, and `ldp backfill` loads a range of windows. Both are in the [README](https://github.com/tusharchou/local-data-platform#use-it-from-the-command-line).
+- `ldp schedule tick` runs windows without Airflow, with cron or launchd, and `ldp backfill` loads a range of windows. The [orchestration guide](orchestration.md) walks through both on the same restaurant example.

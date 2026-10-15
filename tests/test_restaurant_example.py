@@ -174,6 +174,50 @@ def test_an_unknown_batch_is_refused(tmp_path, dataset):
         generate.write_batch(tmp_path, dataset, "batch3")
 
 
+def test_a_drop_is_the_orders_of_a_day_and_lines_that_carry_the_time_of_their_order(tmp_path, dataset):
+    orders, lines = generate.write_drop(tmp_path, dataset, dt.date(2026, 8, 3))
+
+    assert (orders.name, lines.name) == ("orders_2026-08-03.csv", "order_lines_2026-08-03.csv")
+    placed = {row["order_id"]: row["order_ts"] for row in read_csv(orders)}
+    assert len(placed) == 7 and all(stamp.startswith("2026-08-03 ") for stamp in placed.values())
+    rows = read_csv(lines)
+    assert len(rows) == 20 and list(rows[0]) == list(generate.DROP_LINE_COLUMNS)
+    assert all(row["order_ts"] == placed[row["order_id"]] for row in rows), "a line has the time of its order"
+    assert all(re.fullmatch(r"\d+\.\d\d", row["unit_price"]) for row in rows)  # a decimal point in every price
+    assert generate.write_drop(tmp_path, dataset, "2026-08-04")[0].name == "orders_2026-08-04.csv"
+
+
+@pytest.mark.parametrize("day", ["batch1", "2026-07-31", "2026-08-08", dt.date(2026, 8, 8), ""])
+def test_a_day_without_a_drop_is_refused(tmp_path, dataset, day):
+    with pytest.raises(ValueError, match="unknown drop .*; the drops are .*2026-08-01.*2026-08-07"):
+        generate.write_drop(tmp_path, dataset, day)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_seven_drops_hold_the_30_orders_of_august_and_each_line_has_its_order_ts(tmp_path, dataset):
+    generate.write_all(tmp_path, dataset)
+
+    drops = [read_csv(tmp_path / f"orders_2026-08-0{day}.csv") for day in range(1, 8)]
+    lines = [read_csv(tmp_path / f"order_lines_2026-08-0{day}.csv") for day in range(1, 8)]
+    assert [len(rows) for rows in drops] == [3, 4, 7, 7, 1, 3, 5] and sum(map(len, drops)) == 30
+    assert all(list(rows[0]) == list(generate.DROP_LINE_COLUMNS) for rows in lines)
+    batch = read_csv(tmp_path / "order_lines_batch1.csv")
+    assert list(batch[0]) == list(generate.LINE_COLUMNS), "the batches keep the columns they had"
+
+
+def test_the_dimensions_are_written_as_csv_and_need_no_excel_reader(tmp_path, dataset, monkeypatch):
+    monkeypatch.setitem(sys.modules, "openpyxl", None)  # an import of it fails, as if the excel extra were missing
+
+    written = generate.write_dimensions(tmp_path, dataset)
+
+    assert [path.name for path in written] == ["restaurants.csv", "customers.csv"]
+    restaurants = read_csv(tmp_path / "restaurants.csv")
+    assert list(restaurants[0]) == ["restaurant_id", "name", "location", "cuisine", "created_at"]
+    assert len(restaurants) == 6 and len(read_csv(tmp_path / "customers.csv")) == 150
+    assert restaurants[0]["created_at"] == dataset.restaurants[0]["created_at"].strftime("%Y-%m-%d %H:%M:%S")
+
+
 def test_the_restaurant_workbook_has_a_title_row_and_an_about_sheet_first(tmp_path, dataset):
     path = generate.write_restaurants_xlsx(tmp_path / "restaurants.xlsx", dataset)
 
@@ -251,11 +295,12 @@ def test_a_batch_with_an_unknown_channel_is_stopped_by_the_ingest_checks(workdir
 # --------------------------------------------------------------------------- the work folder and the command line
 
 
-def test_the_work_folder_gets_the_configs_and_the_dbt_project(workdir):
+def test_the_work_folder_gets_the_configs_the_dbt_project_and_the_workflow_files(workdir):
     assert (workdir / run.MARKER).is_file()
     assert sorted(path.stem for path in (workdir / "config").glob("*.json")) == sorted(INGEST_CONFIGS)
     assert (workdir / "dbt" / "ldp_dbt.json").is_file() and (workdir / "dbt" / "models" / "schema.yml").is_file()
     assert not (workdir / "dbt" / "target").exists()
+    assert (workdir / "workflows" / "daily_orders.json").is_file()
 
 
 def test_running_again_clears_what_the_example_made_and_nothing_else(tmp_path):
@@ -313,7 +358,7 @@ def test_a_failing_ldp_step_ends_the_example_with_a_message_and_exit_1(tmp_path,
 
 
 def test_an_unknown_layer_is_refused(tmp_path):
-    with pytest.raises(ValueError, match=r"unknown layer 'gold'; the layers are \['warehouse'\]"):
+    with pytest.raises(ValueError, match=r"unknown layer 'gold'; the layers are \['warehouse', 'orchestration'\]"):
         run.run_restaurant(tmp_path / "work", layer="gold", quiet=True)
     with pytest.raises(SystemExit):
         run.main(["--layer", "gold"])
@@ -442,3 +487,14 @@ def test_the_makefile_has_the_warehouse_demo_and_demo_all_runs_it_only_when_it_c
     assert "WAREHOUSE_DIR ?= $(DEMO_DIR)/restaurant" in makefile
     assert "demo-warehouse Run the restaurant example's warehouse layer" in makefile
     assert 'import dbt.cli.main, dbt.adapters.duckdb, openpyxl' in makefile and "Skipping demo-warehouse" in makefile
+
+
+def test_the_makefile_has_the_orchestration_demo_and_demo_all_runs_it_with_or_without_dbt():
+    makefile = (REPO_ROOT / "Makefile").read_text()
+    demo_all = makefile.split("\ndemo-all:", 1)[1].split("\ncheck-scala-cli:", 1)[0]
+
+    assert "demo-orchestration: $(DEMO_CONFIG)" in makefile
+    assert "examples/restaurant/run.py --workdir $(WAREHOUSE_DIR) --layer orchestration" in makefile
+    assert "demo-orchestration Run the restaurant example's orchestration layer" in makefile
+    assert "demo-orchestration" in makefile.split(".PHONY:", 1)[1].split("\n\n", 1)[0]
+    assert "\t$(MAKE) demo-orchestration\n" in demo_all, "it runs whether or not dbt is installed"
