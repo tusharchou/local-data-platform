@@ -948,4 +948,4 @@ def test_the_dbt_kind_is_registered_whichever_module_of_orchestration_is_importe
     done = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=120, check=False)
 
     assert done.returncode == 0, done.stderr
-    assert done.stdout.strip() == "['pipeline', 'maintain', 'dbt']"
+    assert done.stdout.strip() == "['pipeline', 'maintain', 'dbt', 'gold']"

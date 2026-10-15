@@ -38,7 +38,8 @@ _MOMENT_EXAMPLE = "'2026-07-31 23:59:59' or '2026-07-31T23:59:59+07:00'"
 
 
 def open_lake(path: str | os.PathLike | Iterable[str | os.PathLike], *, install_extensions: bool = False,
-              snapshot_id: int | None = None, as_of: str | dt.datetime | None = None) -> DuckDBEngine:
+              snapshot_id: int | None = None, as_of: str | dt.datetime | None = None,
+              release: str | None = None) -> DuckDBEngine:
     """Register every Iceberg table that some dataset configs name, in one DuckDB engine.
 
     Args:
@@ -49,6 +50,9 @@ def open_lake(path: str | os.PathLike | Iterable[str | os.PathLike], *, install_
         as_of: Read the newest snapshot committed at or before this time instead of the current one: a
             ``datetime``, or ISO 8601 text such as ``"2026-07-31 23:59:59"``. A time with no offset is UTC.
             Only for a lake of one table.
+        release: Read the gold tables as a release names them, such as ``"r2"``, see
+            :mod:`local_data_platform.gold.release`. A table that the release holds is read at its snapshot there. A
+            table that it does not hold, or that is in a namespace with no releases, is read at its current snapshot.
 
     Returns:
         The engine, open. Close it, or use it in a ``with`` block. Every table is registered as
@@ -59,7 +63,10 @@ def open_lake(path: str | os.PathLike | Iterable[str | os.PathLike], *, install_
         ConfigError: If a path does not exist or an explicitly named config is invalid, if both
             ``snapshot_id`` and ``as_of`` are given, if either is given and there is more than one table, if
             ``snapshot_id`` is not a snapshot of the table (the message lists the ones that are), or if
-            ``as_of`` is not a time or is before the table's first snapshot.
+            ``as_of`` is not a time or is before the table's first snapshot, or if ``release`` is given with either of
+            them.
+        ReleaseError: If ``release`` names a release that a namespace of the tables does not have, or none of the
+            tables is in a namespace that has releases.
         TableNotFound: If the configs name no table that exists.
         EngineNotFound: If DuckDB is not installed.
     """
@@ -78,13 +85,16 @@ def open_lake(path: str | os.PathLike | Iterable[str | os.PathLike], *, install_
             tables = discovery.tables
             if not tables:
                 raise _no_tables(paths, discovery.unavailable)
+            if release is not None and (snapshot_id is not None or as_of is not None):
+                raise ConfigError("pass one of a release, a snapshot or a time, not more than one")
             if (snapshot_id is not None or as_of is not None) and len(tables) > 1:
                 names = ", ".join(table.identifier for table in tables[:5]) + (", ..." if len(tables) > 5 else "")
                 raise ConfigError(f"a snapshot or a time applies to one table, but {len(tables)} were found "
                                   f"({names}); pass a single config that names one table")
             names = Counter(table.name for table in tables)
+            released = _release_snapshots(tables, release) if release is not None else {}
             for table in tables:
-                _register(engine, table, names[table.name] == 1, snapshot_id, as_of)
+                _register(engine, table, names[table.name] == 1, released.get(table.identifier, snapshot_id), as_of)
         finally:
             discovery.close()
     except BaseException:
@@ -92,6 +102,30 @@ def open_lake(path: str | os.PathLike | Iterable[str | os.PathLike], *, install_
         raise
     logger.info("Opened a lake of %d tables from %d paths", len(tables), len(paths))
     return engine
+
+
+def _release_snapshots(tables: list[ExposedTable], name: str) -> dict[str, int]:
+    """The snapshot of each table in release ``name``, for the tables that the release holds.
+
+    A namespace is looked at where its catalog keeps its warehouse. One that has no releases at all, such as a silver
+    namespace, has nothing to say, and its tables are read as they are. One that has releases has to have ``name``.
+    """
+    from local_data_platform.gold.release import ReleaseError, ReleaseScope, release_in, releases_in
+
+    scopes: dict[ReleaseScope, None] = {}
+    for table in tables:
+        if table.catalog.warehouse is not None:
+            scopes[ReleaseScope(table.catalog.warehouse, ".".join(table.namespace))] = None
+    snapshots: dict[str, int] = {}
+    found = False
+    for scope in scopes:
+        if releases_in(scope):
+            found = True
+            snapshots.update(release_in(scope, name).snapshots())
+    if not found:
+        raise ReleaseError("none of the tables is in a release, because no namespace of them has one. "
+                           "ldp gold build cuts a release of the gold tables")
+    return snapshots
 
 
 def _no_tables(paths: list, unavailable: list[dict[str, str]]) -> TableNotFound:
@@ -107,8 +141,6 @@ def _no_tables(paths: list, unavailable: list[dict[str, str]]) -> TableNotFound:
 def _register(engine: DuckDBEngine, exposed: ExposedTable, unique: bool, snapshot_id: int | None,
               as_of: str | dt.datetime | None) -> None:
     """Register one table as ``namespace.table`` (and as its bare name when ``unique``) in ``engine``."""
-    from local_data_platform.engine.duckdb.row_filter import quote_identifier
-
     table = exposed.load()
     snapshot = pick_snapshot([(item.snapshot_id, item.timestamp_ms) for item in table.snapshots()],
                              snapshot_id=snapshot_id, as_of=as_of, table=exposed.identifier)
@@ -116,15 +148,23 @@ def _register(engine: DuckDBEngine, exposed: ExposedTable, unique: bool, snapsho
         engine.register_iceberg(table, exposed.identifier, snapshot_id=snapshot)
     except ValueError as error:  # an unknown snapshot id: the message lists the ones that exist
         raise ConfigError(str(error)) from error
-    # The engine names the view "namespace.table", one identifier. Views in a schema make namespace.table work
-    # unquoted in SQL, and a view in main makes the bare name work.
-    namespace = ".".join(exposed.namespace) or "main"
-    schema, source = quote_identifier(namespace), quote_identifier(exposed.identifier)
+    name_views(engine, exposed.identifier, ".".join(exposed.namespace) or "main", exposed.name, unique)
+
+
+def name_views(engine: DuckDBEngine, identifier: str, namespace: str, name: str, unique: bool = True) -> None:
+    """Make a table that is registered as ``identifier`` work as ``namespace.table`` in SQL, and by its bare name.
+
+    The engine names the view ``namespace.table``, one identifier. Views in a schema make ``namespace.table`` work
+    unquoted in SQL, and a view in ``main`` makes the bare name work, which is left out when ``unique`` is false.
+    """
+    from local_data_platform.engine.duckdb.row_filter import quote_identifier
+
+    schema, source = quote_identifier(namespace), quote_identifier(identifier)
     connection = engine.connection
     connection.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
-    connection.execute(f"CREATE OR REPLACE VIEW {schema}.{quote_identifier(exposed.name)} AS SELECT * FROM {source}")
+    connection.execute(f"CREATE OR REPLACE VIEW {schema}.{quote_identifier(name)} AS SELECT * FROM {source}")
     if unique and namespace != "main":
-        connection.execute(f"CREATE OR REPLACE VIEW main.{quote_identifier(exposed.name)} AS SELECT * FROM {source}")
+        connection.execute(f"CREATE OR REPLACE VIEW main.{quote_identifier(name)} AS SELECT * FROM {source}")
 
 
 def parse_moment(value: str | dt.datetime) -> dt.datetime:

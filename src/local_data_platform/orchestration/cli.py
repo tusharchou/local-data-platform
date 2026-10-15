@@ -159,7 +159,7 @@ def _print_plan(result: dict[str, Any]) -> None:
         for task in result["tasks"]:
             row = {"order": task["order"], "id": task["id"], "kind": task["kind"],
                    "depends_on": ", ".join(task["depends_on"]) or "-",
-                   "runs": task.get("config") or task.get("project") or "-",
+                   "runs": task.get("config") or task.get("project") or task.get("dir") or "-",
                    "target": task.get("target") or task.get("table") or "-",
                    "key": _short(task.get("idempotency_key")) or "-"}
             if retried:  # the most attempts a task gets, which is 1 for a task that is not retried
@@ -207,6 +207,18 @@ def _print_result(result: Any) -> None:
             if isinstance(item, dict):  # the tables a dbt task wrote, as `ldp dbt build` prints them
                 _out(f"{task.id} published {item['table']}: {item['mode']}, {item['rows_before']} -> "
                      f"{item['rows_after']} rows, snapshot {item['snapshot_id']}")
+        if task.kind == "gold" and task.detail.get("tables"):  # the tables that a gold task built, and its release
+            for item in task.detail["tables"]:
+                if item.get("run_status") == "skipped_duplicate":
+                    _out(f"{task.id} skipped {item['table']}: the window was already published, "
+                         f"snapshot {_cell(item.get('snapshot_id'))}")
+                else:
+                    _out(f"{task.id} {item['status']} {item['table']}: {_cell(item.get('rows'))} rows, "
+                         f"snapshot {_cell(item.get('snapshot_id'))}")
+            if task.detail.get("release"):
+                cut = task.detail.get("release_cut")
+                _out(f"{task.id} " + (f"cut release {task.detail['release']}" if cut
+                                      else f"cut no release, and {task.detail['release']} is current"))
     counted = ", ".join(f"{count} {status}" for status, count in result.counts().items())
     _out(f"{result.status}: {counted} in {result.duration_s:.1f}s. Events: {result.ledger}")
     for task in result.tasks.values():

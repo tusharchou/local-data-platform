@@ -31,13 +31,16 @@ run.started ─► run.extracted ─► quality.evaluated ─┬─► run.publi
   [Workflow runs](#workflow-runs).
 - `run.finished` always comes last and carries the final `status`: `published`,
   `skipped_duplicate`, `blocked_quality` or `failed`.
+- A gold release is not a run of a job. `ldp gold build` records it with one `release.cut` event for each table of the
+  release, as a run of its own that has the table's pipeline name, so `ldp runs` shows the release in the history of the
+  table with the status `released`. The OpenLineage sink leaves it alone.
 
 Each event is a `RunEvent`:
 
 | Field | Meaning |
 |---|---|
 | `event_id` | A UUIDv7, unique per event |
-| `type` | One of the types above (`table.maintained` and `run.staged` are reserved) |
+| `type` | One of the types above (`table.maintained` and `run.staged` are reserved), or `release.cut` |
 | `schema_version` | The envelope version, `1` |
 | `ts` | When it happened, in UTC |
 | `run_id` | The run's UUIDv7. `PipelineResult.run_id` is the same value |
@@ -61,6 +64,7 @@ depends on the type:
 | `run.blocked_quality` | `checks_failed`, `failures` (check names, and `contract` when the contract of a gold table does not hold), `on_failure`, and `contract_problems` (one sentence for each problem) |
 | `run.failed` | `stage` (`search`, `extract`, `transform`, `validate`, `contract`, `write`), `error_type`, `message` |
 | `run.finished` | `status`, `duration_s`, `rows_read`, `rows_written`, `published_snapshot_id`, `idempotency_key`, `quality_passed`, and `contract_passed` (false) when the contract blocked the run. A task of a workflow that did not run a pipeline has `succeeded`, `failed` or `upstream_failed` as its `status`, and `upstream_failed` adds `blocked_by`, the ids of the tasks that did not succeed |
+| `release.cut` | `release` (such as `r3`), `namespace`, `snapshot_id` and `rows` of the table in the release, `dataset` and `dataset_version` (the pin), `status` (`built` or `checked`), `tables` (how many the release holds), and `window` for a release that a workflow cut |
 | `workflow.started` | `workflow` and `pipeline` (the workflow's identifier), `workflow_run_id`, `window` (start and end), `schedule`, `tasks` (the `id`, `kind` and `depends_on` of each, in the order they run, and `max_attempts` for a task that is retried), `ldp_version`, and `replace` (true) when the run replaces the window, as `ldp backfill --replace` does |
 | `workflow.finished` | `status` (`succeeded`, `blocked_quality` when a data gate is the only problem, or `failed`), `duration_s`, `counts` (tasks per status), `tasks` (the status of each task) |
 

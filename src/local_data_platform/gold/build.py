@@ -11,6 +11,10 @@ A build stops at the first table that fails or that a gate blocks, because the t
 not write. The runs record their events through the ``iceberg`` sink, in the ``_ldp`` namespace of the catalog of each
 table, unless the config names sinks of its own, so the freshness and the gate status of a gold table show in
 ``describe_table`` of ``ldp mcp``.
+
+When every table was built or checked, the build can cut a release, which is :mod:`local_data_platform.gold.release`.
+A release names the snapshot that each gold table ended the build with, so a reader that reads the current release
+sees tables that agree. A build that stops cuts none, and the last release stays current.
 """
 
 from __future__ import annotations
@@ -22,12 +26,15 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from local_data_platform import Config
 from local_data_platform.exceptions import ConfigError, DataQualityError, TableNotFound
 from local_data_platform.paths import resolve_path
 from local_data_platform.spec import DEFAULT_KIND, kind_of_file
+
+if TYPE_CHECKING:
+    from local_data_platform.gold.release import ReleaseContext, ReleaseOutcome
 
 BUILT, CHECKED, BLOCKED, FAILED, NOT_RUN = "built", "checked", "blocked", "failed", "not run"
 """How a table ended: built here, checked because it is built elsewhere, held back by a gate, failed, or not reached."""
@@ -87,7 +94,7 @@ class TableOutcome:
         """The outcome as JSON-serialisable primitives."""
         return {"config": self.gold.config.identifier, "file": self.gold.path.name, "table": self.gold.table,
                 "status": self.status, "rows": self.rows, "snapshot_id": self.snapshot_id, "gate": self.gate,
-                "error": self.error}
+                "error": self.error, "run_status": getattr(self.result, "status", None)}
 
 
 @dataclass
@@ -98,11 +105,13 @@ class BuildResult:
         folder: The folder.
         tables: One outcome for each gold config, in the order they were to be built.
         duration_s: How long the build took.
+        release: What the build did about its release, or ``None`` when it was not asked to cut one.
     """
 
     folder: Path
     tables: list[TableOutcome] = field(default_factory=list)
     duration_s: float = 0.0
+    release: ReleaseOutcome | None = None
 
     @property
     def stopped_by(self) -> TableOutcome | None:
@@ -111,10 +120,13 @@ class BuildResult:
 
     @property
     def exit_code(self) -> int:
-        """0 when every table was built or checked, 3 when a gate held a table back, 1 for any other failure."""
+        """0 when every table was built or checked, 3 when a gate held a table back, 1 for any other failure.
+
+        A release that could not be cut is a failure too, though every table was built.
+        """
         stopped = self.stopped_by
         if stopped is None:
-            return 0
+            return 1 if self.release is not None and self.release.error else 0
         return 3 if stopped.status == BLOCKED else 1
 
     def counts(self) -> dict[str, int]:
@@ -125,7 +137,8 @@ class BuildResult:
     def to_dict(self) -> dict[str, Any]:
         """The result as JSON-serialisable primitives."""
         return {"folder": str(self.folder), "counts": self.counts(), "exit_code": self.exit_code,
-                "duration_s": round(self.duration_s, 3), "tables": [item.to_dict() for item in self.tables]}
+                "duration_s": round(self.duration_s, 3), "tables": [item.to_dict() for item in self.tables],
+                "release": self.release.to_dict() if self.release is not None else None}
 
 
 # --------------------------------------------------------------------------- finding and ordering
@@ -214,7 +227,7 @@ def _describe_cycle(reads: Mapping[Path, list[Path]], remaining: list[Path]) -> 
 # --------------------------------------------------------------------------- building
 
 
-def _with_events(config: Config) -> Config:
+def with_events(config: Config) -> Config:
     """The config with the ``iceberg`` sink when it names no sinks, so the run is recorded next to its table."""
     if "observability" in config.metadata:
         return config
@@ -264,27 +277,61 @@ def check_built_elsewhere(gold: GoldConfig) -> TableOutcome:
     return outcome
 
 
-def build_gold(folder: str | os.PathLike, *, on_table: Callable[[TableOutcome], None] | None = None) -> BuildResult:
+def _finish_release(result: BuildResult, scope: Any, context: ReleaseContext,
+                    sink_for: Callable[[GoldConfig], Any] | None) -> ReleaseOutcome:
+    """Cut the release of a build that did not stop, and say what readers still see when none could be cut."""
+    from local_data_platform.gold import release as releases
+
+    known = releases.releases_in(scope)
+    current = known[0] if known else None
+    stopped = result.stopped_by
+    if stopped is not None:
+        return releases.ReleaseOutcome(current, cut=False, note=f"{stopped.gold.config.identifier} "
+                                       f"{'was blocked' if stopped.status == BLOCKED else 'failed'}")
+    try:
+        return releases.cut_release(result.tables, context=context, sink_for=sink_for)
+    except releases.ReleaseError as error:
+        return releases.ReleaseOutcome(current, cut=False, error=str(error))
+
+
+def build_gold(folder: str | os.PathLike, *, on_table: Callable[[TableOutcome], None] | None = None,
+               run: Callable[[GoldConfig], Any] | None = None, release: bool | ReleaseContext = False,
+               sink_for: Callable[[GoldConfig], Any] | None = None) -> BuildResult:
     """Build the gold tables of a folder, in order, and check the ones that are built elsewhere.
 
     Args:
         folder: A folder of dataset configs.
         on_table: Called with the outcome of each table as soon as it is known, so a long build shows progress. The
             tables that the build never reached are reported too, after the one that stopped it.
+        run: Runs one gold config and returns its :class:`~local_data_platform.pipeline.PipelineResult`. By default the
+            config runs as ``ldp run`` runs it, with the ``iceberg`` sink added when it names no sinks. A workflow
+            passes a function that runs it for the window of the workflow run.
+        release: Cut a release when every table was built or checked. ``True`` cuts one, and a
+            :class:`~local_data_platform.gold.release.ReleaseContext` also says what run cuts it. The gold tables have
+            to be in one namespace of one warehouse, which is checked before anything is built.
+        sink_for: Returns the event sink for the ``release.cut`` event of a table, see
+            :func:`~local_data_platform.gold.release.cut_release`.
 
     Returns:
         The :class:`BuildResult`. It does not raise for a table that failed or that a gate blocked.
 
     Raises:
         ConfigError: If a config is not valid, the configs read each other in a cycle, or there is no gold config.
+        ReleaseError: If a release is wanted and the gold tables are not in one namespace of one warehouse.
     """
     from local_data_platform.etl import run_config
+    from local_data_platform.gold import release as releases
 
     started = time.perf_counter()
     ordered = order_gold(find_gold(folder))
     root = resolve_path(folder)
     if not ordered:
         raise ConfigError(f"{root} has no gold config. A gold config has metadata.docs.layer set to gold")
+    context = None
+    scope = None
+    if release:
+        context = release if isinstance(release, releases.ReleaseContext) else releases.ReleaseContext()
+        scope = releases.release_scope(ordered)
     result = BuildResult(folder=root)
 
     def done(outcome: TableOutcome) -> None:
@@ -298,9 +345,9 @@ def build_gold(folder: str | os.PathLike, *, on_table: Callable[[TableOutcome], 
             continue
         try:
             if gold.built_here:
-                run = run_config(_with_events(gold.config))
-                done(TableOutcome(gold, BUILT, rows=run.rows_written,
-                                  snapshot_id=run.published_snapshot_id, gate=_gate(run.quality), result=run))
+                ran = run(gold) if run is not None else run_config(with_events(gold.config))
+                done(TableOutcome(gold, BUILT, rows=ran.rows_written,
+                                  snapshot_id=ran.published_snapshot_id, gate=_gate(ran.quality), result=ran))
             else:
                 done(check_built_elsewhere(gold))
         except DataQualityError as error:
@@ -309,9 +356,11 @@ def build_gold(folder: str | os.PathLike, *, on_table: Callable[[TableOutcome], 
                               "the contract does not hold", error=str(error)))
         except Exception as error:  # noqa: BLE001 - reported with the table, and the build stops
             done(TableOutcome(gold, FAILED, error=f"{type(error).__name__}: {error}"))
+    if scope is not None:
+        result.release = _finish_release(result, scope, context, sink_for)
     result.duration_s = time.perf_counter() - started
     return result
 
 
 __all__ = ["BLOCKED", "BUILT", "BuildResult", "CHECKED", "FAILED", "GoldConfig", "NOT_RUN", "TableOutcome",
-           "build_gold", "check_built_elsewhere", "find_gold", "order_gold"]
+           "build_gold", "check_built_elsewhere", "find_gold", "order_gold", "with_events"]
