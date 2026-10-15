@@ -165,6 +165,7 @@ customers and orders. The menu, order lines and reviews wait for the layers that
 | `config/` | The four ingest configs. `run.py` copies them into the work folder, and `ldp dbt` writes the published models' configs next to them |
 | `dbt/` | The dbt project: `dbt_project.yml`, `profiles.yml`, `ldp_dbt.json`, the models, `schema.yml` and a singular test |
 | `run.py` | The narrated walkthrough |
+| `airflow_dag.py` | A one-task Airflow 3 DAG that loads the daily drops, one data interval at a time. [The Airflow guide](../../docs/airflow.md) runs it |
 | `PRD.md` | The product requirements, and the tables of the example |
 
 The work folder gets `landing/`, `warehouse/`, `config/` and `dbt/`, and a marker file. `run.py` clears those folders on

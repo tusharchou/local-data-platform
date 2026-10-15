@@ -432,6 +432,34 @@ ldp schedule install --print launchd ldp_demo/restaurant > ~/Library/LaunchAgent
 - From Python, `from local_data_platform.orchestration.schedule import tick, list_scheduled` does the same. The
   [contract](docs/design/v0_1_1.md#schedules-013) has the rest.
 
+### Run from Airflow
+
+A team that already runs Apache Airflow 3 can run a config as a task. `LdpRunOperator` takes the data interval of the DAG run
+as the window, `ti.try_number` as the attempt, and a run id made of the DAG id, the run id of the DAG run and the task id. So
+a retry by Airflow is the next attempt of the same run, a backfill over a day that is in the table finds the key and writes
+nothing, and a day is loaded once however Airflow got to it. The [guide](docs/airflow.md) installs Airflow, runs the daily
+drops of the restaurant example from `examples/restaurant/airflow_dag.py`, and retries a late drop. Its commands, in short, are these.
+
+```bash
+export LDP_AIRFLOW_DEMO="$PWD/ldp_demo/airflow/data"
+python examples/restaurant/airflow_dag.py --prepare "$LDP_AIRFLOW_DEMO"   # the seven daily drops and a windowed orders config
+airflow standalone                                                        # terminal 1, with the DAG file in its dags folder
+airflow dags unpause restaurant_orders                                    # terminal 2, catches up seven days one after the other
+ldp commits "$LDP_AIRFLOW_DEMO/config/orders.json"                        # terminal 2, one publish for each day
+```
+
+- The window is `(data_interval_start, data_interval_end)`, so the key of an interval is the one
+  `ldp plan CONFIG --window START/END` prints for it.
+- A data gate that holds a run back, and a config that cannot run, fail the task with `AirflowFailException`, so Airflow does
+  not retry them. A skipped duplicate succeeds, and the `PipelineResult` as a dict is the XCom of the task. Any other error is
+  left to the `retries` of the task.
+- Give the DAG a `CronDataIntervalTimetable("@daily", timezone="UTC")` as its schedule and not the string `"@daily"`. Airflow 3
+  makes a trigger timetable for a cron string, whose runs have an empty data interval, and the operator fails them and says why.
+- The mapping is plain Python and Airflow is imported when the operator is used, so `local_data_platform.integrations.airflow`
+  imports without it. There is no extra for it, because Airflow has to be installed with its own constraints file. Airflow 3.1.7
+  and later install next to LDP, and a team that cannot do that runs `ldp run CONFIG --window ... --run-id ... --attempt ...`
+  from a BashOperator, which the guide shows. The [contract](docs/design/v0_1_1.md#airflow-013) has the rest.
+
 ### A DuckDB file as a source
 
 A `DUCKDB` source reads one table, or the result of one query, from a DuckDB database file and
