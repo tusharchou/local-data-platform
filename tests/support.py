@@ -127,15 +127,20 @@ def write_dbt_project(folder: Path, models: dict[str, str], *, schema_yml: str |
 
 
 def dbt_model(name, *, materialized="table", unique_key=None, meta=None, schema="main", alias=None, description="",
-              depends_on=(), columns=None, tags=()):
-    """A model node as dbt 1.12 writes it to ``manifest.json``. ``columns`` maps a column name to its description."""
+              depends_on=(), columns=None, tags=(), reads=()):
+    """A model node as dbt 1.12 writes it to ``manifest.json``.
+
+    ``columns`` maps a column name to its description, ``depends_on`` names the models it reads, and ``reads`` names the
+    sources it reads, each as ``"<schema>.<table>"``.
+    """
     return {
         "unique_id": f"model.shop.{name}", "resource_type": "model", "name": name, "alias": alias or name,
         "schema": schema, "description": description, "tags": list(tags),
         "columns": {column: {"name": column, "description": text} for column, text in (columns or {}).items()},
         "config": {"materialized": materialized, "unique_key": unique_key, "meta": dict(meta or {})},
         "meta": dict(meta or {}),
-        "depends_on": {"macros": [], "nodes": [f"model.shop.{parent}" for parent in depends_on]},
+        "depends_on": {"macros": [], "nodes": [*[f"model.shop.{parent}" for parent in depends_on],
+                                               *[f"source.shop.{source}" for source in reads]]},
     }
 
 
@@ -147,9 +152,16 @@ TOTALS_DOCS = {"description": "Orders and revenue.",
 """The description and the column descriptions that a gold model with the columns ``orders`` and ``revenue`` needs."""
 
 
-def dbt_artifacts(*models, statuses=None, args=None):
-    """``(manifest, run_results)`` for ``models``; every model succeeded unless ``statuses`` says otherwise."""
-    manifest = {"metadata": {"project_name": "shop"}, "nodes": {node["unique_id"]: node for node in models}}
+def dbt_artifacts(*models, statuses=None, args=None, sources=()):
+    """``(manifest, run_results)`` for ``models``; every model succeeded unless ``statuses`` says otherwise.
+
+    ``sources`` lists the sources of the manifest as ``"<schema>.<table>"``.
+    """
+    manifest = {"metadata": {"project_name": "shop"}, "nodes": {node["unique_id"]: node for node in models},
+                "sources": {f"source.shop.{source}": {
+                    "unique_id": f"source.shop.{source}", "resource_type": "source",
+                    "source_name": source.split(".")[0], "name": source.split(".")[1], "schema": source.split(".")[0],
+                    "identifier": source.split(".")[1]} for source in sources}}
     results = [{"unique_id": node["unique_id"], "status": (statuses or {}).get(node["name"], "success"),
                 "message": "OK"} for node in models]
     return manifest, {"args": {"which": "build", "empty": False, **(args or {})}, "results": results}

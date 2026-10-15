@@ -399,6 +399,49 @@ def quality_payload(report: Any) -> dict[str, Any]:
     return {"passed": failed == 0, "checks_run": len(results), "checks_failed": failed, "results": results}
 
 
+def _warehouse_ref(spec: Mapping[str, Any], base_dir: str | os.PathLike | None) -> str | None:
+    """The warehouse of a catalog spec as a URI, worked out from the spec alone: nothing is opened or created."""
+    from local_data_platform import fs
+    from local_data_platform.catalog.provider import catalog_type
+
+    kind = catalog_type(spec)
+    if kind == "local" or (kind == "sql" and not spec.get("uri") and spec.get("warehouse_path")):
+        return resolve_path(spec["warehouse_path"], base_dir).resolve().as_uri() if spec.get("warehouse_path") else None
+    warehouse = spec.get("warehouse")
+    if not warehouse:
+        return None
+    text = str(warehouse)
+    if kind == "rest" or fs.uri_scheme(text) is not None:
+        return text
+    return resolve_path(text, base_dir).resolve().as_uri()
+
+
+def iceberg_block_ref(block: Mapping[str, Any], base_dir: str | os.PathLike | None = None) -> dict[str, Any]:
+    """Name the Iceberg table that an ``ICEBERG`` source or target block describes, as :func:`dataset_ref` names one.
+
+    Nothing is opened and nothing is created, so it is safe to call for a table that does not exist yet.
+
+    Args:
+        block: ``{"name", "format": "ICEBERG", "catalog": {...}}``.
+        base_dir: The folder that a relative warehouse path resolves against.
+
+    Returns:
+        ``{"namespace", "name", "format", "table_identifier"}``.
+
+    Raises:
+        ConfigError: If the block has no ``name`` or no catalog with a namespace.
+    """
+    from local_data_platform.catalog.provider import catalog_name, catalog_namespace
+
+    spec, name = block.get("catalog"), block.get("name")
+    if not name or not isinstance(spec, Mapping):
+        raise ConfigError("an Iceberg block needs a 'name' and a 'catalog' object")
+    identifier = f"{catalog_namespace(spec)}.{name}"
+    warehouse = _warehouse_ref(spec, base_dir) or f"iceberg://{catalog_name(spec)}"
+    return {"namespace": redact_text(warehouse.rstrip("/"), None), "name": identifier, "format": "ICEBERG",
+            "table_identifier": identifier}
+
+
 def dataset_ref(obj: Any) -> dict[str, Any]:
     """Name a pipeline source or target the way OpenLineage names datasets.
 
@@ -408,7 +451,8 @@ def dataset_ref(obj: Any) -> dict[str, Any]:
     * Object-store files: ``namespace`` is ``<scheme>://<bucket>``, ``name`` is the key.
     * BigQuery queries: ``namespace`` is ``bigquery``, ``name`` is the source name.
     * DuckDB tables and queries: ``namespace`` is ``duckdb``, ``name`` is the file's absolute path and
-      the relation (or the source name for a ``sql`` source), joined by ``#``.
+      the relation (or the source name for a ``sql`` source), joined by ``#``. A query over the Iceberg tables of
+      ``inputs`` has no file, so its name is ``memory#`` and the source name.
     * Anything else: ``namespace`` is ``ldp``, ``name`` is its ``name``.
 
     Returns:
@@ -429,6 +473,8 @@ def dataset_ref(obj: Any) -> dict[str, Any]:
     if type(obj).__name__ == "BigQuery":
         return {"namespace": "bigquery", "name": str(getattr(obj, "name", "query")), "format": "BIGQUERY"}
     if type(obj).__name__ == "DuckDBTable":
+        if obj.path is None:  # a query over the Iceberg tables of its inputs, which has no file
+            return {"namespace": "duckdb", "name": f"memory#{obj.name}", "format": "DUCKDB"}
         file = Path(obj.path).resolve().as_posix()
         relation = getattr(obj, "relation", None) or obj.name
         return {"namespace": "duckdb", "name": f"{file}#{relation}", "format": "DUCKDB"}
@@ -662,7 +708,8 @@ class OpenLineageSink:
     * ``run.runId`` is the LDP run id (as a canonical UUID) and ``job`` is
       ``{namespace, pipeline name}``.
     * ``inputs`` and ``outputs`` are named as in :func:`dataset_ref`, with a ``schema``
-      facet once the data has been read.
+      facet once the data has been read. When ``run.started`` lists ``inputs``, every one of them is an input
+      dataset, and they have no ``schema`` facet, because the data read is the result of a query over them.
     * The output carries ``dataQualityMetrics`` (row count and per-column null counts
       of the validated batch) and ``dataQualityAssertions`` (one per check), plus an
       ``outputStatistics`` output facet (rows, bytes and files written) when published.
@@ -783,7 +830,11 @@ class OpenLineageSink:
                 "snapshotId": finish.get("published_snapshot_id"),
             }
 
-        inputs = self._datasets(start.get("source"), state.get("run.extracted"), None, None)
+        named = start.get("inputs")
+        if isinstance(named, (list, tuple)) and named:  # a run that knows every table it read lists each of them
+            inputs = [dataset for ref in named for dataset in self._datasets(ref, None, None, None)]
+        else:
+            inputs = self._datasets(start.get("source"), state.get("run.extracted"), None, None)
         outputs = self._datasets(start.get("target"), state.get("quality.evaluated"), state.get("quality.evaluated"),
                                  state.get("run.published"))
         return {
@@ -1648,6 +1699,7 @@ __all__ = [
     "add_cli",
     "build_sink",
     "dataset_ref",
+    "iceberg_block_ref",
     "event_json_schema",
     "load_run_events",
     "quality_payload",

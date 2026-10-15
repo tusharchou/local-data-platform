@@ -1,7 +1,8 @@
 """The ``ldp gold`` commands.
 
 ``ldp gold sync CONFIG [--dbt-manifest FILE] [--dry-run] [--json]`` writes the contract of a config into its existing
-table. ``cli.py`` wires this in with :func:`add_cli`. Heavy imports happen inside the command.
+table, and ``ldp gold build DIR [--json]`` builds the gold tables of a folder in order. ``cli.py`` wires this in with
+:func:`add_cli`. Heavy imports happen inside the command.
 """
 
 import argparse
@@ -54,6 +55,22 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
                       help="say what would change, and change nothing")
     sync.add_argument("--json", action="store_true", help="print the result as JSON")
     sync.set_defaults(handler=_cmd_sync)
+
+    build = actions.add_parser(
+        "build", parents=parents, help="build the gold tables of a folder in order, and check the ones built elsewhere",
+        description="Find every config in DIR whose metadata.docs.layer is gold, order them by their inputs, since a "
+                    "gold table may read another, and build them one at a time. A config whose source has inputs is "
+                    "built, which runs its pipeline. A gold config with no inputs is built elsewhere, by dbt, by Spark "
+                    "or by a script, so it is not built. It is checked, which means that the table has to exist and "
+                    "its quality checks run on the current snapshot and write nothing. The build stops at the first "
+                    "table that a gate blocks or that fails, and it prints one line for each table. The runs are "
+                    "recorded in the _ldp namespace of each catalog, through the iceberg sink, unless a config "
+                    "names sinks of its own.",
+        epilog="Exit status is 0 when every table was built or checked, 3 when a gate held a table back, and 1 on any "
+               "other failure. Example: ldp gold build ldp_demo/robots")
+    build.add_argument("folder", metavar="DIR", help="a folder of dataset configs")
+    build.add_argument("--json", action="store_true", help="print the result as JSON when the build is over")
+    build.set_defaults(handler=_cmd_build)
     return gold
 
 
@@ -81,3 +98,30 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         print(f"{done.config}: {verb} the contract of {done.table}, {properties} "
               f"and {_plural(len(result.columns), 'column doc')}. No data was written.")
     return 0
+
+
+def _cmd_build(args: argparse.Namespace) -> int:
+    from local_data_platform.gold.build import build_gold, find_gold, order_gold
+
+    width = max((len(item.config.identifier) for item in order_gold(find_gold(args.folder))), default=0)
+
+    def show(outcome: Any) -> None:
+        rows = "-" if outcome.rows is None else f"{outcome.rows} rows"
+        snapshot = "-" if outcome.snapshot_id is None else f"snapshot {outcome.snapshot_id}"
+        print(f"{outcome.gold.config.identifier:<{width}}  {outcome.status:<8}  {rows:>12}  {snapshot}  "
+              f"{outcome.gate}".rstrip(), flush=True)
+
+    result = build_gold(args.folder, on_table=None if args.json else show)
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        counts = result.counts()
+        print(f"gold build {result.folder}: {counts['built']} built, {counts['checked']} checked, "
+              f"{counts['blocked']} blocked, {counts['failed']} failed, {counts['not run']} not run in "
+              f"{result.duration_s:.1f}s")
+    stopped = result.stopped_by
+    if stopped is not None and not args.json:
+        print(f"ldp: {stopped.gold.config.identifier} {stopped.status}", file=sys.stderr)
+        for line in (stopped.error or "").splitlines():
+            print(f"  {line}", file=sys.stderr)
+    return result.exit_code

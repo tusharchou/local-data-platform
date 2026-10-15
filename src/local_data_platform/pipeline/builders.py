@@ -28,7 +28,7 @@ _ICEBERG_TARGET_KEYS = _ICEBERG_SOURCE_KEYS | {"write_mode", "join_cols", "parti
 # ``path`` on an Iceberg block is a pre-0.1.1 leftover that Iceberg ignores.
 _ICEBERG_LEGACY_KEYS = {"path"}
 _BIGQUERY_KEYS = {"name", "format", "engine", "path", "credentials"}
-_DUCKDB_KEYS = {"name", "format", "path", "relation", "sql"}
+_DUCKDB_KEYS = {"name", "format", "path", "relation", "sql", "query_file", "inputs"}
 _EXCEL_KEYS = {"name", "format", "path", "sheet", "header_row"}
 
 
@@ -88,16 +88,22 @@ def parquet_from_config(config: Config, section: str = "source") -> Parquet:
 def duckdb_from_config(config: Config, section: str = "source") -> DuckDBTable:
     """Build a :class:`~local_data_platform.store.source.duckdb.DuckDBTable` from a config block.
 
-    The block is ``{"name", "format": "DUCKDB", "path", "relation"}`` or ``{"name", "format":
-    "DUCKDB", "path", "sql"}``. ``path`` resolves against the config's folder. The file is not
-    opened here, only when the source is read.
+    The block is ``{"name", "format": "DUCKDB", "path", "relation"}``, or ``{"name", "format": "DUCKDB", "path",
+    "sql"}``, or one of those two with ``query_file``, the path of a file that holds the query, instead of ``sql``. It
+    can also have ``inputs``, a list of config paths, instead of ``path``, and the query then runs over the Iceberg
+    tables of those configs. A path resolves against the config's folder. The file, the query file and the tables are
+    not opened here, only when the source is read.
 
     Raises:
-        ConfigError: If the block is incomplete, or does not have exactly one of ``relation`` and ``sql``.
+        ConfigError: If the block is incomplete, or does not have exactly one of ``relation``, ``sql`` and
+            ``query_file``, or has neither a ``path`` nor ``inputs``, or has both, or an input is not valid.
     """
     block = config_block(config, section, "DUCKDB", _DUCKDB_KEYS)
-    return DuckDBTable(name=_require(block, "name", section), path=_require(block, "path", section),
-                       relation=block.get("relation"), sql=block.get("sql"), base_dir=config.base_dir)
+    inputs = block.get("inputs")
+    return DuckDBTable(name=_require(block, "name", section),
+                       path=block.get("path") if inputs is not None else _require(block, "path", section),
+                       relation=block.get("relation"), sql=block.get("sql"), base_dir=config.base_dir,
+                       query_file=block.get("query_file"), inputs=inputs)
 
 
 def excel_from_config(config: Config, section: str = "source") -> Excel:

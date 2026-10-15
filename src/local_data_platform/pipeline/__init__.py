@@ -60,6 +60,7 @@ from local_data_platform.events import (
     EventSink,
     RunEmitter,
     dataset_ref,
+    iceberg_block_ref,
     quality_payload,
     redact_text,
     schema_payload,
@@ -707,7 +708,7 @@ class Pipeline(Flow):
             spec_hash = hash_spec(self.config)
         from local_data_platform import __version__
 
-        return {
+        payload = {
             "mode": mode or getattr(self.target, "write_mode", None),
             "publish": "staged" if commit is not None else "direct",
             "idempotency_key": key,
@@ -717,6 +718,27 @@ class Pipeline(Flow):
             "target": dataset_ref(self.target),
             "ldp_version": __version__,
         }
+        inputs = self._input_refs()
+        if inputs:
+            payload["inputs"] = inputs
+        return payload
+
+    def _input_refs(self) -> list[dict[str, Any]]:
+        """Every Iceberg table that the source was made from, when it is known, else none.
+
+        A source that reads the tables of its ``inputs`` says them itself. A model that ``ldp dbt build`` published
+        has them in the ``metadata.lineage`` of its config. Event metadata is best effort, so a lineage that cannot be
+        worked out leaves the list empty and the run goes on.
+        """
+        try:
+            lineage = getattr(self.source, "lineage", None)
+            refs = list(lineage()) if callable(lineage) else []
+            if not refs and self.config is not None and self.config.metadata.get("lineage"):
+                refs = [iceberg_block_ref(block, self.config.base_dir) for block in self.config.metadata["lineage"]]
+        except Exception as error:  # noqa: BLE001 - see the docstring
+            logger.debug("Could not work out the inputs of %s for its run events: %s", self.name, error)
+            return []
+        return refs
 
     @staticmethod
     def _extracted_payload(df: pa.Table, rows_read: int, rows_kept: int | None) -> dict[str, Any]:

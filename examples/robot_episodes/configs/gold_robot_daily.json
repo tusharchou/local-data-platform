@@ -4,15 +4,15 @@
   "what": "success and frame health per robot per day",
   "where": "lakehouse",
   "when": "after each promotion",
-  "how": "DuckDB SQL over gold_episode_stats (queries.sql), overwrite",
+  "how": "ldp gold build, from models/gold_robot_daily.sql over gold_episode_stats, overwrite",
   "metadata": {
     "source": {
-      "name": "gold_episode_stats",
-      "format": "ICEBERG",
-      "catalog": {
-        "identifier": "robots",
-        "warehouse_path": "warehouse"
-      }
+      "name": "gold_robot_daily",
+      "format": "DUCKDB",
+      "query_file": "models/gold_robot_daily.sql",
+      "inputs": [
+        "gold_episode_stats.json"
+      ]
     },
     "target": {
       "name": "gold_robot_daily",

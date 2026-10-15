@@ -4,15 +4,16 @@
   "what": "one row per episode: outcome, frame health, sync",
   "where": "lakehouse",
   "when": "after each promotion",
-  "how": "DuckDB SQL over silver (queries.sql), overwrite",
+  "how": "ldp gold build, from models/gold_episode_stats.sql over silver, overwrite",
   "metadata": {
     "source": {
-      "name": "silver_episodes",
-      "format": "ICEBERG",
-      "catalog": {
-        "identifier": "robots",
-        "warehouse_path": "warehouse"
-      }
+      "name": "gold_episode_stats",
+      "format": "DUCKDB",
+      "query_file": "models/gold_episode_stats.sql",
+      "inputs": [
+        "silver_episodes.json",
+        "silver_frames.json"
+      ]
     },
     "target": {
       "name": "gold_episode_stats",

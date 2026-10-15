@@ -54,7 +54,7 @@ depends on the type:
 
 | Type | Payload |
 |---|---|
-| `run.started` | `mode`, `publish` (`direct` or `staged`), `idempotency_key`, `spec_hash`, `logical_window`, `source` and `target` (dataset names), `ldp_version` |
+| `run.started` | `mode`, `publish` (`direct` or `staged`), `idempotency_key`, `spec_hash`, `logical_window`, `source` and `target` (dataset names), `ldp_version`, and `inputs` (the Iceberg tables that the source was made from, when the run knows them. A `DUCKDB` source with `inputs` says them, and the `metadata.lineage` of a model that `ldp dbt build` published does) |
 | `run.extracted` | `rows_read`, `rows_kept` (only when the config names a `metadata.window.column` and the run has a window: the rows inside the window), `schema` (names and types) |
 | `quality.evaluated` | `rows`, `schema`, `null_counts` per column, `on_failure`, `passed`, `checks_run`, `checks_failed`, and `results`: one entry per check with `name`, `column`, `passed`, `failing_rows`, `details` and numeric `metrics` |
 | `run.published`, `run.skipped_duplicate` | `rows_written`, `snapshot_id`, `idempotency_key`, `write` (the `WriteResult`), `snapshot_summary`. A `run.published` of a config with a `metadata.docs` block and an Iceberg target also has `contract`, with `layer`, `applied`, `changed`, `properties` and `columns` (what the commit set), `documented` (columns that have a doc), `ignored` and `attempts`, or `applied: false` and the `error` when the contract could not be written |
@@ -233,7 +233,7 @@ failed) when it finishes.
 |---|---|
 | `run.runId` | The LDP `run_id` (a UUIDv7) |
 | `job.namespace`, `job.name` | The sink's `namespace`, the pipeline name; a `jobType` facet says `BATCH`/`LDP`/`PIPELINE` |
-| `inputs[0]` | The source: `file` + absolute path, `s3://bucket` + key, or the Iceberg warehouse + table; with a `schema` facet |
+| `inputs` | The source: `file` + absolute path, `s3://bucket` + key, or the Iceberg warehouse + table; with a `schema` facet. When `run.started` lists `inputs`, every one of them is an input dataset instead, named as an Iceberg table is, without a `schema` facet, because the data read is the result of a query over them |
 | `outputs[0]` | The target, with `schema`, `dataQualityMetrics` (row count and null counts of the validated batch) and `dataQualityAssertions` (one per check); plus an `outputStatistics` output facet (rows, bytes and files written) when published |
 | `run.facets` | `nominalTime` for a logical window, `errorMessage` on `FAIL`, `ldp_run` (attempt, status, idempotency key, spec hash, snapshot id), and for a task of a workflow a `parent` run facet (`ParentRunFacet`) whose `run.runId` is the workflow run and whose `job` is the sink's `namespace` and the workflow's name |
 

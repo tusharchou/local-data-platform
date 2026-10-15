@@ -17,7 +17,7 @@ from local_data_platform.dbt_layer.project import DbtProject
 from local_data_platform.dbt_layer.publish import failed_nodes, plan_publish, publish, read_artifacts
 from local_data_platform.exceptions import ConfigError
 from local_data_platform.format.iceberg import Iceberg
-from local_data_platform.spec import validate_spec
+from local_data_platform.spec import spec_hash, validate_spec
 from tests.support import dbt_artifacts as artifacts
 from tests.support import GOLD_META, TOTALS_DOCS
 from tests.support import dbt_model as model
@@ -444,6 +444,151 @@ def test_read_artifacts_refuses_files_that_an_earlier_run_wrote(project):
     with pytest.raises(ConfigError, match=r"run_results\.json was not written by this dbt run.*--no-write-json"):
         read_artifacts(project, since=time.time() - 60)
     read_artifacts(project, since=long_ago - 1)
+
+
+# --------------------------------------------------------------------------- lineage
+
+
+def lake_block(name, namespace="raw", warehouse="../../lake/warehouse"):
+    return {"name": name, "format": "ICEBERG", "catalog": {"identifier": namespace, "warehouse_path": warehouse}}
+
+
+def source_tables_of(project, *names):
+    """The Iceberg blocks of the sources, as ``dbt_layer.sources.source_tables`` finds them in ``lake/config``."""
+    return {f"raw.{name}": (lake_block(name, warehouse="../warehouse"), project.directory.parent / "lake" / "config")
+            for name in names}
+
+
+def lineage_of(project, *models, sources=("raw.orders", "raw.customers"), tables=("orders", "customers"), **keywords):
+    manifest, results = artifacts(*models, sources=sources)
+    items = plan_publish(project, manifest, results, source_tables=source_tables_of(project, *tables), **keywords)
+    return {item.model: item.config["metadata"].get("lineage") for item in items}
+
+
+def test_a_published_model_lists_its_sources_and_the_published_models_it_reads_through_unpublished_ones(project):
+    models = (model("stg_orders", reads=["raw.orders"]),
+              model("silver", alias="fct_orders", meta={**PUBLISH, "ldp_namespace": "silver"},
+                    depends_on=["stg_orders"]),
+              model("report", meta={**PUBLISH, "ldp_namespace": "lake"}, depends_on=["silver"],
+                    reads=["raw.customers"]))
+
+    lineage = lineage_of(project, *models)
+
+    assert lineage["silver"] == [{"name": "orders", "format": "ICEBERG", "catalog": {
+        "identifier": "raw", "warehouse_path": "../warehouse"}}]
+    assert [block["name"] for block in lineage["report"]] == ["customers", "fct_orders"]
+    assert lineage["report"][1]["catalog"] == {"identifier": "silver", "warehouse_path": "../warehouse"}
+
+
+def test_the_paths_of_a_source_block_are_made_relative_to_the_folder_of_the_generated_config(project):
+    [block] = lineage_of(project, model("m", meta=PUBLISH, reads=["raw.orders"]))["m"]
+
+    assert block["catalog"]["warehouse_path"] == "../warehouse", "from lake/config, which is next to lake/warehouse"
+    warehouse = (project.config_dir / block["catalog"]["warehouse_path"]).resolve()
+    assert warehouse == (project.directory.parent / "lake" / "warehouse").resolve()
+
+
+def test_a_source_in_another_folder_than_the_generated_configs_gets_a_path_from_the_generated_config(project):
+    elsewhere = project.directory.parent / "elsewhere" / "config"
+    manifest, results = artifacts(model("m", meta=PUBLISH, reads=["raw.orders"]), sources=["raw.orders"])
+    tables = {"raw.orders": (lake_block("orders", warehouse="../warehouse"), elsewhere)}
+
+    [item] = plan_publish(project, manifest, results, source_tables=tables)
+
+    [block] = item.config["metadata"]["lineage"]
+    assert block["catalog"]["warehouse_path"] == "../../elsewhere/warehouse", "from lake/config to elsewhere/warehouse"
+    warehouse = (project.config_dir / block["catalog"]["warehouse_path"]).resolve()
+    assert warehouse == (project.directory.parent / "elsewhere" / "warehouse").resolve()
+
+
+def test_without_the_source_tables_only_the_published_models_are_in_the_lineage(project):
+    manifest, results = artifacts(model("up", meta=PUBLISH, reads=["raw.orders"]),
+                                  model("down", meta=PUBLISH, depends_on=["up"]), sources=["raw.orders"])
+
+    items = {item.model: item for item in plan_publish(project, manifest, results)}
+
+    assert "lineage" not in items["up"].config["metadata"]
+    assert [block["name"] for block in items["down"].config["metadata"]["lineage"]] == ["up"]
+
+
+def test_a_source_that_the_project_does_not_know_is_left_out_and_the_model_is_still_published(project):
+    lineage = lineage_of(project, model("m", meta=PUBLISH, reads=["raw.orders", "raw.unknown"]),
+                         sources=("raw.orders", "raw.unknown"))
+
+    assert [block["name"] for block in lineage["m"]] == ["orders"]
+
+
+def test_a_table_that_is_read_by_two_paths_is_listed_once_in_order_of_its_name(project):
+    models = (model("a", reads=["raw.orders", "raw.customers"]), model("b", reads=["raw.orders"]),
+              model("m", meta=PUBLISH, depends_on=["b", "a"]))
+
+    assert [block["name"] for block in lineage_of(project, *models)["m"]] == ["customers", "orders"]
+
+
+def test_a_published_model_that_was_not_built_in_this_run_is_still_a_table_that_the_next_one_reads(project):
+    models = (model("earlier", meta={**PUBLISH, "ldp_namespace": "silver"}),
+              model("later", meta=PUBLISH, depends_on=["earlier"]))
+    manifest, results = artifacts(*models)
+    results["results"] = [row for row in results["results"] if row["unique_id"].endswith("later")]
+
+    [item] = plan_publish(project, manifest, results)
+
+    assert [block["name"] for block in item.config["metadata"]["lineage"]] == ["earlier"]
+
+
+def test_a_manifest_that_cannot_be_followed_gives_no_lineage_and_the_model_is_published(project):
+    manifest, results = artifacts(model("m", meta=PUBLISH, reads=["raw.orders"]), sources=["raw.orders"])
+    manifest["sources"]["source.shop.raw.orders"] = "not a source"
+
+    [item] = plan_publish(project, manifest, results, source_tables=source_tables_of(project, "orders"))
+
+    assert "lineage" not in item.config["metadata"]
+
+
+def test_models_that_read_each_other_do_not_send_the_walk_round_in_circles(project):
+    models = (model("a", meta=PUBLISH, depends_on=["b"]), model("b", depends_on=["c"]),
+              model("c", depends_on=["b"], reads=["raw.orders"]))
+
+    assert [block["name"] for block in lineage_of(project, *models)["a"]] == ["orders"]
+
+
+def test_the_generated_config_with_a_lineage_is_valid_and_the_hash_leaves_the_lineage_out(project):
+    manifest, results = artifacts(model("m", meta=PUBLISH, reads=["raw.orders"]), sources=["raw.orders"])
+
+    [item] = plan_publish(project, manifest, results, source_tables=source_tables_of(project, "orders"))
+
+    assert validate_spec(item.config) == []
+    assert spec_hash(item.config) == spec_hash({**item.config, "metadata": {
+        key: value for key, value in item.config["metadata"].items() if key != "lineage"}})
+
+
+def test_source_tables_finds_the_iceberg_tables_that_configs_name_and_the_folder_of_each(tmp_path):
+    from local_data_platform.dbt_layer.sources import source_tables
+
+    folder = tmp_path / "config"
+    folder.mkdir()
+    for name in ("orders", "customers"):
+        (folder / f"{name}.json").write_text(json.dumps({"identifier": name, "metadata": {
+            "source": {"name": name, "format": "CSV", "path": f"{name}.csv"},
+            "target": {"name": name, "format": "ICEBERG", "catalog": {"identifier": "raw",
+                                                                      "warehouse_path": "../warehouse"}}}}))
+    (folder / "twice.json").write_text(json.dumps({"identifier": "twice", "metadata": {
+        "source": {"name": "x", "format": "CSV", "path": "x.csv"},
+        "target": {"name": "orders", "format": "ICEBERG", "catalog": {"identifier": "raw",
+                                                                      "warehouse_path": "../other"}}}}))
+    (folder / "export.json").write_text(json.dumps({"identifier": "export", "metadata": {
+        "source": {"name": "totals", "format": "ICEBERG", "catalog": {"identifier": "raw",
+                                                                      "warehouse_path": "../warehouse"}},
+        "target": {"name": "totals", "format": "CSV", "path": "totals.csv"}}}))
+    (folder / "broken.json").write_text(json.dumps({"identifier": "broken", "metadata": {"source": {}}}))
+    (folder / "notes.json").write_text("[1, 2]")
+
+    found = source_tables([folder])
+
+    assert sorted(found) == ["raw.customers", "raw.orders", "raw.totals"], "a table that a config reads counts too"
+    block, where = found["raw.orders"]
+    assert where == folder and block == {"name": "orders", "format": "ICEBERG", "catalog": {
+        "identifier": "raw", "warehouse_path": "../warehouse"}}, "the first config that names a table wins"
 
 
 # --------------------------------------------------------------------------- the table contract

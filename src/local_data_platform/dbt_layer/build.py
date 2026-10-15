@@ -42,7 +42,7 @@ from local_data_platform.dbt_layer.publish import (
     publish,
     read_artifacts,
 )
-from local_data_platform.dbt_layer.sources import MODES, SourceRegistration, register_sources
+from local_data_platform.dbt_layer.sources import MODES, SourceRegistration, register_sources, source_tables
 from local_data_platform.exceptions import ConfigError, DataQualityError, LDPError
 
 CLOCK_SLACK_S = 2.0
@@ -223,7 +223,7 @@ def run_build(project: DbtProject, binary: str, extra: Sequence[str] = (), *,
     if status != 0:
         raise _dbt_failed("build", project, target, started, status)
     manifest, run_results = read_artifacts(project, target, since=started)
-    plan = plan_publish(project, manifest, run_results)
+    plan = plan_publish(project, manifest, run_results, source_tables=source_tables(project.source_configs))
     nodes, elapsed = _summary(run_results)
     if not plan:
         return BuildResult("build", nodes, elapsed)

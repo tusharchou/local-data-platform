@@ -17,7 +17,8 @@ which the later milestones do for metrics, reports and profiles::
 ``observability`` (where events go doesn't change what a run does), ``schedule`` (when a run starts doesn't change
 what it does, though ``window`` does, because its column picks the rows a run reads), ``retries`` (how often a failed
 run is tried again doesn't change what it does), ``docs`` (what a table is called and described doesn't change what a
-run writes) and ``kind`` (a pipeline hashes the same with ``"kind": "Pipeline"`` as without it). Keys are
+run writes), ``lineage`` (which tables a source was made from is for the run events, and doesn't change what a run
+does) and ``kind`` (a pipeline hashes the same with ``"kind": "Pipeline"`` as without it). Keys are
 sorted, there is no whitespace, formats are upper-case, write modes lower-case, the
 quality block is normalised to ``{"on_failure", "checks"}``, and local paths are
 made relative to the config's folder. The descriptive ``who``, ``what`` and
@@ -58,13 +59,13 @@ TOP_LEVEL_KEYS = ("apiVersion", "kind", "identifier", "who", "what", "where", "w
 FORMATS = ("CSV", "PARQUET", "JSON", "ICEBERG", "DUCKDB", "XLSX")
 WRITE_MODES = ("append", "overwrite", "upsert")
 ON_FAILURE = ("fail", "warn")
-HASH_EXCLUDED_METADATA = ("observability", "schedule", "retries", "docs")
+HASH_EXCLUDED_METADATA = ("observability", "schedule", "retries", "docs", "lineage")
 """``metadata`` keys that don't change what a run does, so :func:`spec_hash` ignores them."""
 
 _BUILTIN_CATALOG_TYPES = ("local", "sql", "rest", "glue")
 _CATALOG_ALIASES = {"localiceberg": "local"}
 _TRANSFORM = re.compile(r"^(identity|year|month|day|hour|(bucket|truncate)\[\s*[1-9]\d*\s*\])$", re.IGNORECASE)
-_PATH_KEYS = {"path", "warehouse_path"}
+_PATH_KEYS = {"path", "warehouse_path", "query_file", "inputs"}
 _UPPER_KEYS = {"format", "engine"}
 _LOWER_KEYS = {"write_mode", "on_failure", "transform", "type"}
 _SECRET_WORDS = ("password", "passwd", "secret", "token", "credential", "api_key", "apikey", "private_key")
@@ -556,7 +557,15 @@ def json_schema() -> dict[str, Any]:
                     "window": {"$ref": "#/$defs/window"},
                     "retries": {"$ref": "#/$defs/retries"},
                     "docs": {"$ref": "#/$defs/docs"},
+                    "lineage": {"$ref": "#/$defs/lineage"},
                 },
+            },
+            "lineage": {
+                "type": "array",
+                "items": {"$ref": "#/$defs/source"},
+                "description": "The Iceberg tables that the source was made from, for the run events. The Iceberg "
+                               "blocks of the tables a model of a dbt project reads, written by ldp dbt build. A "
+                               "DUCKDB source with 'inputs' needs none. Editing it does not change the spec hash.",
             },
             "docs": {
                 "type": "object",
@@ -600,6 +609,14 @@ def json_schema() -> dict[str, Any]:
                                  "description": "DUCKDB source: a table or view, as table, schema.table or "
                                                 "catalog.schema.table."},
                     "sql": {**non_empty, "description": "DUCKDB source: one SELECT or WITH query."},
+                    "query_file": {**non_empty, "description": "DUCKDB source: a file that holds one SELECT or WITH "
+                                                               "query, instead of 'sql'. A relative path is read from "
+                                                               "the folder of the config."},
+                    "inputs": {"type": "array", "items": non_empty, "minItems": 1, "uniqueItems": True,
+                               "description": "DUCKDB source: dataset config files whose Iceberg target tables the "
+                                              "query reads, each under its table name, in an in-memory DuckDB with the "
+                                              "session time zone UTC. It replaces 'path', and a query that reads "
+                                              "another table fails, so it is the whole lineage."},
                     "sheet": {"oneOf": [non_empty, {"type": "integer", "minimum": 0}],
                               "description": "XLSX source: the sheet's name, or its position from 0. The first "
                                              "sheet by default."},
@@ -610,10 +627,18 @@ def json_schema() -> dict[str, Any]:
                 "allOf": [
                     {"if": {"properties": {"format": {"enum": ["ICEBERG", "iceberg"]}}, "required": ["format"]},
                      "then": {"required": ["catalog"]},
-                     "else": {"required": ["path"]}},
-                    {"if": {"properties": {"format": {"enum": ["DUCKDB", "duckdb"]}}, "required": ["format"]},
-                     "then": {"oneOf": [{"required": ["relation"], "not": {"required": ["sql"]}},
-                                        {"required": ["sql"], "not": {"required": ["relation"]}}]}},
+                     "else": {
+                         "if": {"properties": {"format": {"enum": ["DUCKDB", "duckdb"]}}, "required": ["format"]},
+                         "then": {"oneOf": [
+                             {"required": ["path", "relation"],
+                              "not": {"anyOf": [{"required": ["sql"]}, {"required": ["query_file"]},
+                                                {"required": ["inputs"]}]}},
+                             {"required": ["path"], "oneOf": [{"required": ["sql"]}, {"required": ["query_file"]}],
+                              "not": {"anyOf": [{"required": ["relation"]}, {"required": ["inputs"]}]}},
+                             {"required": ["inputs"], "oneOf": [{"required": ["sql"]}, {"required": ["query_file"]}],
+                              "not": {"anyOf": [{"required": ["relation"]}, {"required": ["path"]}]}},
+                         ]},
+                         "else": {"required": ["path"]}}},
                 ],
             },
             "source": {
@@ -809,7 +834,7 @@ def _check_block(problems: _Problems, block: Any, section: str) -> None:
         if section == "target":
             _check_iceberg_target(problems, block, where)
         return
-    _check_string(problems, block, "path", where)
+    _check_string(problems, block, "path", where, required=not (fmt == "DUCKDB" and block.get("inputs") is not None))
     if fmt == "DUCKDB":
         _check_duckdb_block(problems, block, section, where)
     if fmt == "XLSX":
@@ -826,12 +851,29 @@ def _check_block(problems: _Problems, block: Any, section: str) -> None:
 def _check_duckdb_block(problems: _Problems, block: Mapping[str, Any], section: str, where: str) -> None:
     if section == "target":
         problems.add(f"{where}.format", "DUCKDB is a source format only; write to ICEBERG instead")
-    present = [key for key in ("relation", "sql") if block.get(key) is not None]
+    present = [key for key in ("relation", "sql", "query_file") if block.get(key) is not None]
     if len(present) != 1:
-        problems.add(where, "needs exactly one of 'relation' (a table or view) and 'sql' (one SELECT query), "
-                            f"got {'both' if present else 'neither'}")
+        problems.add(where, "needs exactly one of 'relation' (a table or view), 'sql' (one SELECT query) and "
+                            "'query_file' (a file that holds one SELECT query), "
+                            f"got {'more than one' if present else 'none'}")
+    else:
+        _check_string(problems, block, present[0], where)
+    inputs = block.get("inputs")
+    if inputs is None:
         return
-    _check_string(problems, block, present[0], where)
+    if block.get("path") is not None:
+        problems.add(where, "has both 'path' and 'inputs'. A source reads a DuckDB file or the Iceberg tables of its "
+                            "inputs, not both")
+    if block.get("relation") is not None:
+        problems.add(f"{where}.inputs", "cannot go with a 'relation', which is a table of a DuckDB file. Use 'sql' "
+                                        "or 'query_file' over the inputs")
+    if not isinstance(inputs, (list, tuple)) or not inputs or not all(
+            isinstance(item, str) and item.strip() for item in inputs):
+        problems.add(f"{where}.inputs", "must be a non-empty list of dataset config paths")
+        return
+    for position, item in enumerate(inputs):
+        if inputs.index(item) != position:
+            problems.add(f"{where}.inputs[{position}]", f"lists {item!r} a second time")
 
 
 def _check_xlsx_block(problems: _Problems, block: Mapping[str, Any], section: str, where: str) -> None:
@@ -908,6 +950,20 @@ def _check_schedule_and_window(problems: _Problems, metadata: Mapping[str, Any])
     for message in windows.placeholder_problems(source.get("path") if isinstance(source, Mapping) else None):
         problems.add("metadata.source.path", message)
     _check_placeholder_places(problems, metadata, "metadata")
+
+
+def _check_lineage(problems: _Problems, lineage: Any) -> None:
+    """Check ``metadata.lineage``, a list of Iceberg blocks: the tables that a source was made from."""
+    if lineage is None:
+        return
+    if not isinstance(lineage, (list, tuple)):
+        problems.add("metadata.lineage", f"must be a list of Iceberg table blocks, got {type(lineage).__name__}")
+        return
+    for position, block in enumerate(lineage):
+        if isinstance(block, Mapping) and str(block.get("format", "")).strip().upper() != "ICEBERG":
+            problems.add(f"metadata.lineage[{position}].format", "must be ICEBERG, because a lineage names tables")
+            continue
+        _check_block(problems, block, f"lineage[{position}]")
 
 
 def _check_docs(problems: _Problems, metadata: Mapping[str, Any], who: Any) -> None:
@@ -996,6 +1052,7 @@ def _validate_pipeline(spec: Mapping[str, Any]) -> list[ConfigError]:
         _check_quality(problems, metadata.get("quality"))
         _check_schedule_and_window(problems, metadata)
         _check_docs(problems, metadata, spec.get("who"))
+        _check_lineage(problems, metadata.get("lineage"))
         if "retries" in metadata:
             for path, message in retries.retries_problems(metadata["retries"]):
                 problems.add(f"metadata.retries{path}", message)
@@ -1140,6 +1197,8 @@ def _describe(result: dict[str, Any], spec: Mapping[str, Any], base: Path | None
         workbook = where
         if not workbook.is_file():
             errors.append(ConfigError(f"metadata.source.path: the Excel file {workbook} does not exist"))
+    if route.source_format == "DUCKDB":
+        errors.extend(_describe_duckdb_files(source, base))
     if str(target["format"]).strip().upper() == "ICEBERG":
         catalog = target["catalog"]
         namespace = catalog.get("namespace") or catalog.get("identifier")
@@ -1159,6 +1218,23 @@ def _describe(result: dict[str, Any], spec: Mapping[str, Any], base: Path | None
     elif bounds is not None:
         result["window"] = f"{format_instant(bounds[0])}/{format_instant(bounds[1])}"
         result["idempotency_key"] = idempotency_key(spec, bounds, base_dir=base)
+    return errors
+
+
+def _describe_duckdb_files(source: Mapping[str, Any], base: Path | None) -> list[ConfigError]:
+    """The input configs and the query file of a DuckDB source that are not there."""
+    from local_data_platform.paths import resolve_path
+
+    errors = []
+    inputs = source.get("inputs")
+    for position, item in enumerate(inputs if isinstance(inputs, (list, tuple)) else ()):
+        if isinstance(item, str) and not resolve_path(item, base).is_file():
+            errors.append(ConfigError(f"metadata.source.inputs[{position}]: the config file "
+                                      f"{resolve_path(item, base)} does not exist"))
+    query_file = source.get("query_file")
+    if isinstance(query_file, str) and not resolve_path(query_file, base).is_file():
+        errors.append(ConfigError(f"metadata.source.query_file: the file {resolve_path(query_file, base)} "
+                                  "does not exist"))
     return errors
 
 

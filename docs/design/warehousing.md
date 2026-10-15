@@ -259,7 +259,8 @@ table is overwritten.
 
 **What is generated.** For each published model LDP writes `<model>.json` into `publish.config_dir`
 and runs it with `etl.run_config`. The file is an ordinary dataset config whose source is
-`{"format": "DUCKDB", "path": <build file>, "relation": "<schema>.<alias>"}`, so it works with
+`{"format": "DUCKDB", "path": <build file>, "relation": "<schema>.<alias>"}`, and whose `metadata.lineage` lists the
+Iceberg tables that the model was made from, so that the run events of the write name them as inputs (see below), so it works with
 `ldp snapshots`, `ldp query`, `ldp runs`, `ldp maintain` and `ldp mcp --config`, and `ldp run` on it
 publishes the model again. Paths in it are relative to `config_dir`.
 
@@ -272,6 +273,14 @@ namespace, or with `ldp_layer: gold`, is a gold table. It needs a description, a
 column that it writes needs a description, and the contract is in
 [the 0.1.4 design](v0_1_4.md). A gold model that lacks one of the first three stops the command with the model's name
 before anything is published, and a gold model with a column that has no description stops at its own write.
+
+**The lineage.** `metadata.lineage` is worked out from the `depends_on` of the model in `manifest.json`, and it is
+for the run events only, so the spec hash leaves it out. A parent that is a source becomes the Iceberg table of that
+source, found in the project's source configs. A parent that is a model marked `ldp_publish` becomes its Iceberg table,
+whether or not it was built in this invocation. A parent that is a model that is not published, such as a staging view,
+is looked through to what it reads. The blocks are `ICEBERG` blocks with paths relative to the config folder. A source
+that no source config names is left out, and a manifest that cannot be followed gives no lineage and does not stop the
+model from being published.
 
 **Order and failure.** Every generated config is validated before the first write, so a bad meta key
 fails the command with the model's name and nothing published. Models then publish in dependency

@@ -118,7 +118,7 @@ def test_silver_frames_gate_uses_every_temporal_check():
 
 def test_named_queries():
     queries = run.load_queries()
-    assert set(run.RESEARCH_QUERIES) | {"gold_episode_stats", "gold_robot_daily"} <= set(queries)
+    assert set(queries) == set(run.RESEARCH_QUERIES), "the gold tables are built from models/, not from queries.sql"
     assert all(not sql.rstrip().endswith(";") for sql in queries.values())
 
 
