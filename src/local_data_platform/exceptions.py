@@ -41,5 +41,22 @@ class DataQualityError(LDPError):
         self.report = report
 
 
+class ContractError(DataQualityError):
+    """Raised when a gold table's contract does not hold, and nothing was written.
+
+    The contract is the ``metadata.docs`` block of the config. A gold table has to describe every column that it
+    writes, and may not describe a column that the table does not have. This is a :class:`DataQualityError`, because
+    the cure is the same as for a failed check, which is to change the docs or the data, and running the same
+    thing again does not help. So ``ldp run`` exits with 3, a workflow marks the task blocked, and nothing retries it.
+
+    Attributes:
+        problems: One sentence for each thing that is wrong, which the message lists.
+    """
+
+    def __init__(self, message: str, problems=(), report=None):
+        super().__init__(message, report)
+        self.problems = list(problems)
+
+
 class GitHubAPIError(LDPError):
     """Raised when a call to the GitHub API fails."""

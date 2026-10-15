@@ -1,4 +1,9 @@
-{{ config(meta={'ldp_publish': true, 'ldp_namespace': 'gold'}) }}
+{{ config(meta={
+    'ldp_publish': true,
+    'ldp_namespace': 'gold',
+    'owner': 'restaurant operations',
+    'grain': 'one row for each restaurant on each day it had an order'
+}) }}
 
 -- Orders and revenue for each restaurant on each day it had an order.
 select

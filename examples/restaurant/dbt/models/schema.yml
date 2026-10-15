@@ -68,7 +68,7 @@ models:
     description: >
       One row for each order, the latest version of it. It is loaded incrementally: an order is taken when the
       table has no row for it yet, or only an older version, so a late order is taken too, and a changed order
-      replaces its earlier row. Published to the silver namespace of the lakehouse.
+      replaces its earlier row.
     columns:
       - name: order_id
         description: The order's key.
@@ -122,8 +122,7 @@ models:
       Customer churn for each month, counted in the month a customer stops ordering. For month M, customers_at_start
       is the number of customers with an order in month M minus 1, churned is the number of those customers with no
       order in month M, and churn_rate is churned divided by customers_at_start, or null when customers_at_start is 0.
-      The first month has no row, because there is no month before it. Published to the gold namespace. The gold
-      layer (0.1.4) and the insights (0.1.7) reuse this definition.
+      The first month has no row, because there is no month before it.
     columns:
       - name: month
         description: The first day of the month.
@@ -138,7 +137,7 @@ models:
         description: churned divided by customers_at_start, or null when there were none. Between 0 and 1.
 
   - name: revenue_by_restaurant_day
-    description: Orders and revenue for each restaurant on each day it had an order. Published to the gold namespace.
+    description: Orders and revenue for each restaurant on each day it had an order.
     columns:
       - name: restaurant_day_id
         description: The restaurant and the day, as restaurant_id:YYYY-MM-DD.

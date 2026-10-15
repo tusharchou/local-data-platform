@@ -1,4 +1,9 @@
-{{ config(meta={'ldp_publish': true, 'ldp_namespace': 'gold'}) }}
+{{ config(meta={
+    'ldp_publish': true,
+    'ldp_namespace': 'gold',
+    'owner': 'customer insights',
+    'grain': 'one row for each month, from the second month with an order'
+}) }}
 
 -- Churn is counted in the month a customer stops ordering. For month M:
 --   customers_at_start  customers with an order in month M minus 1

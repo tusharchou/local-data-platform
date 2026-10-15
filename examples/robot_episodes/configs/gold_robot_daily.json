@@ -40,6 +40,30 @@
           "max": 1
         }
       ]
+    },
+    "docs": {
+      "layer": "gold",
+      "description": "Fleet health for each robot on each day: how many episodes it recorded, how many succeeded, and how healthy its frames were.",
+      "grain": "one row per robot per day",
+      "primary_key": [
+        "robot_id",
+        "recorded_on"
+      ],
+      "tags": [
+        "robotics",
+        "fleet"
+      ],
+      "columns": {
+        "robot_id": "The robot.",
+        "recorded_on": "The day, in UTC, on which its episodes started.",
+        "episodes": "How many episodes the robot recorded that day.",
+        "successes": "How many of them succeeded.",
+        "success_rate": "successes divided by episodes, from 0 to 1.",
+        "frames": "How many frames those episodes hold.",
+        "dropped_frames": "How many of those frames were dropped.",
+        "drop_rate": "dropped_frames divided by frames, from 0 to 1.",
+        "max_skew_ms": "The largest gap between the RGB and depth timestamps of any of those frames, in milliseconds."
+      }
     }
   }
 }

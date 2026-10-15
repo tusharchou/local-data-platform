@@ -112,7 +112,10 @@ after batch 1 still holds the old number, and `ldp query --snapshot` reads it.
 
 The other models, `stg_restaurants`, `stg_customers`, `stg_orders` and `customer_activity_monthly`, stay in dbt. A
 model is published when its config has `meta={'ldp_publish': true}`, and `ldp_namespace` says where. The
-published models get a config in `config/` next to the ingest configs, so one folder holds every table:
+published models get a config in `config/` next to the ingest configs, so one folder holds every table. A published
+model also carries its contract, which is the description of the model and of its columns in `schema.yml` and, for
+the two gold models, an `owner` and a `grain` in their `meta`. LDP writes it into the Iceberg table, so
+`describe_table` of `ldp mcp` shows it. These commands read the tables.
 
 ```bash
 ldp snapshots ldp_demo/restaurant/config/churn_by_month.json

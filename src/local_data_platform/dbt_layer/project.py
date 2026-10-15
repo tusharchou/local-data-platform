@@ -296,9 +296,21 @@ select * from {source}
 """
 GOLD_SQL = """\
 -- ldp_publish writes this model to Iceberg after a successful build. Remove it to keep the model in dbt only.
-{{ config(meta={'ldp_publish': true}) }}
+-- A table in the gold namespace is a gold table, so the model names its owner and its grain here, and schema.yml
+-- describes the model and each of its columns. LDP writes all of it into the Iceberg table.
+{{ config(meta={'ldp_publish': true, 'owner': 'data team', 'grain': 'one row for the whole table'}) }}
 
 select count(*) as row_count from {{ ref('stg_example') }}
+"""
+SCHEMA_YML = """\
+version: 2
+
+models:
+  - name: gold_example
+    description: How many rows the staging model has. Replace it with what your table means.
+    columns:
+      - name: row_count
+        description: How many rows stg_example has.
 """
 GITIGNORE = "target/\nlogs/\ndbt_packages/\n"
 
@@ -345,6 +357,7 @@ def init_project(directory: str | os.PathLike, sources: str | os.PathLike, wareh
         PROJECT_FILE: json.dumps(project, indent=2) + "\n",
         "models/staging/stg_example.sql": staging,
         "models/gold/gold_example.sql": GOLD_SQL,
+        "models/schema.yml": SCHEMA_YML,
         ".gitignore": GITIGNORE,
     }
     written = []

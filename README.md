@@ -201,7 +201,7 @@ Every command follows one exit-code table.
 | 0 | success, including a run that published and a run that skipped a duplicate |
 | 1 | an error: a bad config, a usage error, a failed write |
 | 2 | reserved for an SLA breach that `ldp monitor` reports in 0.1.5 |
-| 3 | a data gate held the run back, such as a quality check that blocked a write |
+| 3 | a data gate held the run back, such as a quality check that blocked a write, or a gold table whose contract does not hold |
 
 A scheduler retries a run that exits with 1, because the cause may pass, and never retries one that exits with 3,
 because the data has to change first. Add `-v` to see a traceback. The commands
@@ -233,6 +233,7 @@ call:
 | `ldp maintain CONFIG [--expire DAYS] [--orphans] [--apply]` | Expire snapshots and find orphan files; a dry run unless `--apply` | `maintenance.expire_snapshots`, `find_orphans`, `remove_orphans` |
 | `ldp mcp --config CONFIG ...` | Serve tables to an agent over MCP (stdio) | `python -m local_data_platform.mcp_server ...`, same options |
 | `ldp dbt init\|build\|test\|docs\|exec PROJECT_DIR` | Run a dbt project over your Iceberg tables; `build` writes the models marked `ldp_publish` back to Iceberg (needs the `dbt` extra) | `dbt_layer.register_sources(...)`, `dbt_layer.publish.plan_publish(...)` and `publish(...)` |
+| `ldp gold sync CONFIG [--dbt-manifest FILE] [--dry-run] [--json]` | Write the contract of a config (its `metadata.docs`) into its existing Iceberg table, with no new data. `--dbt-manifest` reads it from a dbt manifest, for a table that dbt built, and `--dry-run` only says what would change. See [Table contracts](#table-contracts) | `gold.sync.sync_config(path)`, `contracts.apply_contract(table, docs)` |
 | `ldp spark CONFIG` | Run the Scala Spark job on a config's table (needs scala-cli) | `engine.spark.ScalaSparkJob` |
 
 ## Config schema
@@ -250,6 +251,7 @@ and a `metadata` block:
 | `metadata.schedule` | When the config runs: a 5-field cron expression, or `@hourly`, `@daily`, `@weekly` or `@monthly`. Without it, a `when` of `hourly`, `daily`, `weekly` or `monthly` means the alias. Editing it does not change the spec hash |
 | `metadata.window` | `"none"`, or `size` (`day`, `hour` or `15m`), an optional `column` that selects the rows of a window, and an optional `timezone` (UTC by default); see [Windows](#windows) |
 | `metadata.retries` | How a workflow tries the run again after a failure: `max_attempts` (1 by default, which is no retry), `delay_s` (30) and `backoff` (2.0); see [Workflow files](#workflow-files). Editing it does not change the spec hash |
+| `metadata.docs` | The contract of the table: `layer` (`bronze`, `silver` or `gold`), `description`, `owner` (the config's `who` by default), `grain`, `primary_key`, `columns` (column name to description), `tags` and `refresh` (the config's `when` by default); see [Table contracts](#table-contracts). Editing it does not change the spec hash |
 
 A config may also say `"apiVersion": "ldp/v1"` and `"kind": "Pipeline"`. `kind` says what a JSON file is. `Pipeline`
 is the default, so every config here is one, and a config has the same spec hash with and without it. `Workflow` is
@@ -512,6 +514,37 @@ sheet. It needs the `excel` extra, and `ldp plan` reports a missing file or a `.
 atomically, so a folder that Google Drive syncs never holds a half-written file; see the recipe
 [Excel to CSV in a Google Drive folder](docs/recipes.md#excel-to-csv-in-a-google-drive-folder).
 
+### Table contracts
+
+A table says what it means, who owns it, what one row is and what each column holds, in a `metadata.docs` block next to
+the pipeline that builds it. After a run publishes, LDP writes the block into the Iceberg table, as the properties
+`comment`, `ldp.owner`, `ldp.layer`, `ldp.grain` and `ldp.primary-key` and the doc of each column. Anyone who finds the
+table reads it there, in `ldp mcp`, in DuckDB or in any other client.
+
+```json
+"docs": {
+  "layer": "gold",
+  "description": "Orders and revenue for each restaurant on each day it had an order.",
+  "owner": "restaurant operations",
+  "grain": "one row for each restaurant on each day it had an order",
+  "primary_key": ["restaurant_id", "day"],
+  "columns": {"restaurant_id": "The restaurant.", "day": "The day.", "orders": "How many orders.",
+              "revenue": "What they cost."}
+}
+```
+
+- A `gold` table has to keep its promise. It needs a `description`, a `grain` and an owner (`owner`, or the `who` of the
+  config). `ldp run` stops it before anything is written when a column has no description, or when `columns` describes
+  a column that the table does not have, and the exit status is 3, as for a failed quality check. A table of another
+  layer may document as much or as little as it likes.
+- The contract is one metadata-only commit, so it adds no snapshot, and a table that already has it gets no commit. It
+  only adds and changes text, and a run that wrote nothing does not touch the table.
+- `ldp gold sync CONFIG` writes the contract of a config into a table that exists, with no new data. With
+  `--dbt-manifest target/manifest.json` it reads the contract from the manifest, for a table that dbt built.
+- `ldp dbt build` fills the block from the dbt manifest. A model that is published to the `gold` namespace is a gold
+  table, so it needs `owner` and `grain` in its meta, a description, and a description of each column.
+- Editing the block does not change the spec hash. The design is in [the v0.1.4 contract](docs/design/v0_1_4.md).
+
 ## Catalogs and object storage
 
 The catalog block's `type` picks the catalog. It defaults to `local`, so a catalog block without
@@ -722,6 +755,12 @@ data test passed, each model whose config has `meta={'ldp_publish': true}` is wr
 A table or view model overwrites its table, and an incremental model with a `unique_key` upserts on it. Nothing is
 published when dbt fails. Everything after the project folder goes to dbt unchanged, and the options of `ldp dbt`
 itself go before it.
+
+A published model also carries what the project says about it. Its description, the description of each column, its
+tags, its `owner` and `grain` meta and its layer become the table's [contract](docs/design/v0_1_4.md) and go into the
+Iceberg table. A model that is published to the `gold` namespace is a gold table, so it needs an owner, a grain, a
+description and a description of every column, and `ldp dbt build` stops before it publishes anything if one is
+missing.
 
 - The [warehousing guide](docs/warehousing.md) walks through it on a restaurant chain's Excel and CSV exports, from
   the raw tables to tested models, churn, an incremental load and time travel. `make demo-warehouse` runs the same

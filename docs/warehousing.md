@@ -228,6 +228,7 @@ ldp: created a dbt project in ...
   ldp_dbt.json
   models/staging/stg_example.sql
   models/gold/gold_example.sql
+  models/schema.yml
   .gitignore
 Next: ldp dbt build first_project
 ```
@@ -278,11 +279,13 @@ cat first_project/ldp_dbt.json
 }
 ```
 
-The project has two example models, a staging view and a gold table. A staging model tidies a source, and a gold model is the table people use. Add a third, a model of your own. It counts the orders and the revenue for each channel. The `meta` line is the mark that tells LDP to publish it, and the folder `models/gold` makes it a table, as `dbt_project.yml` says.
+The project has two example models, a staging view and a gold table. A staging model tidies a source, and a gold model is the table people use. A table in the namespace `gold` is a gold table, and a gold table says who owns it, what one row of it is and what each column holds. The example model says the first two in its `meta`, as `owner` and `grain`, and the third in `models/schema.yml`, which describes the model and its column. LDP writes all of it into the Iceberg table, so anyone who opens the table can read it there. If a gold model leaves something out, the build stops before it publishes anything and says what is missing.
+
+Add a third model, a model of your own. It counts the orders and the revenue for each channel. The `meta` line is the mark that tells LDP to publish it, and it names the owner and the grain. The folder `models/gold` makes it a table, as `dbt_project.yml` says.
 
 ```bash
 cat > first_project/models/gold/orders_by_channel.sql <<'EOF'
-{{ config(meta={'ldp_publish': true}) }}
+{{ config(meta={'ldp_publish': true, 'owner': 'restaurant operations', 'grain': 'one row for each channel'}) }}
 
 select
     channel,
@@ -290,6 +293,23 @@ select
     round(sum(total_amount), 2) as revenue
 from {{ source('raw', 'orders') }}
 group by channel
+EOF
+```
+
+Describe the model and its three columns in `schema.yml`, below the example.
+
+```bash
+cat >> first_project/models/schema.yml <<'EOF'
+
+  - name: orders_by_channel
+    description: Orders and revenue for each channel.
+    columns:
+      - name: channel
+        description: How the order was served.
+      - name: orders
+        description: How many orders came through the channel.
+      - name: revenue
+        description: What those orders cost.
 EOF
 ```
 
@@ -341,6 +361,7 @@ cat first_project/target/ldp/orders_by_channel.json
 ```text
 {
   "identifier": "orders_by_channel",
+  "what": "Orders and revenue for each channel.",
   "where": "dbt project first_project",
   "how": "ldp dbt build",
   "metadata": {
@@ -358,12 +379,25 @@ cat first_project/target/ldp/orders_by_channel.json
         "identifier": "gold",
         "warehouse_path": "../../../warehouse"
       }
+    },
+    "docs": {
+      "layer": "gold",
+      "description": "Orders and revenue for each channel.",
+      "owner": "restaurant operations",
+      "grain": "one row for each channel",
+      "columns": {
+        "channel": "How the order was served.",
+        "orders": "How many orders came through the channel.",
+        "revenue": "What those orders cost."
+      }
     }
   }
 }
 ```
 
-Because it is an ordinary config, the commands that work on any table work on a published model, such as `ldp snapshots`, `ldp query`, `ldp runs`, `ldp maintain` and `ldp mcp`. Query it.
+The `docs` block is the contract of the table. dbt's descriptions and meta filled it in, and LDP wrote it into the Iceberg table as its comment, its owner, its grain and the doc of each column.
+
+Because the file is an ordinary config, the commands that work on any table work on a published model, such as `ldp snapshots`, `ldp query`, `ldp runs`, `ldp maintain` and `ldp mcp`. Query it.
 
 ```bash
 ldp query first_project/target/ldp "SELECT * FROM orders_by_channel ORDER BY revenue DESC"
@@ -410,6 +444,8 @@ It has seven models.
 | `customer_activity_monthly` | One row for each customer and each month in which they ordered |
 | `churn_by_month` | The share of customers who stop ordering in each month. It is published to `gold` |
 | `revenue_by_restaurant_day` | Orders and revenue for each restaurant on each day. It is published to `gold` |
+
+The two gold models are gold tables, so each names its `owner` and `grain` in its `meta`, and `schema.yml` describes every column of them.
 
 Build it. dbt runs the seven models and 26 data tests, and LDP publishes the three models that carry the mark.
 

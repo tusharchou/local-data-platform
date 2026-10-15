@@ -34,14 +34,15 @@ from local_data_platform.orchestration import (
 )
 from local_data_platform.orchestration.dbt_task import last_build
 from local_data_platform.orchestration.tasks import RunContext, TaskBlocked, TaskFailed, get_task_kind
-from tests.support import FakeDbt, dbt_artifacts, dbt_model, write_dbt_project
+from tests.support import GOLD_META, FakeDbt, dbt_artifacts, dbt_model, write_dbt_project
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="the stand-in dbt is a script with a shebang line")
 
 DAY1, DAY2 = "2026-08-01/2026-08-02", "2026-08-02/2026-08-03"
 ORDERS = "id,at,amount\n1,2026-08-01T10:00:00,10.0\n2,2026-08-01T11:00:00,20.0\n3,2026-08-02T09:00:00,5.0\n"
 CATALOG = {"identifier": "shop", "warehouse_path": "../warehouse"}
-GOLD_META = {"ldp_publish": True, "ldp_namespace": "gold"}
+DAILY_REVENUE = {"description": "Revenue for each day.", "columns": {
+    "day": "The day.", "orders": "How many orders.", "revenue": "What they cost."}}
 CREATE = ["create or replace table main.daily_revenue as select cast('2026-08-01' as date) as day, 2 as orders, "
           "1234.5 as revenue"]
 WINDOW1 = ["2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z"]
@@ -68,7 +69,8 @@ def _orders_config(root: Path, identifier: str = "orders") -> Path:
 def _will(fake: FakeDbt, root: Path, *, models=None, tests=(), statuses=None, exit=0, sql=CREATE,
           artifacts=True) -> None:
     """Make the stand-in dbt build ``daily_revenue`` (or ``models``) and write the artifacts of a run."""
-    manifest, results = dbt_artifacts(*(models or [dbt_model("daily_revenue", meta=GOLD_META)]), statuses=statuses)
+    models = models or [dbt_model("daily_revenue", meta=GOLD_META, **DAILY_REVENUE)]
+    manifest, results = dbt_artifacts(*models, statuses=statuses)
     for check in tests:
         results["results"].append({"unique_id": f"test.shop.{check['name']}.abc123",
                                    "status": check.get("status", "pass"), "message": check.get("message", "")})
@@ -780,7 +782,7 @@ def test_artifacts_from_an_earlier_run_are_not_taken_for_this_one(tmp_path, fake
 
 def test_a_quality_check_that_blocks_the_write_of_a_model_is_a_data_gate(tmp_path, fake):
     meta = {**GOLD_META, "ldp_quality": [{"check": "row_count", "min": 5}]}
-    workflow = _project(tmp_path, fake, will={"models": [dbt_model("daily_revenue", meta=meta)]})
+    workflow = _project(tmp_path, fake, will={"models": [dbt_model("daily_revenue", meta=meta, **DAILY_REVENUE)]})
 
     result = run_workflow(workflow, window=DAY1)
 
@@ -791,7 +793,8 @@ def test_a_quality_check_that_blocks_the_write_of_a_model_is_a_data_gate(tmp_pat
 
 
 def test_a_write_that_failed_for_another_reason_is_a_failure_and_names_what_was_published(tmp_path, fake):
-    models = [dbt_model("daily_revenue", meta=GOLD_META), dbt_model("missing_model", meta=GOLD_META)]
+    models = [dbt_model("daily_revenue", meta=GOLD_META, **DAILY_REVENUE),
+              dbt_model("missing_model", meta=GOLD_META, **DAILY_REVENUE)]
     workflow = _project(tmp_path, fake, will={"models": models})  # the stand-in builds only daily_revenue
 
     gold = run_workflow(workflow, window=DAY1).tasks["gold"]

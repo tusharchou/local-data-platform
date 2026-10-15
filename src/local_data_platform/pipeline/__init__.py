@@ -27,7 +27,11 @@ reads the source path of that window, keeps only the rows of the window right af
 names a ``metadata.window.column``, replaces only those rows when it overwrites an Iceberg table, and checks
 freshness at the end of the window. Checks run *before* the write: with ``on_failure="fail"`` a
 failing check raises :class:`~local_data_platform.exceptions.DataQualityError` and
-nothing is written; with ``"warn"`` the failures are logged and the write goes ahead.
+nothing is written; with ``"warn"`` the failures are logged and the write goes ahead. A config whose
+``metadata.docs`` says ``"layer": "gold"`` is held to that contract before the write too: a column without a
+description, or a description of a column that the table does not have, raises
+:class:`~local_data_platform.exceptions.ContractError` and writes nothing. After the publish, the run writes the
+contract into the Iceberg table (see :mod:`local_data_platform.contracts`), and it says so in ``run.published``.
 
 Every run has a UUIDv7 ``run_id`` and emits :class:`~local_data_platform.events.RunEvent`
 records to an event sink: ``run.started``, ``run.extracted``, ``quality.evaluated``, then
@@ -51,7 +55,7 @@ from typing import Any
 
 import pyarrow as pa
 
-from local_data_platform import Config, Flow
+from local_data_platform import Config, Flow, contracts
 from local_data_platform.events import (
     EventSink,
     RunEmitter,
@@ -552,6 +556,9 @@ class Pipeline(Flow):
         Raises:
             DataQualityError: If a check failed and ``on_failure`` is ``"fail"``.
                 Nothing is written; ``run.blocked_quality`` is emitted.
+            ContractError: If the config is a gold table and a column has no description, or the docs describe a
+                column that the table does not have. It is a ``DataQualityError``, and it is raised after the checks
+                have passed and before anything is written.
             ConfigError: If ``commit`` is given for a target that can't take it, or together with ``run_id`` or
                 ``attempt``, or ``attempt`` is not a whole number from 1.
             TypeError: If ``sink`` has no ``emit``/``flush`` methods.
@@ -613,12 +620,20 @@ class Pipeline(Flow):
                 blocked = error
                 report = error.report if isinstance(error.report, QualityReport) else QualityReport()
             emitter.emit("quality.evaluated", lambda: self._quality_payload(df, report))
+            problems: list[str] = []
+            if blocked is None:
+                stage = "contract"
+                problems = self._contract_problems(df)
+                if problems:
+                    blocked = contracts.contract_error(self._target_name() or self.name, problems)
             if blocked is not None:
                 emitter.emit("run.blocked_quality", lambda: {
-                    "checks_failed": len(report.failures), "failures": [r.name for r in report.failures],
-                    "on_failure": self.on_failure})
+                    "checks_failed": len(report.failures) + bool(problems),
+                    "failures": [r.name for r in report.failures] + (["contract"] if problems else []),
+                    "on_failure": self.on_failure, **({"contract_problems": problems} if problems else {})})
                 counts["rows_written"] = 0
-                finish("blocked_quality", quality_passed=False)
+                finish("blocked_quality", quality_passed=report.passed if problems else False,
+                       **({"contract_passed": False} if problems else {}))
                 raise blocked
 
             stage = "write"
@@ -627,8 +642,9 @@ class Pipeline(Flow):
             result = self._result(df, rows_read, written, report, key, run_id, started, rows_kept)
             counts["rows_written"] = result.rows_written
             key = result.idempotency_key
+            contract = self._apply_contract(result, policy)
             table_uuid, summary = self._snapshot_facts(result.published_snapshot_id) if emitter.enabled else (None, {})
-            emitter.emit("run." + result.status, lambda: self._written_payload(result, written, summary),
+            emitter.emit("run." + result.status, lambda: self._written_payload(result, written, summary, contract),
                          table_uuid=table_uuid)
             finish(result.status, published_snapshot_id=result.published_snapshot_id,
                    quality_passed=report.passed)
@@ -728,15 +744,59 @@ class Pipeline(Flow):
         }
 
     @staticmethod
-    def _written_payload(result: PipelineResult, written: Any, summary: Mapping[str, Any]) -> dict[str, Any]:
+    def _written_payload(result: PipelineResult, written: Any, summary: Mapping[str, Any],
+                         contract: Mapping[str, Any] | None = None) -> dict[str, Any]:
         write = dataclasses.asdict(written) if dataclasses.is_dataclass(written) else None
-        return {
+        payload = {
             "rows_written": result.rows_written,
             "snapshot_id": result.published_snapshot_id,
             "idempotency_key": result.idempotency_key,
             "write": write,
             "snapshot_summary": dict(summary),
         }
+        if contract is not None:
+            payload["contract"] = dict(contract)
+        return payload
+
+    # ------------------------------------------------------------------ contract
+
+    def _docs(self) -> contracts.Docs | None:
+        return self.config.docs if self.config is not None else None
+
+    def _contract_problems(self, df: pa.Table) -> list[str]:
+        """What is wrong with the gold contract of the table for the columns of ``df``. Nothing, for any other table."""
+        docs = self._docs()
+        if docs is None or not docs.gold:
+            return []
+        described_elsewhere = any(name not in df.schema.names for name in docs.columns)
+        existing = self._table_columns() if described_elsewhere else []
+        return contracts.check_contract(docs, df.schema, existing=existing)
+
+    def _table_columns(self) -> list[str]:
+        """The columns that the target table has now, or none when it is not an Iceberg table or not there yet."""
+        exists, load = getattr(self.target, "exists", None), getattr(self.target, "table", None)
+        if not (callable(exists) and callable(load)) or not exists():
+            return []
+        return [item.name for item in load().schema().fields]
+
+    def _apply_contract(self, result: PipelineResult, policy: Any) -> dict[str, Any] | None:
+        """Write the contract into the table that the run published to, and say what happened.
+
+        It does nothing for a run that wrote nothing, for a config without docs and for a target that is not an Iceberg
+        table. The data is published by now, so a failure here is logged and reported in the event, and it does not
+        fail the run. ``ldp gold sync`` writes the contract again without writing data.
+        """
+        docs = self._docs()
+        load = getattr(self.target, "table", None)
+        if docs is None or result.status != "published" or not callable(load):
+            return None
+        try:
+            outcome = contracts.apply_contract(load(), docs, policy=policy)
+        except Exception as error:  # noqa: BLE001 - see the docstring
+            logger.warning("Pipeline %s: published %r, but could not write its contract into the table: %s",
+                           self.name, self.target, error)
+            return {"layer": docs.layer, "applied": False, "error": redact_text(str(error))}
+        return {"layer": docs.layer, "applied": True, **outcome.to_dict()}
 
     def _table_uuid(self) -> str | None:
         return self._snapshot_facts(None)[0]

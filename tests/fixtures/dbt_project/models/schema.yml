@@ -12,3 +12,8 @@ models:
         data_tests: [unique, not_null]
   - name: gold_totals
     description: Orders and revenue across all orders.
+    columns:
+      - name: orders
+        description: How many orders there are.
+      - name: revenue
+        description: What they cost.

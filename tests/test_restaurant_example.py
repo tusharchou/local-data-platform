@@ -422,6 +422,13 @@ def test_the_marked_models_publish_to_their_namespace(model, namespace):
     assert "'ldp_publish': true" in sql and f"'ldp_namespace': '{namespace}'" in sql
 
 
+@pytest.mark.parametrize("model", ["churn_by_month", "revenue_by_restaurant_day"])
+def test_the_gold_models_name_their_owner_and_their_grain(model):
+    sql = model_sql(model)
+
+    assert "'owner':" in sql and "'grain':" in sql
+
+
 @pytest.mark.parametrize("model", ["stg_restaurants", "stg_customers", "stg_orders", "customer_activity_monthly"])
 def test_the_other_models_are_not_published(model):
     assert "ldp_publish" not in model_sql(model)

@@ -50,7 +50,8 @@ works as soon as the sources exist:
 | `profiles.yml` | One DuckDB output, `path: target/ldp_build.duckdb`, 4 threads. It also sets `autoinstall_known_extensions: false`, so dbt never downloads a DuckDB extension. |
 | `ldp_dbt.json` | What LDP needs: the sources, where to publish, and where events go. |
 | `models/staging/stg_example.sql` | A staging model on the first source table, or on a constant when there is none yet. |
-| `models/gold/gold_example.sql` | A gold model on the staging one, marked `ldp_publish: true`. |
+| `models/gold/gold_example.sql` | A gold model on the staging one, marked `ldp_publish: true`, with the `owner` and `grain` that a gold table needs. |
+| `models/schema.yml` | The description of the gold model and of its column, which a gold table needs. |
 | `models/_ldp_sources.yml` | Generated on every build. Do not edit it. |
 
 `init` writes only into an empty or missing folder and never overwrites anything. To change what an
@@ -248,6 +249,9 @@ These meta keys override or add to the defaults, with the same meaning as in an 
 | `ldp_namespace` | The namespace of the Iceberg table. The default is the one of `publish.catalog`. For a `local` catalog the namespace is the catalog's `identifier`, so each namespace gets its own catalog file. |
 | `ldp_partition_by` | A list of `{"column", "transform"}` items, as `partition_by` in a config. |
 | `ldp_quality` | Quality checks, as `metadata.quality` in a config. A failing check blocks that model's write. |
+| `ldp_layer` | `bronze`, `silver` or `gold`, for the contract of the table. The default is the namespace, when that is one of the three. |
+| `owner` | Who owns the table, for its contract. Needed by a gold table. |
+| `grain` | What one row of the table is, for its contract. Needed by a gold table. |
 
 The Iceberg table is named after the model's alias. Two models that would write the same table are
 an error. An `upsert` never deletes: a row that a model stops producing stays in Iceberg until the
@@ -258,6 +262,16 @@ and runs it with `etl.run_config`. The file is an ordinary dataset config whose 
 `{"format": "DUCKDB", "path": <build file>, "relation": "<schema>.<alias>"}`, so it works with
 `ldp snapshots`, `ldp query`, `ldp runs`, `ldp maintain` and `ldp mcp --config`, and `ldp run` on it
 publishes the model again. Paths in it are relative to `config_dir`.
+
+**The contract.** Each generated config also has a `metadata.docs` block, which LDP fills from the manifest. It takes
+the description of the model, the description of each column that has one, the tags, the `owner` and `grain` of the
+meta, the key columns (the `unique_key` or the columns of an upsert) and the layer. After the write, LDP puts the block
+into the Iceberg table, as the table properties `comment`, `ldp.owner`, `ldp.layer`, `ldp.grain` and `ldp.primary-key`
+and the doc of each column, which is one metadata-only commit and adds no snapshot. A model published to the `gold`
+namespace, or with `ldp_layer: gold`, is a gold table. It needs a description, an `owner` and a `grain`, and every
+column that it writes needs a description, and the contract is in
+[the 0.1.4 design](v0_1_4.md). A gold model that lacks one of the first three stops the command with the model's name
+before anything is published, and a gold model with a column that has no description stops at its own write.
 
 **Order and failure.** Every generated config is validated before the first write, so a bad meta key
 fails the command with the model's name and nothing published. Models then publish in dependency

@@ -1,7 +1,7 @@
 """Dataset configuration.
 
 A config describes one dataset with the 4W1H questions (who, what, where, when, how)
-plus a ``metadata`` block holding ``source``, ``target`` and optional ``quality``
+plus a ``metadata`` block holding ``source``, ``target`` and optional ``quality`` and ``docs``
 sections. See ``docs/design/v0_1_1.md`` for the full schema.
 """
 
@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import contracts
 from .exceptions import ConfigError
 from .orchestration import retries, windows
 from .paths import resolve_path
@@ -100,6 +101,8 @@ class Config:
         if "retries" in self.metadata:
             for path, message in retries.retries_problems(self.metadata["retries"]):
                 raise ConfigError(f"metadata.retries{path}: {message}")
+        for path, message in contracts.docs_problems(self.metadata.get("docs"), who=self.who):
+            raise ConfigError(f"metadata.docs{path}: {message}")
 
     @property
     def source(self) -> dict[str, Any]:
@@ -126,6 +129,15 @@ class Config:
         It is ``None`` when the config has no ``window`` or sets it to ``"none"``.
         """
         return windows.parse_window_spec(self.metadata.get("window"))
+
+    @property
+    def docs(self) -> contracts.Docs | None:
+        """The contract of the table: its ``metadata.docs`` block, normalised, or ``None`` when there is none.
+
+        ``owner`` is the config's ``who`` when the block names no owner, and ``refresh`` is its ``when`` when the block
+        names no refresh. See :mod:`local_data_platform.contracts`.
+        """
+        return contracts.parse_docs(self.metadata.get("docs"), who=self.who, when=self.when)
 
     @property
     def quality(self) -> dict[str, Any]:

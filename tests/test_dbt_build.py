@@ -14,7 +14,7 @@ from local_data_platform.dbt_layer import build
 from local_data_platform.dbt_layer.publish import PublishOutcome
 from local_data_platform.dbt_layer.sources import RegisteredSource, SourceRegistration
 from local_data_platform.exceptions import ConfigError, DataQualityError, EngineNotFound
-from tests.support import FakeDbt, build_lake, copy_fixture_project, dbt_artifacts, dbt_model
+from tests.support import GOLD_META, TOTALS_DOCS, FakeDbt, build_lake, copy_fixture_project, dbt_artifacts, dbt_model
 
 
 @pytest.fixture
@@ -113,7 +113,7 @@ def test_register_writes_the_sources_and_checks_the_mode(project):
 
 
 def _will(fake, project, *, exit=0, statuses=None, meta=True, artifacts=True):
-    models = [dbt_model("gold_totals", meta={"ldp_publish": True, "ldp_namespace": "gold"} if meta else {})]
+    models = [dbt_model("gold_totals", meta=GOLD_META if meta else {}, **TOTALS_DOCS)]
     manifest, results = dbt_artifacts(*models, statuses=statuses)
     results["elapsed_time"] = 1.5
     plan = {"database": str(project.database), "exit": exit,
