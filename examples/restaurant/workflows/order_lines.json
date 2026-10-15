@@ -1,0 +1,35 @@
+{
+  "identifier": "order_lines",
+  "who": "restaurant owner",
+  "what": "the lines of the orders of one day, as exported",
+  "where": "drops/order_lines_<day>.csv",
+  "how": "daily append, one window at a time",
+  "metadata": {
+    "source": {
+      "name": "order_lines",
+      "format": "CSV",
+      "path": "../drops/order_lines_{window_start:%Y-%m-%d}.csv"
+    },
+    "target": {
+      "name": "order_lines",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "raw",
+        "warehouse_path": "../warehouse"
+      },
+      "write_mode": "append"
+    },
+    "window": {"size": "day", "column": "order_ts"},
+    "quality": {
+      "on_failure": "fail",
+      "checks": [
+        {"check": "row_count", "min": 1},
+        {"check": "not_null", "columns": ["order_id", "line_no", "menu_item_id", "quantity", "unit_price", "order_ts"]},
+        {"check": "range", "column": "quantity", "min": 1},
+        {"check": "schema", "columns": {
+          "order_id": "string", "line_no": "int64", "menu_item_id": "string", "quantity": "int64",
+          "unit_price": "double", "order_ts": "timestamp[s]"}}
+      ]
+    }
+  }
+}

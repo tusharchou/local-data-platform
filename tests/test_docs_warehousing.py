@@ -61,7 +61,7 @@ def test_the_guide_follows_the_learn_chapter_template():
 
     assert text.startswith("# ") and "**You will learn**" in opening and "**It takes**" in opening
     assert headings[-1] == "What to read next"
-    assert "0.1.3" in text  # scheduling dbt runs is covered there, and the guide says so
+    assert "(orchestration.md)" in text  # scheduling dbt runs is covered there, and the guide says so
 
 
 def test_the_sql_yaml_and_json_the_guide_shows_are_excerpts_of_the_example():

@@ -44,9 +44,9 @@ from new `ldp` subcommands (`ldp catalog test`, `ldp schema`, `ldp plan`, `ldp r
 | [Robot-episode datasets](robotics.md) | Temporal quality checks, pinned dataset versions and the robotics example |
 | [Spark (experimental)](spark.md) | The Scala Spark job and the PySpark engine on the same catalog |
 
-Most have a demo: `make demo-robotics`, `make demo-agent`, `make demo-warehouse`, `make demo-spark` and
-`make demo-rest`. `make demo-all` runs them all; `demo-warehouse` needs the `dbt` and `excel` extras, and the two
-JVM demos need [scala-cli](https://scala-cli.virtuslab.org).
+Most have a demo. These are `make demo-robotics`, `make demo-agent`, `make demo-warehouse`,
+`make demo-orchestration`, `make demo-spark` and `make demo-rest`. `make demo-all` runs them all. `demo-warehouse` needs
+the `dbt` and `excel` extras, and the two JVM demos need [scala-cli](https://scala-cli.virtuslab.org).
 
 ## 🏆 Issues to contribute on
 

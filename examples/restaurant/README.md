@@ -13,9 +13,10 @@ python examples/restaurant/run.py --workdir ldp_demo/restaurant --layer warehous
 
 This is the `warehouse` layer. It is the first layer of an example that the later milestones of the
 [roadmap](../../docs/roadmap.md) extend, so the same restaurants, customers and orders go through each layer.
-`--layer` runs one layer, and the layers before it when their output is missing. Without the `dbt` or the `excel`
+`--layer` runs one layer, and the layers that it needs first. Without the `dbt` or the `excel`
 extra, `run.py` says which one to install and exits with 1. The design is in [PRD.md](PRD.md), and the
-[warehousing guide](../../docs/warehousing.md) does the same steps by hand with the `ldp` commands.
+[warehousing guide](../../docs/warehousing.md) does the same steps by hand with the `ldp` commands. The second layer,
+`orchestration`, is [below](#the-orchestration-layer).
 
 ## What happens
 
@@ -150,12 +151,54 @@ checked.
 | `orders_batch1.csv` | 745 | Orders from January to June 2026 |
 | `orders_batch2.csv` | 108 | Orders of July 2026, and 5 late ones from June |
 | `orders_2026-08-01.csv` to `orders_2026-08-07.csv` | 30 in all | One drop file a day, for the milestones that schedule a load for each day |
-| `order_lines_<batch>.csv` | 2195 in all | The lines of each order |
+| `order_lines_<batch>.csv` | 2195 in all | The lines of each order. In a daily drop a line also has the `order_ts` of its order, so that a window can pick the lines of a day |
 | `menu_items.csv`, `reviews.csv` | 36 and 94 | The menu, and the reviews of some orders |
 
 `python examples/restaurant/generate.py --out DIR` writes all of them. The walkthrough lands each batch as
 `landing/orders.csv`, the way an export lands in the same place every time. This milestone loads the restaurants,
 customers and orders. The menu, order lines and reviews wait for the layers that use them.
+
+## The orchestration layer
+
+```bash
+python examples/restaurant/run.py --workdir ldp_demo/restaurant --layer orchestration   # or: make demo-orchestration
+```
+
+The second layer runs the restaurant's nightly drops as a workflow, the way a scheduler would. It needs no extra. It loads the
+two small tables that the models read, runs the `models` task, which is the dbt project above, when the `dbt` extra is
+installed, and prints a skip line when it is not. It takes about 20 seconds with dbt and about a second without it.
+`--layer orchestration` runs this layer on its own, in a work folder that it clears first, as the other layer does.
+
+| Step | What the platform does | Where |
+|---|---|---|
+| 1. Drops | Three nights of orders and order lines land in `drops/`. In the file of the third night, one order has a channel that the checks do not accept | `drops/` |
+| 2. Plan | `ldp workflow plan` lists the tasks `orders`, `order_lines`, `models` and `tidy` in the order they run, with the key of the window | `workflows/daily_orders.json` |
+| 3. Backfill | `ldp backfill --from 2026-08-01 --to 2026-08-04` publishes 1 and 2 August, a data gate holds back 3 August with exit status 3, and the tasks that wait for the orders do not run | `workflows/orders.json`, `workflows/order_lines.json` |
+| 4. Fix | After the row is fixed, the same command runs only 3 August | |
+| 5. Third run | Every window is done, so nothing is read and nothing is written | |
+| 6. Next night | `ldp schedule tick --now 2026-08-05T02:05:00Z` loads 4 August. `ldp schedule list`, `ldp runs`, `ldp commits` and `ldp schedule install --print cron` show what happened | |
+
+Without dbt, this is what it prints for the backfills (`<workdir>` is the folder you gave).
+
+```text
+== 3. Backfill the three days: the first run
+   $ ldp backfill <workdir>/workflows/daily_orders.json --from 2026-08-01 --to 2026-08-04
+     [1/3] 2026-08-01T00:00:00Z/2026-08-02T00:00:00Z  published
+     [2/3] 2026-08-02T00:00:00Z/2026-08-03T00:00:00Z  published
+     [3/3] 2026-08-03T00:00:00Z/2026-08-04T00:00:00Z  blocked
+     backfill daily_orders: 2 published, 0 skipped, 1 blocked, 0 failed in 0.4s. Events: <workdir>/workflows/.ldp/events.jsonl
+     orders: DataQualityError: 1 of 5 data quality checks failed:
+       - accepted_values(channel): 1 of 7 rows have a channel outside ['dine_in', 'takeaway', 'delivery']; e.g. ['drive_thru']
+   Exit status 3: a data gate held 3 August back, and the data has to change before another run
+
+== 4. Fix the row, and run the same command again
+   $ ldp backfill <workdir>/workflows/daily_orders.json --from 2026-08-01 --to 2026-08-04
+     [3/3] 2026-08-03T00:00:00Z/2026-08-04T00:00:00Z  published
+     backfill daily_orders: 1 published, 2 skipped, 0 blocked, 0 failed in 0.1s. Events: <workdir>/workflows/.ldp/events.jsonl
+```
+
+The [orchestration guide](../../docs/orchestration.md) does the same steps by hand, and adds a replaced day, a retried
+task, launchd and cron, and Airflow, Dagster and Prefect.
 
 ## Files
 
@@ -164,15 +207,18 @@ customers and orders. The menu, order lines and reviews wait for the layers that
 | `generate.py` | The seeded generator |
 | `config/` | The four ingest configs. `run.py` copies them into the work folder, and `ldp dbt` writes the published models' configs next to them |
 | `dbt/` | The dbt project: `dbt_project.yml`, `profiles.yml`, `ldp_dbt.json`, the models, `schema.yml` and a singular test |
+| `workflows/` | The daily workflow, `daily_orders.json`, and the two windowed configs it runs, `orders.json` and `order_lines.json`. They read the files of `drops/` |
 | `run.py` | The narrated walkthrough |
 | `airflow_dag.py` | A one-task Airflow 3 DAG that loads the daily drops, one data interval at a time. [The Airflow guide](../../docs/airflow.md) runs it |
 | `PRD.md` | The product requirements, and the tables of the example |
 
-The work folder gets `landing/`, `warehouse/`, `config/` and `dbt/`, and a marker file. `run.py` clears those folders on
-each run, and refuses a folder that it did not create.
+The work folder gets `landing/`, `warehouse/`, `config/`, `dbt/`, `workflows/` and `drops/`, `.ldp/` when a scheduler ticks, and a
+marker file. `run.py` clears those folders on each run, and refuses a folder that it did not create.
 
 ## Tests
 
 `tests/test_restaurant_example.py` covers the generator, the configs, the ingest and the dbt project without running
 dbt. `tests/test_restaurant_warehouse.py` runs the whole walkthrough with dbt (it needs the `dbt` extra, and `pytest -m dbt`
 runs it) and checks the numbers above, a batch with a duplicate order, `ldp dbt docs` and the #47 churn example.
+`tests/test_orchestration_demo.py` runs the orchestration layer offline, without dbt in every job and with dbt in the
+`dbt` job, and `tests/test_docs_orchestration.py` runs every command of the orchestration guide.

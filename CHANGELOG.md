@@ -6,7 +6,64 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
-Work towards 0.1.3 Orchestration, see `docs/roadmap.md`.
+Work towards 0.1.3 Orchestration, see `docs/roadmap.md`. The lakehouse runs itself on a laptop. Pipelines, dbt models and
+maintenance are declared once in a workflow file and run for the right time window, on a schedule from cron or launchd
+with no service, or from Airflow 3. Backfills and retries reuse the idempotency keys, so no window is loaded twice. The
+guide is `docs/orchestration.md`, and `make demo-orchestration` runs the example.
+
+### Added
+
+- Spec kinds. Every JSON file can say what it is with `kind` (`Pipeline`, the default, or `Workflow`), `ldp schema --kind`
+  prints the schema of a kind, `ldp plan` checks each file as its kind, and `ldp run` accepts a config that has `apiVersion`
+  (#130). A config has the same spec hash with and without `"kind": "Pipeline"`.
+- `ldp run` takes `--window`, `--idempotency-key`, `--run-id`, `--attempt` and `--json`, so cron, Airflow or a shell script
+  can run and retry a window without loading its rows twice, and every command follows one exit-code table (#131).
+- Window-aware configs (#133). A config can say `metadata.schedule` and `metadata.window`, a source path can name the file
+  of a window with `{window_start:%Y-%m-%d}`, a window column selects the rows of a window and, with the write mode
+  `overwrite`, replaces only them, and `yesterday`, `last-week` and `last-month` work as windows. Three daily windows over
+  one file that holds three days of rows used to write 9 rows and now write 3. `cronsim` is a new dependency.
+- A staged run looks for its idempotency key in the whole history that the table still holds before it reads its source, so
+  a window that ran weeks ago is skipped without being read, and `etl.batch_search` makes long backfills safe (#134).
+- Workflow files. A workflow lists pipelines and maintenance tasks with their dependencies, and `ldp workflow plan` and
+  `ldp workflow run` check it and run it for a window, with failure isolation, resume by idempotency key and a ledger of
+  events next to the file (#135). The task kinds come from a registry.
+- A `dbt` task runs a dbt project for the window of the run, with `window_start` and `window_end` as dbt variables. Failing
+  data tests are a data gate with exit status 3, and a window that was already built is skipped (#136).
+- Task retries. A workflow, and each task of it, can set `retries`, and a task that fails with an error that another attempt
+  may fix runs again with the same run id and the same idempotency key. `ldp runs` shows the last attempt of each run, and
+  `--attempts` shows them all (#137).
+- `ldp backfill` runs a workflow, or a dataset config with a window, for every window of a range. A window whose keys are
+  already on the tables is skipped, so a backfill that stopped is resumed by running the same command again. `--replace`
+  writes each window again under a replace key, and `--dry-run` lists the windows with their keys and states (#138).
+- `ldp schedule tick` runs every window that is due and not done for every workflow and dataset config under a folder, then
+  exits, so cron or launchd can call it every 5 minutes. A window that failed is run again by the next tick as the next
+  attempt of the same run. `ldp schedule list` shows the next fire, the last window and the missed windows, and
+  `ldp schedule install --print cron` or `--print launchd` prints the recipe (#139).
+- `LdpRunOperator` in `local_data_platform.integrations.airflow` runs a config as an Airflow 3 task, with the data interval as
+  the window, the try number as the attempt and a stable run id, so an Airflow retry carries on the run and a backfill over a
+  published day writes nothing. A data gate fails the task without a retry. The guide is `docs/airflow.md`, and it also
+  shows a BashOperator recipe (#140).
+- The orchestration layer of the restaurant example and `make demo-orchestration`. Three nightly drops, with a bad row in the
+  third, are backfilled by the daily workflow, which loads two days and is held back by a data gate on the third. After the
+  fix the same command runs only the third, a third run skips every day, and `ldp schedule tick` loads the fourth night.
+  The `models` task runs when the `dbt` extra is installed, and the demo prints a skip line when it is not. The daily drops
+  now carry the `order_ts` of their order on each order line.
+- The orchestration guide, `docs/orchestration.md`, whose commands run in the test suite through the shared block runner in
+  `tests/docs_runner.py`, and an Orchestration section in the README.
+
+### Changed
+
+- A quality check that blocks a write makes `ldp run` exit with 3 and not 1, so a scheduler can retry 1 and never retry 3
+  (#131).
+
+### Fixed
+
+- Two processes that open a new SQL or local catalog at the same moment no longer crash with `table iceberg_tables already
+  exists` or an `IntegrityError` (#131). With the fix, none of 80 runs of two processes crashed, where 3 of 80 had.
+- A key that a rival publishes between the search for it and the staging of a write is found, and no longer published twice
+  (#131).
+- A window that ran 8 days ago is skipped and no longer published again, and a batch of 520 hourly windows no longer fails
+  at the 501st (#134).
 
 ## [0.1.2] - 2026-10-13
 

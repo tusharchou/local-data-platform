@@ -11,7 +11,8 @@ The orders arrive the way a restaurant system exports them, in dated batches:
 | ``batch1`` | every order from January to June 2026 |
 | ``batch2`` | every order of July 2026, and five late orders from the end of June: created on time, but only |
 |  | synced in July, so their ``updated_at`` is in July |
-| ``2026-08-01`` to ``2026-08-07`` | one drop file a day, for the later milestones that schedule a load for each day |
+| ``2026-08-01`` to ``2026-08-07`` | one drop a day, an orders file and an order lines file, for the milestones that |
+|  | schedule a load for each day. A line carries the ``order_ts`` of its order, so a window can pick a day's lines |
 
 Each order has an ``updated_at``, the time the restaurant system last changed it, which tells the versions of an
 order apart. A model can load only what is new by taking an order it has no row for, or one that is newer than the
@@ -255,6 +256,7 @@ def _money(value: float) -> str:
 
 ORDER_COLUMNS = ("order_id", "restaurant_id", "customer_id", "order_ts", "channel", "total_amount", "updated_at")
 LINE_COLUMNS = ("order_id", "line_no", "menu_item_id", "quantity", "unit_price")
+DROP_LINE_COLUMNS = (*LINE_COLUMNS, "order_ts")
 
 
 def write_restaurants_xlsx(path: str | Path, dataset: Dataset) -> Path:
@@ -281,6 +283,25 @@ def write_restaurants_xlsx(path: str | Path, dataset: Dataset) -> Path:
     return path
 
 
+def _write_customers(folder: Path, dataset: Dataset) -> Path:
+    return _write_csv(folder / "customers.csv", ("customer_id", "name", "city", "signed_up_at"), dataset.customers,
+                      {"signed_up_at": _stamp})
+
+
+def write_dimensions(folder: str | Path, dataset: Dataset) -> list[Path]:
+    """Write the two tables that the daily models join to, ``restaurants.csv`` and ``customers.csv``.
+
+    The restaurants are a CSV file here, where :func:`write_static` writes them as an Excel workbook, so this needs no
+    Excel reader.
+    """
+    folder = Path(folder)
+    return [
+        _write_csv(folder / "restaurants.csv", ("restaurant_id", "name", "location", "cuisine", "created_at"),
+                   dataset.restaurants, {"created_at": _stamp}),
+        _write_customers(folder, dataset),
+    ]
+
+
 def write_static(folder: str | Path, dataset: Dataset) -> list[Path]:
     """Write the tables that are written once: restaurants (Excel), menu items, customers and reviews."""
     folder = Path(folder)
@@ -288,8 +309,7 @@ def write_static(folder: str | Path, dataset: Dataset) -> list[Path]:
         write_restaurants_xlsx(folder / "restaurants.xlsx", dataset),
         _write_csv(folder / "menu_items.csv", ("menu_item_id", "restaurant_id", "name", "category", "price"),
                    dataset.menu_items, {"price": _money}),
-        _write_csv(folder / "customers.csv", ("customer_id", "name", "city", "signed_up_at"), dataset.customers,
-                   {"signed_up_at": _stamp}),
+        _write_customers(folder, dataset),
         _write_csv(folder / "reviews.csv",
                    ("review_id", "order_id", "customer_id", "restaurant_id", "rating", "comment", "reviewed_at"),
                    dataset.reviews, {"reviewed_at": _stamp}),
@@ -320,12 +340,47 @@ def write_batch(folder: str | Path, dataset: Dataset, batch: str, orders_name: s
     )
 
 
+def write_drop(folder: str | Path, dataset: Dataset, day: str | dt.date) -> tuple[Path, Path]:
+    """Write the drop of one day, ``orders_<day>.csv`` and ``order_lines_<day>.csv``, as the restaurant system exports.
+
+    A line has the ``order_ts`` of its order as well, so that a window can pick the lines of a day, and the lines of a
+    day can be replaced.
+
+    Args:
+        folder: Where the files go.
+        dataset: What :func:`generate` returned.
+        day: A day from ``2026-08-01`` to ``2026-08-07``, as a date or as ``YYYY-MM-DD``.
+
+    Raises:
+        ValueError: If ``day`` is not one of the days that have a drop.
+    """
+    batch = day if isinstance(day, str) else day.isoformat()
+    if batch not in {drop.isoformat() for drop in DROP_DAYS}:
+        raise ValueError(f"unknown drop {batch!r}; the drops are {[drop.isoformat() for drop in DROP_DAYS]}")
+    folder = Path(folder)
+    orders = dataset.batch_orders(batch)
+    placed = {order["order_id"]: order["order_ts"] for order in orders}
+    lines = [{**line, "order_ts": placed[line["order_id"]]} for line in dataset.batch_order_lines(batch)]
+    return (
+        _write_csv(folder / f"orders_{batch}.csv", ORDER_COLUMNS, orders,
+                   {"order_ts": _stamp, "updated_at": _stamp, "total_amount": _money}),
+        _write_csv(folder / f"order_lines_{batch}.csv", DROP_LINE_COLUMNS, lines,
+                   {"unit_price": _money, "order_ts": _stamp}),
+    )
+
+
 def write_all(folder: str | Path, dataset: Dataset) -> list[Path]:
-    """Write the static tables and every batch, each batch as ``orders_<batch>.csv`` and ``order_lines_<batch>.csv``."""
+    """Write the static tables, the two batches, and the drop of each day.
+
+    A batch is ``orders_<batch>.csv`` and ``order_lines_<batch>.csv``, and a drop is the same two files for a day,
+    with the time of the order on each line.
+    """
     folder = Path(folder)
     written = write_static(folder, dataset)
-    for batch in dataset.batches():
+    for batch in dataset.batches()[:2]:
         written += write_batch(folder, dataset, batch, f"orders_{batch}.csv", f"order_lines_{batch}.csv")
+    for day in DROP_DAYS:
+        written += write_drop(folder, dataset, day)
     return written
 
 
