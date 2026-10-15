@@ -234,6 +234,7 @@ call:
 | `ldp mcp --config CONFIG ...` | Serve tables to an agent over MCP (stdio) | `python -m local_data_platform.mcp_server ...`, same options |
 | `ldp dbt init\|build\|test\|docs\|exec PROJECT_DIR` | Run a dbt project over your Iceberg tables; `build` writes the models marked `ldp_publish` back to Iceberg (needs the `dbt` extra) | `dbt_layer.register_sources(...)`, `dbt_layer.publish.plan_publish(...)` and `publish(...)` |
 | `ldp gold sync CONFIG [--dbt-manifest FILE] [--dry-run] [--json]` | Write the contract of a config (its `metadata.docs`) into its existing Iceberg table, with no new data. `--dbt-manifest` reads it from a dbt manifest, for a table that dbt built, and `--dry-run` only says what would change. See [Table contracts](#table-contracts) | `gold.sync.sync_config(path)`, `contracts.apply_contract(table, docs)` |
+| `ldp gold build DIR [--json]` | Build the gold tables of a folder in the order that their `inputs` say, and check the ones that are built elsewhere. One line for each table, and a gate that blocks a table stops the build with exit status 3. See [Build the gold tables](#build-the-gold-tables) | `gold.build.build_gold(folder)` |
 | `ldp spark CONFIG` | Run the Scala Spark job on a config's table (needs scala-cli) | `engine.spark.ScalaSparkJob` |
 
 ## Config schema
@@ -251,6 +252,7 @@ and a `metadata` block:
 | `metadata.schedule` | When the config runs: a 5-field cron expression, or `@hourly`, `@daily`, `@weekly` or `@monthly`. Without it, a `when` of `hourly`, `daily`, `weekly` or `monthly` means the alias. Editing it does not change the spec hash |
 | `metadata.window` | `"none"`, or `size` (`day`, `hour` or `15m`), an optional `column` that selects the rows of a window, and an optional `timezone` (UTC by default); see [Windows](#windows) |
 | `metadata.retries` | How a workflow tries the run again after a failure: `max_attempts` (1 by default, which is no retry), `delay_s` (30) and `backoff` (2.0); see [Workflow files](#workflow-files). Editing it does not change the spec hash |
+| `metadata.lineage` | The Iceberg tables that a source was made from, as `ICEBERG` blocks, for the run events only. `ldp dbt build` writes it for each model that it publishes, from the manifest. A `DUCKDB` source with `inputs` needs none. Editing it does not change the spec hash |
 | `metadata.docs` | The contract of the table: `layer` (`bronze`, `silver` or `gold`), `description`, `owner` (the config's `who` by default), `grain`, `primary_key`, `columns` (column name to description), `tags` and `refresh` (the config's `when` by default); see [Table contracts](#table-contracts). Editing it does not change the spec hash |
 
 A config may also say `"apiVersion": "ldp/v1"` and `"kind": "Pipeline"`. `kind` says what a JSON file is. `Pipeline`
@@ -481,10 +483,23 @@ snapshots. It is how tables built with SQL (or with dbt, through `ldp dbt`) reac
 }
 ```
 
-Use `relation` (`table`, `schema.table` or `catalog.schema.table`) or `sql`, not both. The file is
-opened read-only and closed before the Iceberg write starts, and a `sql` source must be exactly one
-`SELECT` or `WITH` query. It needs the `duckdb` extra. `ldp plan` reports a missing file or a
-source with both or neither of `relation` and `sql`.
+Use `relation` (`table`, `schema.table` or `catalog.schema.table`), `sql` or `query_file`, one of them. The file is
+opened read-only and closed before the Iceberg write starts, and a query must be exactly one `SELECT` or `WITH` query.
+A `query_file` is a file that holds the query, in place of `sql`. It needs the `duckdb` extra. `ldp plan` reports a
+missing file or a source with more than one or none of the three.
+
+A source can also have `inputs` in place of `path`, which is a list of dataset configs. It then reads no file. It
+opens an in-memory DuckDB, registers the Iceberg table that each input config writes under that table's name, with the
+session time zone set to UTC, and runs the query on them. This is how a gold table is one SQL file over silver tables,
+and [`ldp gold build`](#build-the-gold-tables) builds them in order.
+
+```json
+"source": {"name": "revenue_by_restaurant", "format": "DUCKDB", "query_file": "models/revenue_by_restaurant.sql",
+           "inputs": ["silver_orders.json"]}
+```
+
+A query that reads a table that is not in `inputs` fails with DuckDB's own unknown table error, so `inputs` is the whole
+lineage of the table, and every input is an input dataset in the run's OpenLineage events.
 
 ### An Excel sheet as a source
 
@@ -544,6 +559,33 @@ table reads it there, in `ldp mcp`, in DuckDB or in any other client.
 - `ldp dbt build` fills the block from the dbt manifest. A model that is published to the `gold` namespace is a gold
   table, so it needs `owner` and `grain` in its meta, a description, and a description of each column.
 - Editing the block does not change the spec hash. The design is in [the v0.1.4 contract](docs/design/v0_1_4.md).
+
+### Build the gold tables
+
+A gold table is one SQL file over other tables. Its config has a `DUCKDB` source with `inputs` and a `query_file`, and
+a `metadata.docs` block with `"layer": "gold"`. `ldp gold build DIR` finds every gold config of a folder, orders them by
+their `inputs`, since a gold table may read another, and builds them one at a time.
+
+```bash
+ldp gold build examples/robot_episodes/data
+```
+
+```text
+gold_episode_stats  built          96 rows  snapshot 3844274472678295321  4 of 4 checks passed
+gold_robot_daily    built          16 rows  snapshot 1985638678580193697  2 of 2 checks passed
+gold build examples/robot_episodes/data: 2 built, 0 checked, 0 blocked, 0 failed, 0 not run in 0.6s
+```
+
+- A cycle between configs is refused before anything runs, and the message names it.
+- The build stops at the first table that a gate blocks or that fails, and the tables after it are `not run`, because
+  they could read what it did not write. The exit status is 3 when a gate held a table back, and 1 on any other
+  failure. A table whose contract does not hold is held back by a gate too.
+- A gold config with no `inputs`, such as a dbt model that `ldp dbt build` published or a table that Spark or a script
+  wrote, is built elsewhere. The build does not run it. It checks that the table exists and runs its quality checks on
+  the current snapshot, and it writes nothing. A failing check blocks the build, unless the config says
+  `on_failure` `warn`.
+- The runs are recorded in `_ldp.runs` and `_ldp.quality_results`, through the `iceberg` sink, unless the config names
+  sinks of its own, so the freshness and the gate status of a gold table show in `describe_table` of `ldp mcp`.
 
 ## Catalogs and object storage
 

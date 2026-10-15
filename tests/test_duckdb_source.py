@@ -204,9 +204,10 @@ def test_a_missing_file_is_a_file_not_found(tmp_path):
         DuckDBTable("churn", tmp_path / "nope.duckdb", relation="t").get()
 
 
-@pytest.mark.parametrize("given", [{"relation": "t", "sql": "select 1"}, {}], ids=["both", "neither"])
-def test_the_source_takes_exactly_one_of_relation_and_sql(tmp_path, given):
-    with pytest.raises(ConfigError, match="exactly one of 'relation' and 'sql'"):
+@pytest.mark.parametrize("given", [{"relation": "t", "sql": "select 1"}, {"sql": "select 1", "query_file": "q.sql"},
+                                   {}], ids=["relation and sql", "sql and query_file", "none"])
+def test_the_source_takes_exactly_one_of_relation_sql_and_query_file(tmp_path, given):
+    with pytest.raises(ConfigError, match="exactly one of 'relation', 'sql' and 'query_file'"):
         DuckDBTable("churn", tmp_path / "x.duckdb", **given)
 
 
@@ -242,11 +243,11 @@ def test_the_spec_schema_and_format_enum_accept_duckdb():
 
 
 @pytest.mark.parametrize("source, message", [
-    ({"relation": "t", "sql": "select 1"}, "exactly one of 'relation'.*got both"),
-    ({"relation": None}, "exactly one of 'relation'.*got neither"),
+    ({"relation": "t", "sql": "select 1"}, "exactly one of 'relation'.*got more than one"),
+    ({"relation": None}, "exactly one of 'relation'.*got none"),
     ({"relation": "  "}, "relation.*non-empty string"),
 ])
-def test_validate_spec_requires_exactly_one_of_relation_and_sql(source, message):
+def test_validate_spec_requires_exactly_one_of_relation_sql_and_query_file(source, message):
     data = spec()
     data["metadata"]["source"].pop("relation")
     data["metadata"]["source"].update({key: value for key, value in source.items() if value is not None})

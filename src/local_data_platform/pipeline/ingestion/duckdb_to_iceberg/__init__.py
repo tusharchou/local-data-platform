@@ -19,8 +19,9 @@ class DuckDBToIceberg(Ingestion):
 
     Config: ``source`` is ``{"name", "format": "DUCKDB", "path", "relation"}`` or
     ``{"name", "format": "DUCKDB", "path", "sql"}``, and ``target`` is an Iceberg block. The file is
-    opened read-only and closed before the Iceberg write starts. See
-    :class:`~local_data_platform.pipeline.Pipeline` for the constructor arguments.
+    opened read-only and closed before the Iceberg write starts. A source can also name a ``query_file`` instead of
+    ``sql``, and ``inputs`` instead of ``path``, and the query then runs over the Iceberg tables that those configs
+    write. See :class:`~local_data_platform.pipeline.Pipeline` for the constructor arguments.
     """
 
     def build_source(self, config: Config) -> DuckDBTable:

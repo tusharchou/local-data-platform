@@ -390,12 +390,22 @@ cat first_project/target/ldp/orders_by_channel.json
         "orders": "How many orders came through the channel.",
         "revenue": "What those orders cost."
       }
-    }
+    },
+    "lineage": [
+      {
+        "name": "orders",
+        "format": "ICEBERG",
+        "catalog": {
+          "identifier": "raw",
+          "warehouse_path": "../../../warehouse"
+        }
+      }
+    ]
   }
 }
 ```
 
-The `docs` block is the contract of the table. dbt's descriptions and meta filled it in, and LDP wrote it into the Iceberg table as its comment, its owner, its grain and the doc of each column.
+The `docs` block is the contract of the table. dbt's descriptions and meta filled it in, and LDP wrote it into the Iceberg table as its comment, its owner, its grain and the doc of each column. The `lineage` block names the Iceberg tables that the model was made from. LDP read them from the `depends_on` of the model in dbt's manifest, so the run events of the write, and the OpenLineage event, list them as the inputs of the table.
 
 Because the file is an ordinary config, the commands that work on any table work on a published model, such as `ldp snapshots`, `ldp query`, `ldp runs`, `ldp maintain` and `ldp mcp`. Query it.
 

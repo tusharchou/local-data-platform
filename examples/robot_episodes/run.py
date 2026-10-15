@@ -10,8 +10,9 @@ Three upload batches from a fleet of eight humanoids go through the platform, of
    RGB/depth sync under 20 ms, frame-drop rate, no stream gaps) plus task and robot labels. The
    gate is all-or-nothing per batch: both silver tables are validated before either is written.
    Batch ``b02`` carries injected sensor faults and is blocked; nothing of it reaches silver.
-3. **Build gold.** DuckDB SQL (``queries.sql``) over silver builds ``gold_episode_stats`` and
-   ``gold_robot_daily``, written through quality-checked pipelines.
+3. **Build gold.** Each gold table is one SQL file in ``models/`` over the tables its config lists as ``inputs``.
+   ``ldp gold build`` (the same code, called from here) builds ``gold_episode_stats`` from silver and then
+   ``gold_robot_daily`` from it, through quality-checked pipelines.
 4. **Pin a training split.** After day 1, ``humanoid_train`` (clean, successful episodes; robot
    ``h08`` held out as ``humanoid_eval``) and ``humanoid_frames`` are pinned as dataset versions.
    Day 3's data changes gold, yet the pinned versions still load the identical rows.
@@ -47,6 +48,7 @@ from local_data_platform.datasets import export, list_versions, load, pin
 from local_data_platform.engine.duckdb import DuckDBEngine
 from local_data_platform.exceptions import DataQualityError
 from local_data_platform.format.iceberg import Iceberg
+from local_data_platform.gold.build import build_gold as build_gold_folder
 from local_data_platform.pipeline import Pipeline
 from local_data_platform.pipeline.builders import iceberg_from_config
 from local_data_platform.pipeline.registry import create_pipeline
@@ -54,10 +56,11 @@ from local_data_platform.pipeline.registry import create_pipeline
 HERE = Path(__file__).resolve().parent
 CONFIG_DIR = HERE / "configs"
 QUERIES_PATH = HERE / "queries.sql"
+MODELS_DIR = HERE / "models"
 SPARK_SCRIPT = HERE / "spark" / "robot_aggregate.scala"
 DEFAULT_WORKDIR = HERE / "data"
 MARKER = ".robot_episodes_workdir"
-WORKDIR_FOLDERS = ("landing", "warehouse", "exports")
+WORKDIR_FOLDERS = ("landing", "warehouse", "exports", "models")
 
 TABLES = ("bronze_episodes", "bronze_frames", "silver_episodes", "silver_frames", "gold_episode_stats",
           "gold_robot_daily")
@@ -117,21 +120,6 @@ class BronzeBatch:
         return f"BronzeBatch({self.table.identifier}, {self.batch_id})"
 
 
-class SqlSource:
-    """A pipeline source: the result of a DuckDB query."""
-
-    def __init__(self, engine: DuckDBEngine, sql: str, name: str):
-        self.engine = engine
-        self.sql = sql
-        self.name = name
-
-    def get(self) -> pa.Table:
-        return self.engine.query(self.sql)
-
-    def __repr__(self) -> str:
-        return f"SqlSource({self.name})"
-
-
 def with_duration(episodes: pa.Table) -> pa.Table:
     """Silver transform: add ``duration_s`` from ``start_ts`` and ``end_ts``."""
     micros = pc.subtract(pc.cast(episodes["end_ts"], pa.int64()), pc.cast(episodes["start_ts"], pa.int64()))
@@ -152,10 +140,11 @@ def with_robot_and_skew(episodes: pa.Table) -> Callable[[pa.Table], pa.Table]:
 
 
 def prepare_workdir(workdir: str | Path) -> Path:
-    """Create (or clear) the work folder and copy the configs into it.
+    """Create (or clear) the work folder and copy the configs and the SQL models into it.
 
-    The configs' relative paths (``landing/…``, ``warehouse``) resolve against the folder they are
-    in, so copies in the workdir also work with the CLI: ``ldp snapshots <workdir>/silver_frames.json``.
+    The configs' relative paths (``landing/...``, ``warehouse``, ``models/...``) resolve against the folder they are
+    in, so copies in the workdir also work with the CLI: ``ldp snapshots <workdir>/silver_frames.json``, and
+    ``ldp gold build <workdir>``.
 
     Raises:
         ValueError: If the folder is not empty and was not made by this example.
@@ -170,6 +159,7 @@ def prepare_workdir(workdir: str | Path) -> Path:
     (workdir / MARKER).write_text("Created by examples/robot_episodes/run.py, which clears this folder on each run.\n")
     for config in sorted(CONFIG_DIR.glob("*.json")):
         shutil.copy2(config, workdir / config.name)
+    shutil.copytree(MODELS_DIR, workdir / "models")
     return workdir
 
 
@@ -232,18 +222,21 @@ def promote_to_silver(batch_id: str, configs: dict[str, Config], tables: dict[st
     return {"promoted": not blocked, "reports": reports, "rows": rows}
 
 
-def build_gold(configs: dict[str, Config], tables: dict[str, Any], queries: dict[str, str]) -> dict[str, Any]:
-    """Rebuild the gold tables from silver with DuckDB SQL, through quality-checked pipelines."""
-    results = {}
-    with DuckDBEngine() as duck:
-        duck.query("SET TimeZone = 'UTC'")
-        for name in ("silver_episodes", "silver_frames"):
-            duck.register_iceberg(tables[name], name)
-        for name in ("gold_episode_stats", "gold_robot_daily"):
-            source = SqlSource(duck, queries[name], name)
-            results[name] = Pipeline(configs[name], source=source, target=tables[name], name=name).run()
-            duck.register_iceberg(tables[name], name)
-    return results
+def build_gold(workdir: Path) -> dict[str, Any]:
+    """Build the gold tables of the work folder with ``ldp gold build``, and return each one's pipeline result.
+
+    The two configs are found by ``metadata.docs.layer``, and built in the order their ``inputs`` say, so
+    ``gold_robot_daily`` reads the ``gold_episode_stats`` that was just written.
+
+    Raises:
+        RuntimeError: If a table failed or a gate blocked it.
+    """
+    built = build_gold_folder(workdir)
+    stopped = built.stopped_by
+    if stopped is not None:
+        raise RuntimeError(f"gold build stopped at {stopped.gold.config.identifier} ({stopped.status}), "
+                           f"{stopped.error}")
+    return {item.gold.config.identifier: item.result for item in built.tables}
 
 
 def run_research(tables: dict[str, Any], queries: dict[str, str], split: Any, frames: Any) -> dict[str, pa.Table]:
@@ -339,7 +332,7 @@ def run_robotics(workdir: str | Path = DEFAULT_WORKDIR, *, seed: int = 7, episod
         checks = sum(len(report) for report in gate["reports"].values())
         out.say(f"   silver: all {checks} quality checks passed; promoted {gate['rows']['silver_episodes']} episodes "
                 f"and {gate['rows']['silver_frames']} frames")
-        gold = build_gold(configs, tables, queries)
+        gold = build_gold(workdir)
         stats = gold["gold_episode_stats"].write_result
         batch["gold_episode_rows"] = stats.rows_after
         out.say(f"   gold: gold_episode_stats now {stats.rows_after} episodes, gold_robot_daily "

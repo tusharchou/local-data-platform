@@ -132,17 +132,25 @@ def failed_nodes(run_results: Mapping[str, Any]) -> list[dict[str, str]]:
 # --------------------------------------------------------------------------- planning
 
 
-def plan_publish(project: DbtProject, manifest: Mapping[str, Any], run_results: Mapping[str, Any]) -> list[PublishItem]:
+def plan_publish(project: DbtProject, manifest: Mapping[str, Any], run_results: Mapping[str, Any], *,
+                 source_tables: Mapping[str, tuple[Mapping[str, Any], Path]] | None = None) -> list[PublishItem]:
     """Decide which models to publish and build the config of each.
 
     A model is published when its meta has ``ldp_publish: true`` and it ran in this invocation with
     status ``success``. The result is in dependency order, and where that leaves a choice, in the order of the
     models' unique ids, so it does not depend on the order of the manifest.
 
+    Each config also gets the ``metadata.lineage`` of its model, the Iceberg tables that the model was made from, so
+    that the run events of the write can list them as inputs. It comes from the ``depends_on`` of the model in the
+    manifest, and it is resolved to the tables that dbt reads as sources and to the models that are published.
+
     Args:
         project: The project, for the build file, the publish catalog and the config folder.
         manifest: The parsed ``manifest.json``.
         run_results: The parsed ``run_results.json``.
+        source_tables: The Iceberg tables behind the project's sources, as
+            :func:`~local_data_platform.dbt_layer.sources.source_tables` returns them. Without them, a source is left
+            out of the lineage, and the published models stay in.
 
     Returns:
         The items, upstream models first. Empty when no executed model is marked.
@@ -178,6 +186,9 @@ def plan_publish(project: DbtProject, manifest: Mapping[str, Any], run_results: 
         found = len(problems)
         item = _plan_one(project, node, meta, project_name, problems)
         if item is not None:
+            lineage = _lineage(project, manifest, unique_id, source_tables or {})
+            if lineage:
+                item.config["metadata"]["lineage"] = lineage
             problems += [f"model {name}: {error}" for error in validate_spec(item.config)]
         if item is not None and len(problems) == found:
             items.append(item)
@@ -190,6 +201,55 @@ def plan_publish(project: DbtProject, manifest: Mapping[str, Any], run_results: 
         raise ConfigError(f"cannot publish, {len(problems)} problem{'s' if len(problems) != 1 else ''} "
                           f"in the dbt models' meta, and nothing was published:\n{lines}")
     return items
+
+
+def _table_block(project: DbtProject, node: Mapping[str, Any], meta: Mapping[str, Any]) -> dict[str, Any]:
+    """The Iceberg block of the table that a published model is written to, with paths relative to the config folder."""
+    namespace = meta.get("ldp_namespace")
+    return {"name": str(node.get("alias") or node["name"]), "format": "ICEBERG",
+            "catalog": _catalog_for(project, namespace.strip() if isinstance(namespace, str) and namespace.strip()
+                                    else None)}
+
+
+def _lineage(project: DbtProject, manifest: Mapping[str, Any], unique_id: str,
+             source_tables: Mapping[str, tuple[Mapping[str, Any], Path]]) -> list[dict[str, Any]]:
+    """The Iceberg tables that a model reads: its sources, and the published models that it depends on.
+
+    The ``depends_on`` of the model in the manifest is followed upward. A parent that is a source is one of the
+    project's source tables. A parent that is a model marked ``ldp_publish`` is that model's table. A parent that is
+    a model that is not published, such as a staging view, is looked through to what it reads. Lineage is event
+    metadata, so a manifest that cannot be followed gives none and the model is published all the same.
+    """
+    nodes, sources = manifest.get("nodes", {}), manifest.get("sources", {})
+    found: dict[str, dict[str, Any]] = {}
+    visited: set[str] = set()
+
+    def follow(current: str) -> None:
+        if current in visited:
+            return
+        visited.add(current)
+        node = nodes.get(current) or {}
+        for parent in sorted((node.get("depends_on") or {}).get("nodes", [])):
+            if parent in sources:
+                source = sources[parent]
+                identifier = f"{source.get('schema')}.{source.get('identifier') or source.get('name')}"
+                if identifier in source_tables:
+                    block, folder = source_tables[identifier]
+                    catalog = _rebase_catalog(block["catalog"], folder, project.config_dir)
+                    found.setdefault(identifier, {**block, "catalog": catalog})
+            elif nodes.get(parent, {}).get("resource_type") == "model":
+                meta = _meta(nodes[parent])
+                if meta.get("ldp_publish") is True:
+                    block = _table_block(project, nodes[parent], meta)
+                    found.setdefault(f"{catalog_namespace(block['catalog'])}.{block['name']}", block)
+                else:
+                    follow(parent)
+
+    try:
+        follow(unique_id)
+    except Exception:  # noqa: BLE001 - see the docstring
+        return []
+    return [found[key] for key in sorted(found)]
 
 
 def _collisions(items: list[PublishItem]) -> list[str]:

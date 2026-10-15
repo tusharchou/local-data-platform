@@ -9,6 +9,7 @@ number below is the one the example prints for the fixed seed. Two more small ru
 import contextlib
 import datetime as dt
 import io
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -134,6 +135,20 @@ def test_every_published_model_carries_its_contract_in_its_table(walkthrough):
     revenue = table_of(workdir, "revenue_by_restaurant_day").table()
     assert revenue.properties["ldp.grain"] == "one row for each restaurant on each day it had an order"
     assert table_of(workdir, "fct_orders").table().properties["ldp.primary-key"] == "order_id"
+
+
+def test_the_run_events_of_each_published_model_list_the_tables_it_was_made_from(walkthrough):
+    workdir = walkthrough[0]
+    inputs = {}
+    for line in (workdir / "config" / ".ldp" / "events.jsonl").read_text().splitlines():
+        event = json.loads(line)
+        if event["type"] == "run.started":
+            inputs[event["payload"]["pipeline"]] = [ref["name"] for ref in event["payload"].get("inputs", [])]
+
+    assert inputs["fct_orders"] == ["raw.orders"], "through the staging view that reads the source"
+    assert inputs["churn_by_month"] == ["silver.fct_orders"], "through the monthly activity model that is not published"
+    assert inputs["revenue_by_restaurant_day"] == ["raw.restaurants", "silver.fct_orders"]
+    assert inputs["orders"] == [], "an ingest pipeline does not know what its file was made from"
 
 
 def test_the_narrative_tells_the_story_in_order(walkthrough):

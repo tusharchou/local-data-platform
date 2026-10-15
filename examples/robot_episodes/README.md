@@ -22,7 +22,7 @@ python examples/robot_episodes/run.py --workdir /tmp/robots --spark   # plus the
 | 1. Land | `generate.py` writes an upload batch to `landing/episodes.parquet` and `landing/frames.parquet` | pyarrow |
 | 2. Bronze | Each batch is appended to `bronze_episodes` and `bronze_frames`, with structural checks (schema, keys) | `create_pipeline(Config.from_json(...)).run()` (`ParquetToIceberg`) |
 | 3. Silver gate | Temporal and label checks run on the batch's episodes **and** frames; both are written only if both pass | `Pipeline(config, source=..., target=...)`: `extract`, `transform`, `validate`, `write` |
-| 4. Gold | `gold_episode_stats` (one row per episode) and `gold_robot_daily`, built with DuckDB SQL from `queries.sql`, written through quality-checked pipelines (`overwrite`) | `DuckDBEngine`, `Pipeline.run()` |
+| 4. Gold | `gold_episode_stats` (one row per episode) and `gold_robot_daily`. Each is one SQL file in `models/` over the tables its config lists as `inputs`, and `ldp gold build` runs them in that order through quality-checked pipelines (`overwrite`) | `gold.build.build_gold(folder)`, a `DUCKDB` source with `inputs` |
 | 5. Pin | After day 1, `humanoid_train`, `humanoid_eval` (robot `h08` held out) and `humanoid_frames` are pinned | `datasets.pin` |
 | 6. Reproduce | After day 3 lands and gold is rewritten, the pinned versions still load the identical rows; `humanoid_train@v2` adds day 3 | `datasets.load`, `list_versions`, `export` |
 | 7. Research | Success rate by task and robot, frame-drop rate by robot and batch, clips with sync skew under 20 ms | `DuckDBEngine.register_iceberg`, `queries.sql` |
@@ -59,8 +59,8 @@ frame was dropped) and `dropped`.
 | `robots.bronze_frames` | `bucket(8, episode_id)` | `configs/bronze_frames.json`, append |
 | `robots.silver_episodes` | `day(start_ts)`, `bucket(8, robot_id)` | the silver gate, append; adds `duration_s` |
 | `robots.silver_frames` | `bucket(8, episode_id)` | the silver gate, append; adds `robot_id` and `skew_ms` |
-| `robots.gold_episode_stats` | `day(start_ts)`, `bucket(8, robot_id)` | `queries.sql` `gold_episode_stats`, overwrite |
-| `robots.gold_robot_daily` | - | `queries.sql` `gold_robot_daily`, overwrite |
+| `robots.gold_episode_stats` | `day(start_ts)`, `bucket(8, robot_id)` | `models/gold_episode_stats.sql` over silver, overwrite |
+| `robots.gold_robot_daily` | - | `models/gold_robot_daily.sql` over `gold_episode_stats`, overwrite |
 
 The faults in `b02`, and the check in `configs/silver_frames.json` or `silver_episodes.json` that
 catches each one:
@@ -96,13 +96,17 @@ Each version is a JSON manifest in `<warehouse>/.ldp/datasets/<name>/`, and its 
 ldp snapshots examples/robot_episodes/data/gold_episode_stats.json
 ldp query examples/robot_episodes/data/silver_frames.json \
     "SELECT robot_id, count(*) AS frames, max(abs(skew_ms)) AS worst_skew_ms FROM silver_frames GROUP BY 1"
+ldp gold build examples/robot_episodes/data       # rebuild both gold tables, in order, and print a line for each
+ldp run examples/robot_episodes/data/gold_episode_stats.json   # or run one of them alone
 ldp datasets list --warehouse examples/robot_episodes/data/warehouse
 ldp datasets export humanoid_train@v1 /tmp/train.jsonl --format jsonl --warehouse examples/robot_episodes/data/warehouse
 ```
 
-`ldp run` works on the two bronze configs. The silver and gold configs describe their tables and
-quality gates, but they are driven by `run.py`: there is no built-in Iceberg-to-Iceberg pipeline, so
-`ldp run` on them reports `PipelineNotFound`.
+`ldp run` works on the two bronze configs and on the two gold configs. A gold config reads its `inputs`, which are
+the configs of the tables its SQL file reads, so `ldp gold build` builds `gold_episode_stats` first and
+`gold_robot_daily` after it. The silver configs describe their tables and quality gates, but they are driven by
+`run.py`, because the gate writes both silver tables or neither. There is no built-in Iceberg-to-Iceberg pipeline, so
+`ldp run` on a silver config reports `PipelineNotFound`.
 
 ## Files
 
@@ -111,7 +115,8 @@ quality gates, but they are driven by `run.py`: there is no built-in Iceberg-to-
 | `run.py` | The walkthrough; `run_robotics(workdir, seed=7, spark=False, quiet=False)` returns a summary dict |
 | `generate.py` | The deterministic generator; `python generate.py --out DIR --batch b02 --faulty` writes one batch |
 | `configs/*.json` | Table layouts and quality gates, with paths relative to the work folder |
-| `queries.sql` | Named DuckDB queries: the gold builds and the research questions |
+| `models/*.sql` | One SQL file for each gold table, which `ldp gold build` runs over the `inputs` of its config |
+| `queries.sql` | Named DuckDB queries: the research questions |
 | `spark/robot_aggregate.scala` | The optional Scala Spark per-robot aggregate |
 
 The work folder is cleared at the start of each run, but only if this example created it (it holds a

@@ -188,6 +188,40 @@ def register_sources(database: str | os.PathLike, configs: Iterable[str | os.Pat
 # --------------------------------------------------------------------------- tables to register
 
 
+def source_tables(configs: Iterable[str | os.PathLike]) -> dict[str, tuple[dict[str, Any], Path]]:
+    """The Iceberg tables that dataset configs name, as ``{"<namespace>.<table>": (block, folder)}``.
+
+    It reads the JSON of the configs and opens no catalog, so it is cheap and has no side effects. The block is the
+    ``{"name", "format": "ICEBERG", "catalog"}`` block of the table, and the folder is the one that a relative path of
+    the block resolves against, which is where the config is. A config that cannot be read as a dataset config is
+    skipped, and the first config that names a table wins.
+
+    Args:
+        configs: Dataset config files, or folders of ``*.json`` configs, as the project's ``sources.configs``.
+    """
+    from local_data_platform import Config
+    from local_data_platform.catalog.provider import catalog_namespace
+    from local_data_platform.mcp_server.discovery import config_files
+
+    found: dict[str, tuple[dict[str, Any], Path]] = {}
+    for path in configs:
+        for file in config_files(path):
+            try:
+                config = Config.from_json(file)
+            except ConfigError:
+                continue
+            for section in ("target", "source"):
+                block = config.metadata.get(section) or {}
+                if str(block.get("format", "")).strip().upper() != "ICEBERG":
+                    continue
+                name, spec = block.get("name"), block.get("catalog")
+                if not name or not isinstance(spec, dict):
+                    continue
+                found.setdefault(f"{catalog_namespace(spec)}.{name}",
+                                 ({"name": str(name), "format": "ICEBERG", "catalog": dict(spec)}, file.parent))
+    return found
+
+
 def _without_own_outputs(tables: list[Any], database: Path, skipped: list[dict[str, str]]) -> list[Any]:
     """Drop the tables that a config publishes from ``database``: they are outputs of the dbt project."""
     kept = []
@@ -363,4 +397,5 @@ def _write_if_changed(path: Path, text: str) -> Path:
     return path
 
 
-__all__ = ["GENERATED_HEADER", "MODES", "RegisteredSource", "SourceRegistration", "register_sources", "sources_yaml"]
+__all__ = ["GENERATED_HEADER", "MODES", "RegisteredSource", "SourceRegistration", "register_sources", "source_tables",
+           "sources_yaml"]
