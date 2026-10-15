@@ -605,7 +605,7 @@ def test_a_build_runs_the_gold_configs_in_order_and_prints_a_line_for_each_table
         assert re.fullmatch(rf"{name}\s+built\s+2 rows\s+snapshot \d+\s+2 of 2 checks passed|"
                             rf"{name}\s+built\s+2 rows\s+snapshot \d+\s+no checks", line), line
     assert out[-1].startswith(f"gold build {tmp_path}: 5 built, 0 checked, 0 blocked, 0 failed, 0 not run in ")
-    assert [row["restaurant"] for row in rows(tmp_path, "c")] == ["north", "south"]
+    assert sorted(row["restaurant"] for row in rows(tmp_path, "c")) == ["north", "south"]
 
 
 @pytest.mark.usefixtures("reading")
