@@ -153,16 +153,14 @@ def _looks_like_a_config(file: Path) -> bool:
     return isinstance(data, Mapping) and "metadata" in data and "identifier" in data
 
 
-def find_gold(folder: str | os.PathLike) -> list[GoldConfig]:
-    """The gold configs of a folder, in the order of their file names.
+def find_configs(folder: str | os.PathLike) -> list[tuple[Path, Config]]:
+    """Every dataset config of a folder with its file, in the order of the file names.
 
     A file of another kind than ``Pipeline``, such as a workflow, and a JSON file that is not a dataset config, are
-    skipped. A dataset config that is not valid is an error, so that a typo does not make a table silently vanish from
-    the build.
+    skipped. A dataset config that is not valid is an error, so that a typo does not make a table silently vanish.
 
     Raises:
-        ConfigError: If ``folder`` is not a folder, a config is not valid, or a gold config does not write an Iceberg
-            table.
+        ConfigError: If ``folder`` is not a folder or a config is not valid.
     """
     root = resolve_path(folder)
     if not root.is_dir():
@@ -175,6 +173,23 @@ def find_gold(folder: str | os.PathLike) -> list[GoldConfig]:
             config = Config.from_json(file)
         except ConfigError as error:
             raise ConfigError(f"{file.name}: {error}") from None
+        found.append((file, config))
+    return found
+
+
+def find_gold(folder: str | os.PathLike) -> list[GoldConfig]:
+    """The gold configs of a folder, in the order of their file names.
+
+    A file of another kind than ``Pipeline``, such as a workflow, and a JSON file that is not a dataset config, are
+    skipped. A dataset config that is not valid is an error, so that a typo does not make a table silently vanish from
+    the build.
+
+    Raises:
+        ConfigError: If ``folder`` is not a folder, a config is not valid, or a gold config does not write an Iceberg
+            table.
+    """
+    found = []
+    for file, config in find_configs(folder):
         if config.docs is None or not config.docs.gold:
             continue
         target = config.metadata["target"]
@@ -363,4 +378,4 @@ def build_gold(folder: str | os.PathLike, *, on_table: Callable[[TableOutcome], 
 
 
 __all__ = ["BLOCKED", "BUILT", "BuildResult", "CHECKED", "FAILED", "GoldConfig", "NOT_RUN", "TableOutcome",
-           "build_gold", "check_built_elsewhere", "find_gold", "order_gold", "with_events"]
+           "build_gold", "check_built_elsewhere", "find_configs", "find_gold", "order_gold", "with_events"]

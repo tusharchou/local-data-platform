@@ -16,7 +16,7 @@ Commands::
     ldp runs CONFIG                        (events)
     ldp commits CONFIG                     (format.iceberg.commit)
     ldp datasets pin|list|export ...       (datasets)
-    ldp gold sync|build|releases ...       (gold.cli)
+    ldp gold sync|build|releases|list|show|docs ...   (gold.cli)
     ldp maintain CONFIG                    (maintenance)
     ldp spark CONFIG                       (engine.spark)
     ldp mcp --config DIR_OR_FILE           (mcp_server)

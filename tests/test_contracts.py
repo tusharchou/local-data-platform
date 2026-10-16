@@ -765,6 +765,77 @@ def test_ldp_gold_with_no_command_shows_its_help(capsys):
     assert "sync" in capsys.readouterr().out
 
 
+# --------------------------------------------------------------------------- reading a contract back
+
+
+def test_a_table_that_carries_no_contract_reads_back_none(sales):
+    assert contracts.read_contract(sales.table()) is None
+
+
+def test_a_contract_that_was_written_is_read_back_as_it_was_written(sales):
+    contracts.apply_contract(sales.table(), docs_of(owner="finance"))
+
+    assert contracts.read_contract(sales.table()) == contracts.Docs(
+        layer="gold", description="Revenue for each day.", owner="finance", grain="one row per day",
+        primary_key=("day",), columns=COLUMNS)
+
+
+def test_the_tags_and_the_refresh_are_only_in_the_config_so_they_are_not_read_back(sales):
+    docs = docs_of(tags=["finance"], refresh="daily")
+    contracts.apply_contract(sales.table(), docs)
+
+    read = contracts.read_contract(sales.table())
+
+    assert docs.tags == ("finance",) and docs.refresh == "daily"
+    assert read.tags == () and read.refresh is None
+
+
+def test_a_key_of_several_columns_is_read_back_in_order_whatever_the_spaces(sales):
+    contracts.apply_contract(sales.table(), docs_of(primary_key=["day", "orders"]))
+    assert contracts.read_contract(sales.table()).primary_key == ("day", "orders")
+
+    with sales.table().transaction() as transaction:
+        transaction.set_properties({contracts.PRIMARY_KEY: " day, orders ,, revenue "})
+    assert contracts.read_contract(sales.table()).primary_key == ("day", "orders", "revenue")
+
+
+def test_a_table_that_carries_part_of_a_contract_reads_back_that_part(sales):
+    with sales.table().transaction() as transaction:
+        transaction.set_properties({contracts.COMMENT: "Only a meaning."})
+
+    assert contracts.read_contract(sales.table()) == contracts.Docs(description="Only a meaning.")
+    with sales.table().transaction() as transaction:
+        with transaction.update_schema() as update:
+            update.update_column("day", doc="The day.")
+    assert contracts.read_contract(sales.table()).columns == {"day": "The day."}
+
+
+def test_properties_and_docs_that_are_only_blank_are_no_contract(sales):
+    with sales.table().transaction() as transaction:
+        transaction.set_properties({contracts.OWNER: "   ", contracts.GRAIN: ""})
+        with transaction.update_schema() as update:
+            update.update_column("day", doc="  ")
+
+    assert contracts.read_contract(sales.table()) is None
+
+
+@pytest.mark.parametrize("declared, properties, namespace, expected", [
+    ("silver", {"ldp.layer": "gold"}, "gold", "silver"),  # the config of the table first
+    (None, {"ldp.layer": "gold"}, "silver", "gold"),  # then what the table says of itself
+    (None, {}, "silver", "silver"),  # then a namespace that is called after a layer
+    (None, None, "Gold", "gold"),
+    (None, {}, " bronze ", "bronze"),
+    (None, {}, "robots", None),
+    (None, {}, "gold.sub", None),  # a namespace of several parts is not the name of a layer
+    (None, {}, None, None),
+    ("  ", {"ldp.layer": " "}, "bronze", "bronze"),  # blank text says nothing
+    ("platinum", {}, "gold", "platinum"),  # it is not judged here, the block of a config is checked when it is read
+])
+def test_the_layer_of_a_table_is_the_first_of_what_its_config_says_what_it_says_and_its_namespace(
+        declared, properties, namespace, expected):
+    assert contracts.resolve_layer(declared, properties, namespace) == expected
+
+
 # --------------------------------------------------------------------------- a table that dbt built
 
 

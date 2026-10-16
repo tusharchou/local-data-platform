@@ -240,6 +240,9 @@ call:
 | `ldp gold sync CONFIG [--dbt-manifest FILE] [--dry-run] [--json]` | Write the contract of a config (its `metadata.docs`) into its existing Iceberg table, with no new data. `--dbt-manifest` reads it from a dbt manifest, for a table that dbt built, and `--dry-run` only says what would change. See [Table contracts](#table-contracts) | `gold.sync.sync_config(path)`, `contracts.apply_contract(table, docs)` |
 | `ldp gold build DIR [--no-release] [--json]` | Build the gold tables of a folder in the order that their `inputs` say, and check the ones that are built elsewhere. One line for each table, and a gate that blocks a table stops the build with exit status 3. When every table passed, it cuts a release, unless `--no-release` says not to. See [Build the gold tables](#build-the-gold-tables) | `gold.build.build_gold(folder, release=True)` |
 | `ldp gold releases DIR [--show RELEASE] [--json]` | List the releases of the gold tables of a folder, newest first, or the tables of one release. See [Release the gold tables](#release-the-gold-tables) | `gold.release.list_releases(folder)`, `current_release(folder)`, `snapshot_for(table, release)` |
+| `ldp gold list DIR [--all-layers] [--json] [--strict]` | One row for each gold table of a folder, with what it means, who owns it, what one row is, its rows, when its data last changed, the status of its last run, the verdict of its last quality check and the release it is in. A table with no contract shows `no description`. `--all-layers` adds the other tables, and `--strict` exits with 1 when a gold table lacks part of its contract, for CI. See [Browse the gold tables](#browse-the-gold-tables) | `gold.catalog.collect(folder)` |
+| `ldp gold show DIR TABLE [--runs N] [--no-samples] [--json]` | Describe one table: its contract, every column with its type and description, its last runs, the releases that include it, a few sample rows and an `ldp query` line that reads it | `gold.catalog.collect(folder, only=table, detail=True)` |
+| `ldp gold docs DIR --out FILE [--format html\|md] [--all-layers] [--no-samples]` | Write the catalog as one self-contained page with a search box, or as Markdown for a MkDocs site | `gold.render.html_page(catalog)`, `gold.render.markdown_page(catalog)` |
 | `ldp spark CONFIG` | Run the Scala Spark job on a config's table (needs scala-cli) | `engine.spark.ScalaSparkJob` |
 
 ## Config schema
@@ -647,6 +650,99 @@ feed it. The task is one line.
 The task builds the gold tables of `config` for the window of the run, as a pipeline task runs a config, so running the
 same window again finds the tables already published and cuts no second release. It ends `blocked_quality` when a gate
 holds a table back, and then no release is cut.
+
+### Browse the gold tables
+
+A person who is not an engineer should find the right gold table without reading pipeline code, and so should an agent
+that works for them. `ldp gold list` prints one row for each gold table of a folder, and `ldp gold show` describes one.
+
+```bash
+ldp gold list examples/robot_episodes/data
+```
+
+```text
+2 gold tables in examples/robot_episodes/data
+table                      description                                       owner                       grain                      rows  refreshed_utc        run        quality        release
+-------------------------  ------------------------------------------------  --------------------------  -------------------------  ----  -------------------  ---------  -------------  -------
+robots.gold_episode_stats  One row for each promoted episode, with its o...  robot learning researchers  one row per episode        96    2026-10-16 09:17:03  published  4 of 4 passed  r1
+robots.gold_robot_daily    Fleet health for each robot on each day: how ...  fleet operations            one row per robot per day  16    2026-10-16 09:17:03  published  2 of 2 passed  r1
+(2 rows)
+```
+
+```bash
+ldp gold show examples/robot_episodes/data gold_robot_daily
+```
+
+```text
+robots.gold_robot_daily  (gold)
+  Fleet health for each robot on each day: how many episodes it recorded, how many succeeded, and how healthy its frames were.
+  Owner        fleet operations
+  Grain        one row per robot per day
+  Primary key  robot_id, recorded_on
+  Refresh      after each promotion
+  Tags         robotics, fleet
+  Config       gold_robot_daily.json
+  Rows         16
+  Refreshed    2026-10-16 09:17:03 UTC
+  Last run     published, run 01a14400-2856-7074-a459-21ae4afcae71, 2026-10-16 09:17:03 UTC
+  Quality      2 of 2 passed
+  Release      r1
+
+Columns (9)
+  ...
+Releases that include it (1)
+  ...
+Read it
+  ldp query examples/robot_episodes/data "SELECT * FROM robots.gold_robot_daily LIMIT 10"
+```
+
+`show` also prints every column with its type and description, the last 5 runs, the releases that include the table and 5
+sample rows. The last line is an `ldp query` line that reads the table, ready to copy. `TABLE` is a table with its
+namespace, or its bare name when only one table has it, and it can be a table of any layer.
+
+- The tables are the Iceberg tables that the dataset configs of the folder write. A gold table is one whose
+  `metadata.docs.layer` is `gold`, or whose Iceberg table says so, or that is in a namespace called `gold`.
+  `--all-layers` adds the bronze and silver tables and the tables that have no layer, and `--json` prints the same as
+  data.
+- The contract is the one in the `metadata.docs` of the config and the one that the Iceberg table carries. Where both
+  have a value the config wins, because it is what the next run writes, and `show` says so when the table does not carry
+  it yet. A table with no contract shows `no description` and does not fail the listing, and its description is `null`
+  in JSON.
+- `--strict` exits with 1 when a gold table has no description, no owner or no grain, or has a column without a
+  description, and it names the table and what it lacks. A table of another layer is never held to it. Run it in CI, so
+  that a gold table that nobody documented does not get in. A table that does not exist yet is listed as `not built`.
+- The last run and the last quality check are what `describe_table` of `ldp mcp` reports, from the same code. A release is
+  not a run, so a table that was released still shows the status of its last build.
+- `release` is the release that readers see now. `r1 (behind live)` says that the table was built again after r1, so
+  readers of the release do not see the newer data yet. The rows and the time are the table as it is now, and the time
+  leaves out the snapshots that `ldp maintain` makes.
+- Nothing is written, not even a catalog or a namespace that does not exist yet.
+
+`ldp gold docs` writes the same content as one page, or as Markdown for a MkDocs site.
+
+```bash
+ldp gold docs examples/robot_episodes/data --out catalog.html
+ldp gold docs examples/robot_episodes/data --out docs/catalog.md --format md
+```
+
+```text
+wrote catalog.html, 2 tables, 18.8 KB. Open it as a page. It needs no network.
+wrote docs/catalog.md, 2 tables, 7.4 KB. Open it as a Markdown file.
+```
+
+- The page is one file with a search box, a light and a dark theme, and its CSS and its one script inline. It asks for
+  nothing from the network, and its Content-Security-Policy makes the browser refuse to try, so it opens from a folder or
+  from an e-mail. It is built with `local_data_platform.html`, which later pages share.
+- Every value that a person wrote, such as the description of a table, is escaped. It can never become markup in the page,
+  and the Markdown escapes it too.
+- The sample rows of each table are in the file. Leave them out with `--no-samples` when the file will be shared and the
+  rows must not be.
+- In code, `local_data_platform.gold.catalog.collect(folder)` returns one entry for each table, and
+  `entry.document()` is the text of an entry for a search to index.
+
+`ldp mcp` says the same things to an agent. `list_tables` returns the layer, description, owner and grain of each table, and
+`describe_table` returns the contract. `ldp mcp --config DIR --layer gold` serves only the gold tables, so no tool and no
+SQL can reach the tables upstream of them.
 
 ## Catalogs and object storage
 

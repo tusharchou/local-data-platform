@@ -75,8 +75,8 @@ virtualenv where local-data-platform is installed with the `mcp` extra.
 
 ```text
 ldp mcp --config DIR_OR_FILE [--config ...] [--catalog SPEC.json ...]
-        [--allow TABLES] [--max-rows N] [--timeout SECONDS] [--audit PATH] [--no-iceberg-audit]
-        [--no-native] [--install-extensions] [-v]
+        [--allow TABLES] [--layer {bronze,silver,gold}] [--max-rows N] [--timeout SECONDS] [--audit PATH]
+        [--no-iceberg-audit] [--no-native] [--install-extensions] [-v]
 ```
 
 | Option | Meaning |
@@ -84,6 +84,7 @@ ldp mcp --config DIR_OR_FILE [--config ...] [--catalog SPEC.json ...]
 | `--config` | A dataset config, or a folder of `*.json` configs. The folder is not searched recursively, and JSON files that are not configs are skipped. Every `ICEBERG` source or target becomes a table. Repeatable. |
 | `--catalog` | A catalog spec file, either a `target.catalog`-style object or `{"catalog": {...}}`. Every table in the catalog's top-level namespaces is served. Repeatable. |
 | `--allow` | A comma-separated allowlist of identifiers or `fnmatch` patterns, such as `sales.orders,sales.*`. A pattern without a dot also matches the bare table name. By default every table found is served, except the `_ldp` system tables, which need a pattern that starts with `_ldp`. |
+| `--layer` | Serve only the tables of one layer, `bronze`, `silver` or `gold`, so that an agent sees the tables that have an owner and a meaning and nothing upstream of them. The layer of a table is the one its config declares in `metadata.docs`, else the `ldp.layer` of the Iceberg table, else its namespace when that is called `bronze`, `silver` or `gold`. A table of another layer is not served by any tool, and SQL cannot read it. |
 | `--max-rows` | The row cap for every result. The default is 500. A tool's own `max_rows` or `n` is clamped to it. |
 | `--timeout` | Interrupt a query after this many seconds. The view refresh that runs before it stops loading tables after the same time (see [Known limits](#known-limits)). The default is 30. |
 | `--audit` | The JSONL audit file. The default is `<first local warehouse>/.ldp/audit/mcp_audit.jsonl`. |
@@ -105,12 +106,26 @@ back with `isError: true` and `{"error": {"type", "message"}}`.
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `list_tables` | none | Each table's `table` identifier, `sql_name` (for example `"demo"."rides"`), `aliases` (its bare name when that is unique), `access` (`native` or `arrow`), `row_count`, `last_updated` and `source`. Also returns the `unavailable` tables and the `limits`. |
-| `describe_table` | `table` | The schema, partition spec, sort order, `row_count` (from snapshot metadata), the 10 most recent snapshots, table properties (keys that look secret are redacted), `location` and `metadata_location`. Also `freshness` (the last commit time and its age in seconds, plus the last run's time and status), `latest_run` and `quality` from `_ldp`. |
+| `list_tables` | none | Each table's `table` identifier, `layer`, `description`, `owner` and `grain` (each `null` when the table does not say), `sql_name` (for example `"demo"."rides"`), `aliases` (its bare name when that is unique), `access` (`native` or `arrow`), `row_count`, `last_updated` and `source`. Also returns the `unavailable` tables and the `limits`. |
+| `describe_table` | `table` | The `contract` of the table (see below), the schema, partition spec, sort order, `row_count` (from snapshot metadata), the 10 most recent snapshots, table properties (keys that look secret are redacted), `location` and `metadata_location`. Also `freshness` (the last commit time and its age in seconds, plus the last run's time and status), `latest_run` and `quality` from `_ldp`. |
 | `query` | `sql`, optional `max_rows` | `columns` (name and Arrow type), `rows` (lists in column order), `row_count`, `truncated`, `max_rows`, `duration_ms` and `stale_tables` (tables the refresh didn't reach in time or couldn't load). The default is 100 rows. |
 | `sample_rows` | `table`, optional `n` (default 10) | The first `n` rows in scan order, in the same shape as `query`. |
 | `table_history` | `table`, optional `limit` (default 50) | Snapshots newest first, each with `committed_at`, `operation`, the added, deleted and total records, `is_current`, `on_main` (on the current snapshot's lineage) and the `ldp.*` snapshot properties such as `ldp.run-id` and `ldp.idempotency-key`. Also the branch and tag `refs`. |
 | `get_dataset` | `name`, or `name@vN` | The latest (or Nth) pinned `DatasetVersion`: its table, snapshot, row filter, selected fields, row count and schema fingerprint. When the table is served natively, it also returns `sql` that re-reads exactly the pinned rows (see below). It returns `{"available": false, "reason"}` when the install has no `local_data_platform.datasets`. |
+
+### What a table says about itself
+
+`list_tables` and `describe_table` say what a table means, so that an agent picks the right one without reading pipeline
+code. The contract is read from the Iceberg table, where `ldp run` and `ldp gold sync` write it, so it is the same for every
+client. The design is in [the v0.1.4 contract](design/v0_1_4.md).
+
+- `layer`, `description`, `owner` and `grain` are in each entry of `list_tables`. A table that does not say has `null`,
+  which an agent can test for.
+- `describe_table` returns the whole `contract` as one object. It has those four, the `primary_key` as a list, `columns` as
+  a map of column name to description, and `undocumented_columns`, the names of the columns that have no description. The
+  `doc` of each column is also in the schema.
+- The `layer` is the one that the config of the table declares, else the table's own, else the namespace when that is
+  called `bronze`, `silver` or `gold`.
 
 ### Latest run and quality in `describe_table`
 
@@ -126,6 +141,10 @@ see [the observability guide](observability.md)), `describe_table` reads the tab
   `_ldp.quality_results`: `passed`, `checks_run`, `checks_failed`, `on_failure` and `checks`.
   Without `_ldp` rows it falls back to the current snapshot's `ldp.quality` property. If there is
   neither, it is `null`.
+
+A release of the gold tables is not a run. `ldp gold build` records a `release.cut` event for each table that it
+releases, and `latest_run` leaves it out, so it still describes the last build. `ldp gold list` and `ldp gold show` print
+the same run and the same quality, from the same code.
 
 The `_ldp` tables are read with pyiceberg, never through the DuckDB sandbox, so agents can't query
 them unless you allowlist them.

@@ -2,14 +2,18 @@
 
 ``ldp gold sync CONFIG [--dbt-manifest FILE] [--dry-run] [--json]`` writes the contract of a config into its existing
 table, ``ldp gold build DIR [--no-release] [--json]`` builds the gold tables of a folder in order and cuts a release,
-and ``ldp gold releases DIR [--show RELEASE] [--json]`` lists the releases. ``cli.py`` wires this in with
-:func:`add_cli`. Heavy imports happen inside the command.
+``ldp gold releases DIR [--show RELEASE] [--json]`` lists the releases, ``ldp gold list DIR [--all-layers] [--json]
+[--strict]`` lists the tables with what they mean and how they are doing, ``ldp gold show DIR TABLE [--json]
+[--no-samples]`` describes one, and ``ldp gold docs DIR --out FILE [--format html|md]`` writes the catalog as a page.
+``cli.py`` wires this in with :func:`add_cli`. Heavy imports happen inside the command.
 """
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 
@@ -36,6 +40,57 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
         return 1
 
     gold.set_defaults(handler=usage)
+
+    listing = actions.add_parser(
+        "list", parents=parents, help="list the gold tables of a folder with what they mean and how they are doing",
+        description="One row for each gold table of DIR: the table, its description, owner and grain, its rows, "
+                    "when its data last changed, the status of its last run, its last quality result and the release "
+                    "it is in. "
+                    "A table with no contract shows no description. The tables are the Iceberg targets of the dataset "
+                    "configs of DIR, and a gold table is one whose metadata.docs.layer is gold, or whose table says "
+                    "so, or that is in a namespace called gold. The run and quality status come from the _ldp "
+                    "namespace, the same as ldp mcp reports. Nothing is written.",
+        epilog="Exit status is 0 on success and 1 on an error, and with --strict also when a gold table lacks part of "
+               "its contract. Example: ldp gold list ldp_demo/robots --strict")
+    listing.add_argument("folder", metavar="DIR", help="a folder of dataset configs")
+    listing.add_argument("--all-layers", action="store_true", dest="all_layers",
+                         help="also list the bronze and silver tables, and the tables that have no layer")
+    listing.add_argument("--json", action="store_true", help="print the result as JSON")
+    listing.add_argument("--strict", action="store_true",
+                         help="exit with 1 when a gold table has no description, no owner or no grain, or has a "
+                              "column without a description. For CI")
+    listing.set_defaults(handler=_cmd_list)
+
+    show = actions.add_parser(
+        "show", parents=parents, help="describe one table: its columns, runs, releases and a few rows",
+        description="Everything the catalog knows about one table of DIR: its description, owner, grain and key, every "
+                    "column with its type and description, the metrics defined on it, its last runs, the releases that "
+                    "include it, a few sample rows and an ldp query line to read it. Nothing is written.",
+        epilog="Example: ldp gold show ldp_demo/robots gold.gold_robot_daily")
+    show.add_argument("folder", metavar="DIR", help="a folder of dataset configs")
+    show.add_argument("table", metavar="TABLE",
+                      help="a table such as gold.daily_sales, or its bare name when only one table has it")
+    show.add_argument("--runs", type=_positive, default=5, metavar="N", help="how many of the last runs to list")
+    show.add_argument("--no-samples", action="store_true", dest="no_samples",
+                      help="leave the sample rows out, for a table whose rows must not be shown")
+    show.add_argument("--json", action="store_true", help="print the result as JSON")
+    show.set_defaults(handler=_cmd_show)
+
+    docs = actions.add_parser(
+        "docs", parents=parents, help="write the catalog as one page, or as Markdown for a MkDocs site",
+        description="Write what ldp gold list and show print as one file. The HTML is a single self-contained "
+                    "page with a search box. It has its CSS and its script inline, asks for nothing from the network "
+                    "and works from a file or an e-mail. With --format md it is one Markdown file with a table of the "
+                    "tables and a section for each. The sample rows of a table are in it, so leave them out with "
+                    "--no-samples when the file will be shared and the rows must not be.",
+        epilog="Example: ldp gold docs ldp_demo/robots --out catalog.html")
+    docs.add_argument("folder", metavar="DIR", help="a folder of dataset configs")
+    docs.add_argument("--out", required=True, metavar="FILE", help="where to write it, or - for standard output")
+    docs.add_argument("--format", choices=("html", "md"), default="html", help="html (the default) or md")
+    docs.add_argument("--all-layers", action="store_true", dest="all_layers",
+                      help="also include the bronze and silver tables, and the tables that have no layer")
+    docs.add_argument("--no-samples", action="store_true", dest="no_samples", help="leave the sample rows out")
+    docs.set_defaults(handler=_cmd_docs)
 
     sync = actions.add_parser(
         "sync", parents=parents, help="write the contract of a config into its existing table, without writing data",
@@ -93,6 +148,64 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
 
 def _plural(number: int, noun: str, plural: str | None = None) -> str:
     return f"{number} {noun if number == 1 else plural or noun + 's'}"
+
+
+def _positive(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a whole number, got {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"expected a number of at least 1, got {value}")
+    return value
+
+
+def _cmd_list(args: argparse.Namespace) -> int:
+    from local_data_platform.gold import catalog as catalogs
+    from local_data_platform.gold import render
+
+    catalog = catalogs.collect(args.folder, all_layers=args.all_layers)
+    print(json.dumps(catalog.to_dict(), indent=2) if args.json else render.list_text(catalog))
+    lacking = catalog.lacking
+    if args.strict and lacking:
+        print(f"ldp: {catalog.lacking_summary}", file=sys.stderr)
+        for entry in lacking:
+            print(f"  {entry.lacks_text}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_show(args: argparse.Namespace) -> int:
+    from local_data_platform.gold import catalog as catalogs
+    from local_data_platform.gold import render
+
+    catalog = catalogs.collect(args.folder, only=args.table, detail=True, runs=args.runs,
+                               sample=0 if args.no_samples else catalogs.DEFAULT_SAMPLE)
+    entry = catalog.entries[0]
+    print(json.dumps(entry.to_dict(), indent=2) if args.json else render.show_text(entry))
+    return 0
+
+
+def _cmd_docs(args: argparse.Namespace) -> int:
+    from local_data_platform.gold import catalog as catalogs
+    from local_data_platform.gold import render
+
+    catalog = catalogs.collect(args.folder, all_layers=args.all_layers, detail=True,
+                               sample=0 if args.no_samples else catalogs.DEFAULT_SAMPLE)
+    text = render.html_page(catalog) if args.format == "html" else render.markdown_page(catalog)
+    if args.out == "-":
+        sys.stdout.write(text)
+        return 0
+    target = Path(args.out)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    os.replace(temporary, target)
+    kind = "page" if args.format == "html" else "Markdown file"
+    note = " It needs no network." if args.format == "html" else ""
+    print(f"wrote {target}, {_plural(len(catalog.entries), 'table')}, {len(text.encode('utf-8')) / 1024:.1f} KB. "
+          f"Open it as a {kind}.{note}")
+    return 0
 
 
 def _cmd_sync(args: argparse.Namespace) -> int:

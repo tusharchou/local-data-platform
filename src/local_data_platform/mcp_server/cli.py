@@ -2,7 +2,7 @@
 
 ::
 
-    ldp mcp --config DIR_OR_FILE [--config ...] [--catalog SPEC.json] [--allow TABLES]
+    ldp mcp --config DIR_OR_FILE [--config ...] [--catalog SPEC.json] [--allow TABLES] [--layer LAYER]
             [--max-rows N] [--timeout SECONDS] [--audit PATH] [--no-iceberg-audit] [--no-native]
             [--install-extensions]
 
@@ -18,6 +18,7 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
+from local_data_platform.contracts import LAYERS
 from local_data_platform.exceptions import ConfigError, LDPError
 
 from .tools import DEFAULT_MAX_ROWS, DEFAULT_TIMEOUT_S
@@ -60,6 +61,11 @@ def add_arguments(parser: argparse.ArgumentParser, *, verbose: bool = True) -> a
     parser.add_argument("--allow", action="append", metavar="TABLES",
                         help="comma-separated table allowlist, e.g. 'demo.rides,demo.*' (default: every table "
                              "found, except the _ldp system tables)")
+    parser.add_argument("--layer", choices=LAYERS, metavar="{" + ",".join(LAYERS) + "}",
+                        help="serve only the tables of this layer, such as gold, so that an agent sees the tables that "
+                             "have an owner and a meaning and nothing upstream of them. The layer of a table is the "
+                             "one its config declares in metadata.docs, else the ldp.layer of the table, else its "
+                             "namespace when that is called bronze, silver or gold")
     parser.add_argument("--max-rows", type=_positive_int, default=DEFAULT_MAX_ROWS,
                         help=f"row cap for every result (default {DEFAULT_MAX_ROWS})")
     parser.add_argument("--timeout", type=_positive_float, default=DEFAULT_TIMEOUT_S, metavar="SECONDS",
@@ -96,7 +102,8 @@ def add_cli(subparsers: Any, parents: Sequence[argparse.ArgumentParser] = ()) ->
         help="serve Iceberg tables read-only to AI agents over MCP (stdio)",
         description="Run a read-only Model Context Protocol server over stdio. It exposes list_tables, "
                     "describe_table, query, sample_rows, table_history and get_dataset, runs SQL in a locked-down "
-                    "DuckDB, and audits every call. Needs the mcp and duckdb extras: "
+                    "DuckDB, and audits every call. list_tables says what each table means, who owns it, its layer "
+                    "and its grain, and --layer gold serves only the gold tables. Needs the mcp and duckdb extras: "
                     'pip install "local-data-platform[mcp,duckdb]".')
     return add_arguments(parser, verbose=not parents)
 
@@ -109,7 +116,8 @@ def run_command(args: argparse.Namespace) -> int:
     import_mcp()
     if not args.config and not args.catalog:
         raise ConfigError("ldp mcp needs at least one --config or --catalog")
-    tools = LakeTools.from_sources(args.config, args.catalog, allow=args.allow, audit_path=args.audit,
+    tools = LakeTools.from_sources(args.config, args.catalog, allow=args.allow, layer=args.layer,
+                                   audit_path=args.audit,
                                    iceberg_audit=not args.no_iceberg_audit,
                                    max_rows=args.max_rows, timeout_s=args.timeout,
                                    native=False if args.no_native else None,
@@ -118,7 +126,8 @@ def run_command(args: argparse.Namespace) -> int:
         if not tools.tables:
             reasons = "; ".join(f"{item['table']}: {item['reason']}" for item in tools.unavailable) or "none found"
             raise ConfigError(f"no tables to serve ({reasons})")
-        print(f"ldp mcp: serving {len(tools.tables)} tables over stdio ({', '.join(tools.tables)}); "
+        scope = f" of the {args.layer} layer" if args.layer else ""
+        print(f"ldp mcp: serving {len(tools.tables)} tables{scope} over stdio ({', '.join(tools.tables)}); "
               f"audit log {tools.audit.path}", file=sys.stderr)
         serve_stdio(tools)
     finally:
