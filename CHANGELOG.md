@@ -6,10 +6,15 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
-Work towards 0.1.3 Orchestration, see `docs/roadmap.md`. The lakehouse runs itself on a laptop. Pipelines, dbt models and
+Work towards 0.1.4 Self Serving Gold Layer, see `docs/roadmap.md`.
+
+## [0.1.3] - 2026-10-16
+
+Milestone 0.1.3 Orchestration, see `docs/roadmap.md`. The lakehouse runs itself on a laptop. Pipelines, dbt models and
 maintenance are declared once in a workflow file and run for the right time window, on a schedule from cron or launchd
 with no service, or from Airflow 3. Backfills and retries reuse the idempotency keys, so no window is loaded twice. The
-guide is `docs/orchestration.md`, and `make demo-orchestration` runs the example.
+guide is `docs/orchestration.md`, and `make demo-orchestration` runs the example. The release tag for this version is
+`v0.1.3`.
 
 ### Added
 
@@ -47,9 +52,9 @@ guide is `docs/orchestration.md`, and `make demo-orchestration` runs the example
   third, are backfilled by the daily workflow, which loads two days and is held back by a data gate on the third. After the
   fix the same command runs only the third, a third run skips every day, and `ldp schedule tick` loads the fourth night.
   The `models` task runs when the `dbt` extra is installed, and the demo prints a skip line when it is not. The daily drops
-  now carry the `order_ts` of their order on each order line.
+  now carry the `order_ts` of their order on each order line (#141).
 - The orchestration guide, `docs/orchestration.md`, whose commands run in the test suite through the shared block runner in
-  `tests/docs_runner.py`, and an Orchestration section in the README.
+  `tests/docs_runner.py`, and an Orchestration section in the README (#141).
 
 ### Changed
 

@@ -10,8 +10,11 @@ It's for learning how a lakehouse works, for building and testing pipelines loca
 for cloud infrastructure, and for giving agents and notebooks safe, reproducible access to the
 tables you build.
 
-> **Status.** This is version 0.1.2, the Warehousing milestone. It adds `ldp dbt`, which runs a dbt
-> project over your Iceberg tables and publishes the models you mark back to Iceberg (see
+> **Status.** This is version 0.1.3, the Orchestration milestone. It adds windows and idempotency keys
+> to `ldp run`, workflow files with `ldp workflow plan` and `ldp workflow run`, `ldp backfill`, retries,
+> `ldp schedule` for cron and launchd, and an Airflow 3 operator (see [Orchestration](#orchestration)),
+> with a [guide](docs/orchestration.md). Version 0.1.2 added `ldp dbt`, which runs a dbt project over
+> your Iceberg tables and publishes the models you mark back to Iceberg (see
 > [Transform with dbt](#transform-with-dbt)), the `DUCKDB` and `XLSX` source formats, time travel and
 > folders of tables in `ldp query`, retries for concurrent appends, and a restaurant example with a
 > [guide](docs/warehousing.md). Version 0.1.1 was the first release on PyPI since 0.1.0. It carries
@@ -26,7 +29,7 @@ tables you build.
 `ldp` needs Python 3.12 or newer. Install it from PyPI, preferably in a virtual environment:
 
 ```bash
-pip install "local-data-platform[duckdb]>=0.1.2"
+pip install "local-data-platform[duckdb]>=0.1.3"
 
 ldp demo --workdir ldp_demo
 ```
@@ -974,12 +977,11 @@ in each release, and the [contributing guide](docs/contributing.md) to get invol
 ## Roadmap
 
 From 0.1.1 on, the package version equals the milestone number. Each milestone adds the next layer
-of a data platform, and every layer runs on a laptop first. 0.1.2 Warehousing is released, and these
+of a data platform, and every layer runs on a laptop first. 0.1.3 Orchestration is released, and these
 are the milestones after it:
 
 | Version | Milestone | What it adds |
 |---|---|---|
-| 0.1.3 | Orchestration | Windows, backfills, retries and a laptop scheduler, plus an Airflow operator |
 | 0.1.4 | Self Serving Gold Layer | Gold tables with owners and docs, releases, metrics, a catalog and exports |
 | 0.1.5 | Monitoring | SLAs, freshness, volume, schema and metric monitors, alerts and `ldp status` |
 | 0.1.6 | Business Intelligence Reporting Dashboarding | Offline HTML reports, Slack delivery, a live dashboard and BI tool recipes |

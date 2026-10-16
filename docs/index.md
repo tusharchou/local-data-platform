@@ -15,8 +15,17 @@ A modern, modular, and developer-friendly platform for local data engineering, a
 - [Quickstart](quickstart.md): install, run `ldp demo`, and load your own data.
 - [Recipes](recipes.md): short, runnable examples of the Python API.
 - [Warehousing](warehousing.md): from Excel and CSV exports to dbt-tested Iceberg tables, with churn and time travel.
+- [Orchestration](orchestration.md) runs the restaurant's nightly drops by window, with workflow files, backfills, retries, a laptop scheduler and Airflow.
 - [v0.1.1 hardening contract](design/v0_1_1.md): what each module does.
-- [Roadmap](roadmap.md): the milestones from 0.1.3 to 0.2.0 and what each one adds.
+- [Roadmap](roadmap.md): the milestones from 0.1.4 to 0.2.0 and what each one adds.
+
+## New in 0.1.3
+
+0.1.3 adds orchestration. `ldp run` takes a window and a retry identity, a workflow file lists the pipelines, dbt
+models and maintenance of a night, `ldp backfill` runs a range of windows and resumes where it stopped, a failed task
+retries by itself under the same idempotency key, and `ldp schedule tick` runs what is due from cron or launchd with no
+service. `LdpRunOperator` runs a config as an Airflow 3 task. The [orchestration guide](orchestration.md) walks through
+all of it on the restaurant chain's nightly drops, and every command in it runs in the tests.
 
 ## New in 0.1.2
 
