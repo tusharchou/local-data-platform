@@ -4,7 +4,7 @@ Local Data Platform aims to be a full data platform in a box. Each milestone add
 
 One dataset makes the whole journey. `examples/restaurant` starts in 0.1.2 as the sales, customers, menus and reviews of a small restaurant group. Every later milestone extends the same example, so you can follow the same rows from a raw file to a dashboard and a plain-English answer.
 
-**Version numbers.** From 0.1.1 on, the package version equals the milestone number. 0.1.2 is the current release, and 0.1.1 was made from PR #117. Milestone 0.1.3 ships as package 0.1.3, and so on up to 0.2.0 Cloud Integration. APIs deprecated in 0.1.1 are removed in 0.2.0.
+**Version numbers.** From 0.1.1 on, the package version equals the milestone number. 0.1.3 is the current release, and 0.1.1 was made from PR #117. Milestone 0.1.4 ships as package 0.1.4, and so on up to 0.2.0 Cloud Integration. APIs deprecated in 0.1.1 are removed in 0.2.0.
 
 **Sizes.** Sizes are estimates in engineer-days for one engineer working with an AI assistant, before review cycles. A small issue (S) is 1.5 days, a medium one (M) is 5 days and a large one (L) is 11 days. The whole plan comes to about 288 engineer-days.
 
@@ -14,7 +14,7 @@ One dataset makes the whole journey. `examples/restaurant` starts in 0.1.2 as th
 |---|---|---|---|---|
 | 0.1.1 | Today's platform on PyPI, renumbered from 0.2.0 | `ldp demo` | 1.5 | Released |
 | 0.1.2 Warehousing: DuckDB, Iceberg, DBT | dbt models over Iceberg tables, published back to Iceberg, plus Excel input | `make demo-warehouse` | 33.5 | Released |
-| 0.1.3 Orchestration | Windows, backfills, retries and a laptop scheduler, plus an Airflow operator | `make demo-orchestration` | 34 | Planned |
+| 0.1.3 Orchestration | Windows, backfills, retries and a laptop scheduler, plus an Airflow operator | `make demo-orchestration` | 34 | Released |
 | 0.1.4 Self Serving Gold Layer | Gold tables with owners and docs, releases, metrics, a catalog and exports | `make demo-gold` | 31 | Planned |
 | 0.1.5 Monitoring | SLAs, freshness, volume, schema and metric monitors, alerts and `ldp status` | `make demo-monitor` | 25.5 | Planned |
 | 0.1.6 Business Intelligence Reporting Dashboarding | Offline HTML reports, Slack delivery, a live dashboard and BI tool recipes | `make demo-bi` | 27 | Planned |
@@ -115,6 +115,8 @@ make demo-warehouse
 - Cut line. If the milestone runs past 6 weeks, #48 moves to 0.1.4 together with the `excel` extra, and the example reads `restaurants.csv` instead of `restaurants.xlsx`.
 
 ## 0.1.3 Orchestration
+
+Released as 0.1.3.
 
 **Goal.** Make the lakehouse run itself on a laptop. Pipelines, dbt models and maintenance are declared once in a workflow file and run for the right time window on a schedule, from a built-in `ldp schedule` with no services or from Airflow 3. Backfills and retries reuse the idempotency keys, so no window is ever loaded twice. Today `ldp run` rejects `--window`, a config cannot hold a schedule, three daily windows over one file write 9 rows instead of 3, and the 501st daily window fails its key search. This milestone fixes all four.
 
