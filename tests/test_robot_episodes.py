@@ -22,7 +22,7 @@ from local_data_platform.quality import checks_from_config, run_checks
 pytest.importorskip("duckdb")
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "robot_episodes"
-CONFIGS = sorted((EXAMPLE / "configs").glob("*.json"))
+CONFIGS = sorted(path for path in (EXAMPLE / "configs").glob("*.json") if path.name != "metrics.json")
 
 
 def _load(name: str, path: Path):
@@ -188,6 +188,33 @@ def test_the_gold_configs_have_complete_contracts():
         config = Config.from_json(EXAMPLE / "configs" / f"{name}.json")
         assert config.docs is not None and config.docs.gold
         assert config.docs.owner == config.who and config.docs.grain and config.docs.primary_key
+
+
+def test_the_fleet_metrics_fit_the_gold_tables_and_are_computed_from_sums(walkthrough):
+    from local_data_platform import metrics
+    from local_data_platform.engine.duckdb import DuckDBEngine
+    from local_data_platform.gold.release import register_release
+    from local_data_platform.metrics.check import validate_folder
+
+    workdir, _ = walkthrough
+    checked = validate_folder(workdir)
+    assert checked.valid and checked.problems == [] and checked.files == ("metrics.json",)
+    assert [item.name for item in checked.definitions.metrics] == [
+        "episodes", "success_rate", "frame_drop_rate", "worst_skew_ms", "active_robot_days"]
+
+    by_week = metrics.query(workdir, "episodes,success_rate,frame_drop_rate", by="robot", grain="week")
+    with DuckDBEngine() as engine:
+        register_release(engine, workdir, live=True)
+        expected = engine.query(
+            "SELECT CAST(date_trunc('week', recorded_on) AS DATE) AS week, robot_id AS robot, "
+            "sum(episodes) AS episodes, sum(successes) / sum(episodes) AS success_rate, "
+            "sum(dropped_frames) / sum(frames) AS frame_drop_rate "
+            "FROM robots.gold_robot_daily GROUP BY 1, 2 ORDER BY 1, 2")
+    assert by_week.num_rows == expected.num_rows == 8
+    for name in ("week", "robot", "episodes"):
+        assert by_week.column(name).to_pylist() == expected.column(name).to_pylist()
+    for name in ("success_rate", "frame_drop_rate"):
+        assert by_week.column(name).to_pylist() == pytest.approx(expected.column(name).to_pylist())
 
 
 def test_the_pinned_split_is_reproducible(walkthrough):

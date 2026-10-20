@@ -94,7 +94,7 @@ def _release_rows(entry: CatalogEntry) -> list[list[Any]]:
 RUN_HEADERS = ["Run", "Attempt", "Status", "Started (UTC)", "Finished (UTC)", "Snapshot"]
 RELEASE_HEADERS = ["Release", "Cut (UTC)", "Snapshot", "Rows", "Status", "Live is here"]
 COLUMN_HEADERS = ["Column", "Type", "Description"]
-METRIC_HEADERS = ["Metric", "Description"]
+METRIC_HEADERS = ["Metric", "Description", "Owner", "Format"]
 
 
 def _facts(entry: CatalogEntry) -> list[tuple[str, str | None]]:
@@ -178,7 +178,8 @@ def show_text(entry: CatalogEntry) -> str:
                 "description": column.description or "no description"} for column in entry.columns]
     lines += ["", f"Columns ({len(columns)})", _indent(format_table(columns))]
     if entry.metrics:
-        metrics = [{"metric": item.get("name"), "description": item.get("description")} for item in entry.metrics]
+        metrics = [{"metric": item.get("name"), "description": item.get("description"), "owner": item.get("owner"),
+                    "format": item.get("format")} for item in entry.metrics]
         lines += ["", "Metrics", _indent(format_table(metrics))]
     if entry.runs:
         runs = [dict(zip(("run_id", "attempt", "status", "started_utc", "finished_utc", "snapshot_id"), row))
@@ -262,7 +263,8 @@ def _sample_section(entry: CatalogEntry) -> html.Raw | None:
 def _extra_sections(entry: CatalogEntry) -> list[Any]:
     sections: list[Any] = []
     if entry.metrics:
-        rows = [[item.get("name"), item.get("description")] for item in entry.metrics]
+        rows = [[item.get("name"), item.get("description"), item.get("owner"), item.get("format")]
+                for item in entry.metrics]
         sections.append(html.details("Metrics", html.table(METRIC_HEADERS, rows)))
     if entry.runs:
         sections.append(html.details(_runs_title(entry),
@@ -298,7 +300,7 @@ def html_page(catalog: Catalog) -> str:
     cards = [_card(entry, _anchor(entry.table, taken)) for entry in catalog.entries]
     what = _what(catalog)
     summary = f"{_count(len(catalog.entries), what)} in {catalog.folder}, made {utc(catalog.generated_at)} UTC"
-    body: list[Any] = [html.search_box("Search the tables", "Search tables, owners and columns")]
+    body: list[Any] = [html.search_box("Search the tables", "Search tables, owners, columns and metrics")]
     lacking = catalog.lacking
     if lacking:
         body.append(html.h("p", html.chip(catalog.lacking_summary, "warn"), " ",
@@ -355,7 +357,8 @@ def _md_sections(entry: CatalogEntry) -> list[str]:
                for column in entry.columns]
     lines = ["", f"### Columns ({len(columns)})", "", *_grid(COLUMN_HEADERS, columns)]
     if entry.metrics:
-        rows = [[md(item.get("name")), md(item.get("description"))] for item in entry.metrics]
+        rows = [[md(item.get("name")), md(item.get("description")), md(item.get("owner")), md(item.get("format"))]
+                for item in entry.metrics]
         lines += ["", "### Metrics", "", *_grid(METRIC_HEADERS, rows)]
     if entry.runs:
         rows = [[f"`{md(row[0])}`", row[1], md(row[2]), *row[3:]] for row in _runs_rows(entry)]

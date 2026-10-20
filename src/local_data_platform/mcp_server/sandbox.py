@@ -53,6 +53,9 @@ _CONNECT_CONFIG = {
 
 _BATCH_ROWS = 2048
 
+PINNED_SCHEMA = "__ldp_pinned"
+"""The schema of the views that hold a table at one snapshot, see :meth:`DuckDBSandbox.pin`."""
+
 
 def quote_identifier(name: str) -> str:
     """Quote ``name`` as a DuckDB identifier."""
@@ -96,6 +99,12 @@ class QueryResult:
     table: pa.Table
     truncated: bool
     duration_ms: float
+
+
+@dataclass
+class _Pin:
+    identifier: str
+    arrow_name: str | None = None
 
 
 @dataclass
@@ -144,6 +153,8 @@ class DuckDBSandbox:
         self._timed_out = False
         self._closed = False
         self._arrow_counter = 0
+        self._pinned: dict[str, _Pin] = {}
+        self._pin_counter = 0
         self._registrations: dict[str, _Registration] = {}
         self.native_available = False if native is False else self._load_iceberg(install_extensions, native)
         allowed: list[str] = []
@@ -296,6 +307,83 @@ class DuckDBSandbox:
         """The identifiers of the registered tables."""
         return list(self._registrations)
 
+    # ------------------------------------------------------------------ one snapshot
+
+    def pin(self, identifier: str, snapshot_id: int) -> str:
+        """The SQL name of a view of a table as one of its snapshots holds it, which a release names.
+
+        The table's own view follows its latest snapshot. This view stays at ``snapshot_id`` whatever is committed
+        later, so a reader that wants a release reads the same rows each time. It is made the way the table's view is,
+        with ``iceberg_scan`` when the table is served natively and from Arrow otherwise, in a schema of its own. A
+        table has one such view at a time, so pinning another snapshot of it drops the view of the one before, and a
+        server that sees release after release does not keep them all in memory.
+
+        Args:
+            identifier: A registered table.
+            snapshot_id: A snapshot of it.
+
+        Returns:
+            The quoted name to use in SQL, such as ``"__ldp_pinned"."gold.sales@42"``.
+
+        Raises:
+            KeyError: If the table is not registered.
+            QueryFailed: If the table has no such snapshot.
+        """
+        with self._lock:
+            self._check_open()
+            registration = self._registrations[identifier]
+            schema = quote_identifier(PINNED_SCHEMA)
+            name = f"{schema}.{quote_identifier(f'{identifier}@{snapshot_id}')}"
+            existing = self._pinned.get(name)
+            if existing is not None:
+                try:
+                    self._con.execute(f"SELECT * FROM {name} LIMIT 0").fetchall()
+                    return name
+                except self._duckdb.Error:
+                    pass  # the metadata file it was made from is gone, so it is made again
+            iceberg_table = registration.table.load()
+            if iceberg_table.snapshot_by_id(snapshot_id) is None:
+                known = [snapshot.snapshot_id for snapshot in iceberg_table.snapshots()]
+                raise QueryFailed(f"{identifier} has no snapshot {snapshot_id}; its snapshots are {known}")
+            self._con.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+            arrow_name = None
+            if registration.access == "native":
+                self._con.execute(
+                    f"CREATE OR REPLACE VIEW {name} AS SELECT * FROM "
+                    f"iceberg_scan({quote_literal(iceberg_table.metadata_location)}, snapshot_from_id => "
+                    f"{int(snapshot_id)})")
+                self._con.execute(f"SELECT * FROM {name} LIMIT 0").fetchall()
+            else:
+                self._pin_counter += 1
+                arrow_name = existing.arrow_name if existing is not None and existing.arrow_name else (
+                    f"__ldp_pinned_{self._pin_counter}")
+                self._con.register(arrow_name, iceberg_table.scan(snapshot_id=snapshot_id).to_arrow())
+                self._con.execute(f"CREATE OR REPLACE VIEW {name} AS SELECT * FROM {quote_identifier(arrow_name)}")
+            self._pinned[name] = _Pin(identifier, arrow_name)
+            for other in [item for item, pin in self._pinned.items() if pin.identifier == identifier and item != name]:
+                self._con.execute(f"DROP VIEW IF EXISTS {other}")
+                if self._pinned[other].arrow_name:
+                    self._con.unregister(self._pinned[other].arrow_name)
+                del self._pinned[other]
+            return name
+
+    def columns(self, sql_name: str) -> dict[str, str]:
+        """The DuckDB type of each column of a table or a pinned view, by lower case name.
+
+        Args:
+            sql_name: What :meth:`sql_name` or :meth:`pin` returned.
+
+        Raises:
+            KeyError: If it is not the name of a registered table or a pinned view, so no text of an agent gets here.
+        """
+        with self._lock:
+            self._check_open()
+            known = {item.sql_name for item in self._registrations.values()} | set(self._pinned)
+            if sql_name not in known:
+                raise KeyError(sql_name)
+            rows = self._con.execute(f"DESCRIBE SELECT * FROM {sql_name}").fetchall()
+        return {str(row[0]).lower(): str(row[1]) for row in rows}
+
     # ------------------------------------------------------------------ run
 
     def refresh(self, *, timeout_s: float | None = None) -> list[str]:
@@ -327,13 +415,15 @@ class DuckDBSandbox:
                     stale.append(registration.table.identifier)
         return stale
 
-    def query(self, sql: str, *, max_rows: int, timeout_s: float) -> QueryResult:
+    def query(self, sql: str, *, max_rows: int, timeout_s: float, params: Sequence[Any] | None = None) -> QueryResult:
         """Guard, run and fetch one query.
 
         Args:
             sql: The agent's SQL; it must pass :func:`~local_data_platform.mcp_server.guard.check_sql`.
             max_rows: Return at most this many rows.
             timeout_s: Interrupt the query after this many seconds.
+            params: Values for the ``$1``, ``$2`` and ``?`` placeholders of ``sql``. A value that is bound is data,
+                and never becomes part of the SQL.
 
         Returns:
             A :class:`QueryResult`.
@@ -347,7 +437,7 @@ class DuckDBSandbox:
         with self._lock:
             self._check_open()
             statement = check_sql(sql, self._con)
-            return self._run(statement, max_rows=max_rows, timeout_s=timeout_s)
+            return self._run(statement, max_rows=max_rows, timeout_s=timeout_s, params=params)
 
     def sample(self, identifier: str, n: int, *, timeout_s: float) -> QueryResult:
         """Return the first ``n`` rows of a registered table in scan order."""
@@ -357,7 +447,8 @@ class DuckDBSandbox:
             return self._run(f"SELECT * FROM {registration.sql_name} LIMIT {int(n)}", max_rows=int(n),
                              timeout_s=timeout_s)
 
-    def _run(self, statement: Any, *, max_rows: int, timeout_s: float) -> QueryResult:
+    def _run(self, statement: Any, *, max_rows: int, timeout_s: float,
+             params: Sequence[Any] | None = None) -> QueryResult:
         duckdb = self._duckdb
         timer = threading.Timer(timeout_s, self._interrupt)
         timer.daemon = True
@@ -367,7 +458,10 @@ class DuckDBSandbox:
         timer.start()
         reader = None
         try:
-            self._con.execute(statement)
+            if params:
+                self._con.execute(statement, list(params))
+            else:
+                self._con.execute(statement)
             batch_rows = max(1, min(max_rows + 1, _BATCH_ROWS))
             to_reader = getattr(self._con, "to_arrow_reader", None) or self._con.fetch_record_batch
             reader = to_reader(batch_rows)
@@ -431,4 +525,4 @@ def _first_line(error: BaseException) -> str:
     return text.splitlines()[0] if text else type(error).__name__
 
 
-__all__ = ["DuckDBSandbox", "QueryResult", "local_path", "quote_identifier", "quote_literal"]
+__all__ = ["DuckDBSandbox", "PINNED_SCHEMA", "QueryResult", "local_path", "quote_identifier", "quote_literal"]

@@ -1,7 +1,7 @@
 """The read-only MCP server (``local_data_platform.mcp_server``, contract C6).
 
 Covers the statement guard, the locked-down DuckDB sandbox (every setting checked for its
-effect, not just its value), table discovery and the allowlist, the six tools, the audit
+effect, not just its value), table discovery and the allowlist, the eight tools, the audit
 log, the MCP protocol through the SDK's in-process client, the ``ldp mcp`` CLI hook, and
 the scripted stdio client in ``examples/agent_client.py``.
 
@@ -52,7 +52,8 @@ from local_data_platform.mcp_server.guard import first_keyword  # noqa: E402
 from local_data_platform.mcp_server.sandbox import local_path  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TOOL_NAMES = ["describe_table", "get_dataset", "list_tables", "query", "sample_rows", "table_history"]
+TOOL_NAMES = ["describe_table", "get_dataset", "list_metrics", "list_tables", "query", "query_metric", "sample_rows",
+              "table_history"]
 SECRET_VALUE = "hunter2-do-not-leak"
 
 
@@ -953,7 +954,7 @@ def _mcp():
 
 
 @pytest.mark.parametrize("mode", ["legacy", "auto"])
-def test_mcp_lists_the_six_read_only_tools(tools, mode):
+def test_mcp_lists_the_eight_read_only_tools(tools, mode):
     mcp, build_server = _mcp()
     import anyio
 
@@ -1139,11 +1140,13 @@ def test_example_agent_client_over_stdio(tmp_path):
     out = completed.stdout
     assert "Every tool answered, and every forbidden request was refused." in out
     for step in ("1. list_tables", "2. describe_table", "3. sample_rows", "4. table_history", "5. query",
-                 "7. get_dataset", "8. things an agent must not be able to do"):
+                 "7. get_dataset", "8. list_metrics", "9. query_metric", "10. things an agent must not be able to do"):
         assert step in out
+    assert "read release r1" in out and "a filter was not kept" not in out
     records = (tmp_path / "lake" / "mcp_audit.jsonl").read_text().splitlines()
-    # Steps 1-8 make 13 calls. When DuckDB's iceberg extension is installed the tables are served
-    # natively, get_dataset returns SQL, and the client re-reads the pinned snapshot with one more query.
+    # Steps 1-10 make 17 calls: 13 of the tables, list_metrics, query_metric, and a metric that does not exist and a
+    # filter that is SQL. When DuckDB's iceberg extension is installed the tables are served natively, get_dataset
+    # returns SQL, and the client re-reads the pinned snapshot with one more query.
     native = "access=native" in out
     assert native == ("re-read through the pinned snapshot" in out)
-    assert len(records) == (14 if native else 13)
+    assert len(records) == (18 if native else 17)

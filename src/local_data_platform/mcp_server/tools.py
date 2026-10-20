@@ -1,4 +1,4 @@
-"""The six read-only tools the MCP server exposes, as plain Python.
+"""The eight read-only tools the MCP server exposes, as plain Python.
 
 :class:`LakeTools` holds the discovered tables, the DuckDB sandbox and the audit log.
 Each tool is a method returning a JSON-ready dict; :meth:`LakeTools.call` validates the
@@ -15,6 +15,11 @@ MCP results, so everything here can be used and tested without the ``mcp`` SDK.
   properties.
 * ``get_dataset(name)``: the latest pinned version of a dataset (needs
   :mod:`local_data_platform.datasets`).
+* ``list_metrics()``: the metrics that the metrics files of the served configs define, with what each means, who owns
+  it, its table, its dimensions and its grains.
+* ``query_metric(metrics, by, grain, filters, start, end, max_rows)``: some metrics of one table, as a query that the
+  server compiles from their definitions, with every value that the agent gave bound as a parameter. It reads the
+  current release of the gold tables, runs in the same sandbox as ``query``, and has the same row cap and timeout.
 """
 
 from __future__ import annotations
@@ -37,7 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from local_data_platform.contracts import Docs, read_contract, resolve_layer
-from local_data_platform.exceptions import LDPError
+from local_data_platform.exceptions import ConfigError, LDPError
 from local_data_platform.gold.status import int_or_none as _int_or_none
 from local_data_platform.gold.status import ldp_status
 from local_data_platform.gold.status import snapshot_operation as _operation
@@ -63,7 +68,8 @@ MAX_CELL_CHARS = 4096
 """Longer strings (and base64 of longer binaries) in results are cut to this many characters."""
 RECENT_SNAPSHOTS = 10
 _DATASET_DIR_PARAMS = ("warehouse", "warehouse_path", "root", "base_dir", "path")
-_TOOL_NAMES = ("list_tables", "describe_table", "query", "sample_rows", "table_history", "get_dataset")
+_TOOL_NAMES = ("list_tables", "describe_table", "query", "sample_rows", "table_history", "get_dataset",
+               "list_metrics", "query_metric")
 
 
 # ---------------------------------------------------------------------- JSON
@@ -227,6 +233,8 @@ class LakeTools:
         max_rows: The server-wide row cap. A tool's own ``max_rows`` or ``n`` is clamped to it.
         timeout_s: Queries are interrupted after this many seconds.
         audit: Where calls are audited. Defaults to an in-memory :class:`AuditLog`.
+        metrics_paths: The config files and folders to read the metrics files of, for ``list_metrics`` and
+            ``query_metric``. They are read again at each call, so an edited file takes effect without a restart.
         native: Passed to :class:`DuckDBSandbox`.
         install_extensions: Passed to :class:`DuckDBSandbox`.
         memory_limit: Passed to :class:`DuckDBSandbox`.
@@ -238,7 +246,8 @@ class LakeTools:
 
     def __init__(self, discovery: Discovery, *, max_rows: int = DEFAULT_MAX_ROWS, timeout_s: float = DEFAULT_TIMEOUT_S,
                  audit: AuditLog | None = None, native: bool | None = None, install_extensions: bool = False,
-                 memory_limit: str | None = None, threads: int | None = None):
+                 memory_limit: str | None = None, threads: int | None = None,
+                 metrics_paths: Iterable[str | os.PathLike] = ()):
         if isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows < 1:
             raise ValueError(f"max_rows must be a whole number of at least 1, got {max_rows!r}")
         if not isinstance(timeout_s, (int, float)) or timeout_s <= 0:
@@ -246,6 +255,7 @@ class LakeTools:
         self.discovery = discovery
         self.max_rows = max_rows
         self.timeout_s = float(timeout_s)
+        self.metrics_paths = list(metrics_paths)
         self.audit = audit if audit is not None else AuditLog(None)
         self.sandbox = DuckDBSandbox(discovery.tables, native=native, install_extensions=install_extensions,
                                      memory_limit=memory_limit, threads=threads)
@@ -285,7 +295,7 @@ class LakeTools:
             sink = iceberg_audit_sink(first.spec, first.base_dir)
         audit = AuditLog(audit_path if audit_path is not None else default_audit_path(discovery), sink=sink)
         try:
-            return cls(discovery, audit=audit, **kwargs)
+            return cls(discovery, audit=audit, metrics_paths=list(configs), **kwargs)
         except BaseException:
             audit.close()
             discovery.close()
@@ -294,7 +304,8 @@ class LakeTools:
     # ------------------------------------------------------------------ specs
 
     def tool_specs(self) -> list[ToolSpec]:
-        """The six tools with argument schemas that reflect this server's limits."""
+        """The eight tools with argument schemas that reflect this server's limits."""
+        names_arg = {"type": "array", "items": {"type": "string"}}
         table_arg = {"type": "string", "description": "A table identifier from list_tables, e.g. 'demo.rides'."}
         return [
             ToolSpec("list_tables", "List tables",
@@ -340,6 +351,37 @@ class LakeTools:
                      "selected fields, row count and schema fingerprint that reproduce it exactly.",
                      {"type": "object", "properties": {"name": {"type": "string", "description": "The dataset name."}},
                       "required": ["name"], "additionalProperties": False}),
+            ToolSpec("list_metrics", "List metrics",
+                     "List the metrics that this server can compute, each with what it means (description), who owns "
+                     "it (owner), how a person reads it (format), the gold table it comes from, the dimensions to "
+                     "group it by and the grains of time it can be reported at. Call this before query_metric. The "
+                     "numbers are defined once, so use them in place of writing the SQL for them.",
+                     {"type": "object", "properties": {}, "additionalProperties": False}),
+            ToolSpec("query_metric", "Compute metrics",
+                     f"Compute one or more metrics of list_metrics, which have to be of one table, grouped by some "
+                     f"dimensions and a grain of time, for some filters and a range of days. The server writes the SQL "
+                     f"from the definitions, so the numbers are the ones every report shows, and it binds every value "
+                     f"you give, so a filter can never be SQL. A ratio is a sum over a sum. The gold tables are read "
+                     f"as the current release holds them, and the result says which release. At most {self.max_rows} "
+                     f"rows are returned and the query is stopped after {self.timeout_s:g} seconds.",
+                     {"type": "object", "properties": {
+                         "metrics": {**names_arg, "minItems": 1, "description": "The metrics to compute, such as "
+                                                                                "['revenue', 'avg_ticket']."},
+                         "by": {**names_arg, "description": "The dimensions to group by, such as ['cuisine']."},
+                         "grain": {"type": "string", "enum": ["day", "week", "month", "quarter", "year"],
+                                   "description": "Group by the start of this period. It has to be a grain that "
+                                                  "list_metrics gives for the metric. Without it the whole period "
+                                                  "is added up into one row, which needs the year grain."},
+                         "filters": {**names_arg, "description": "Keep rows by dimension, each written "
+                                                                 "'dimension=value', such as ['city=Pune']. A "
+                                                                 "dimension that is given twice matches either."},
+                         "start": {"type": "string", "description": "The first day to include, YYYY-MM-DD."},
+                         "end": {"type": "string", "description": "The last day to include, YYYY-MM-DD."},
+                         "max_rows": {"type": "integer", "minimum": 1, "maximum": self.max_rows,
+                                      "description": f"Rows to return (default "
+                                                     f"{min(DEFAULT_QUERY_ROWS, self.max_rows)}, at most "
+                                                     f"{self.max_rows})."}},
+                      "required": ["metrics"], "additionalProperties": False}),
         ]
 
     def instructions(self) -> str:
@@ -350,7 +392,10 @@ class LakeTools:
                 f"query runs one SELECT or WITH statement (DuckDB "
                 f"dialect), returns at most {self.max_rows} rows and stops after {self.timeout_s:g} seconds. For "
                 f"time travel on a table whose access is 'native', query iceberg_scan('<metadata_location from "
-                f"describe_table>', snapshot_from_id => <snapshot_id from table_history>). Every call is audited.")
+                f"describe_table>', snapshot_from_id => <snapshot_id from table_history>). For a business number such "
+                f"as revenue, call list_metrics and then query_metric, which compute it the way every report does, "
+                f"from the current release of the gold tables. query reads the tables as they are now. Every call is "
+                f"audited.")
 
     # ------------------------------------------------------------------ dispatch
 
@@ -387,8 +432,13 @@ class LakeTools:
     def _audit(self, tool: str, args: Mapping[str, Any], outcome: ToolOutcome, started: float) -> None:
         sql = args.get("sql") if isinstance(args.get("sql"), str) else None
         table = args.get("table") if isinstance(args.get("table"), str) else None
+        if outcome.ok and tool == "query_metric":
+            sql, table = outcome.data.get("sql"), outcome.data.get("table")
         scalars = {key: (value[:1000] if isinstance(value, str) else value) for key, value in args.items()
                    if key not in ("sql", "table") and (value is None or isinstance(value, (str, int, float, bool)))}
+        lists = {key: value for key, value in args.items() if isinstance(value, list)}
+        scalars.update({key: [str(item)[:200] for item in value[:50]] for key, value in lists.items()
+                        if all(isinstance(item, (str, int, float, bool)) for item in value)})
         rows = outcome.data.get("row_count") if outcome.ok else None
         truncated = outcome.data.get("truncated") if outcome.ok and "row_count" in outcome.data else None
         record = AuditRecord(tool=str(tool)[:200], status=outcome.status,
@@ -416,6 +466,13 @@ class LakeTools:
             if kind == "string":
                 if not isinstance(value, str) or not value.strip():
                     raise InvalidArguments(f"'{name}' must be a non-empty string")
+            elif kind == "array":
+                items = [value] if isinstance(value, str) else value
+                if not isinstance(items, list) or not all(isinstance(item, str) and item.strip() for item in items):
+                    raise InvalidArguments(f"'{name}' must be a list of non-empty strings")
+                if not items and name in spec.input_schema.get("required", []):
+                    raise InvalidArguments(f"'{name}' must name at least one value")
+                value = list(items)
             elif kind == "integer":
                 if isinstance(value, float) and value.is_integer():
                     value = int(value)
@@ -569,6 +626,89 @@ class LakeTools:
             "truncated": len(snapshots) > limit,
             "refs": refs,
         })
+
+    def _metric_definitions(self) -> tuple[Any, list[str]]:
+        """The metrics this server can answer, and the problems that stop it from reading some.
+
+        The metrics files are read again at each call. Only the metrics whose table the server serves are in the
+        definitions, so an allowlist or a layer hides a metric as it hides its table.
+        """
+        from local_data_platform.metrics.load import load_all, resolve_table
+
+        try:
+            found = load_all(self.metrics_paths)
+        except ConfigError as error:
+            return None, [line.strip().removeprefix("- ") for line in str(error).splitlines()[1:]] or [str(error)]
+        if found is None:
+            return None, []
+        served = list(self._tables)
+        models = []
+        for model in found.models:
+            try:
+                table = resolve_table(model.table, served)
+            except ConfigError:
+                continue
+            models.append(dataclasses.replace(model, table=table))
+        names = {model.name for model in models}
+        return dataclasses.replace(found, models=tuple(models),
+                                   metrics=tuple(item for item in found.metrics if item.model in names)), []
+
+    def list_metrics(self) -> dict[str, Any]:
+        """The metrics of the metrics files, with what each means and what it can be asked for."""
+        definitions, problems = self._metric_definitions()
+        metrics = [definitions.describe(item) for item in definitions.metrics] if definitions is not None else []
+        note = None
+        if not metrics and not problems:
+            note = "this server has no metrics. A metrics file has \"kind\": \"Metrics\" and is in a folder of --config"
+        return {"metrics": metrics, "files": [item.name for item in definitions.files] if definitions else [],
+                "problems": problems, "note": note}
+
+    def _release_of(self, exposed: ExposedTable) -> tuple[Any, int | None]:
+        """The current release of the namespace of a table and the snapshot it names for the table."""
+        from local_data_platform.gold.release import ReleaseScope, releases_in, snapshot_for
+
+        warehouse = exposed.catalog.warehouse
+        known = releases_in(ReleaseScope(warehouse, ".".join(exposed.namespace))) if warehouse is not None else []
+        if not known:
+            return None, None
+        return known[0], snapshot_for(exposed.identifier, known[0])
+
+    def query_metric(self, metrics: list[str], by: list[str] | None = None, grain: str | None = None,
+                     filters: list[str] | None = None, start: str | None = None, end: str | None = None,
+                     max_rows: int | None = None) -> dict[str, Any]:
+        """Compute metrics of one table from the current release, as the definitions say, and cap the rows."""
+        from local_data_platform.metrics.compiler import compile_query, select_metrics
+        from local_data_platform.metrics.load import resolve_table
+        from local_data_platform.metrics.render import plain_numbers
+        from local_data_platform.metrics.runner import describe_source
+
+        definitions, problems = self._metric_definitions()
+        if definitions is None or not definitions.metrics:
+            raise InvalidArguments("; ".join(problems) if problems else "this server has no metrics to compute")
+        cap = min(max_rows if max_rows is not None else DEFAULT_QUERY_ROWS, self.max_rows)
+        try:
+            model, selected = select_metrics(definitions, metrics)
+            exposed = self._tables[resolve_table(model.table, list(self._tables))]
+            stale = self.sandbox.refresh(timeout_s=self.timeout_s)
+            release, snapshot = self._release_of(exposed)
+            table_sql = (self.sandbox.pin(exposed.identifier, snapshot) if snapshot is not None
+                         else self.sandbox.sql_name(exposed.identifier))
+            compiled = compile_query(definitions, metrics, table=exposed.identifier,
+                                     types=self.sandbox.columns(table_sql), by=by, grain=grain, filters=filters,
+                                     start=start, end=end, table_sql=table_sql)
+        except ConfigError as error:
+            raise InvalidArguments(str(error)) from None
+        result = self.sandbox.query(compiled.sql, max_rows=cap, timeout_s=self.timeout_s,
+                                    params=compiled.parameters)
+        payload = result_payload(QueryResult(plain_numbers(result.table), result.truncated, result.duration_ms), cap)
+        payload["columns"] = [{**column, "kind": item.kind, "format": item.format, "description": item.description}
+                              for column, item in zip(payload["columns"], compiled.columns)]
+        held = release if snapshot is not None else None
+        return {**payload, "metrics": [item.name for item in selected], "table": exposed.identifier,
+                "semantic_model": model.name, "grain": compiled.grain, "sql": compiled.sql,
+                "parameters": jsonable(list(compiled.parameters)), "release": held.name if held is not None else None,
+                "source": describe_source(release, snapshot is not None, exposed.identifier),
+                "stale_tables": stale}
 
     def get_dataset(self, name: str) -> dict[str, Any]:
         """The latest (or ``name@vN``) pinned version of a dataset over an allowlisted table.

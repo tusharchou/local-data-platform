@@ -52,7 +52,7 @@ API_VERSION = "ldp/v1"
 DEFAULT_KIND = "Pipeline"
 """The kind of a file that has no ``kind``: a dataset config."""
 
-RESERVED_KINDS = {"Metrics": "0.1.4", "Report": "0.1.6", "Profiles": "0.2.0"}
+RESERVED_KINDS = {"Report": "0.1.6", "Profiles": "0.2.0"}
 """Kinds that later milestones register through :func:`register_kind`, and the version that does."""
 
 TOP_LEVEL_KEYS = ("apiVersion", "kind", "identifier", "who", "what", "where", "when", "how", "metadata")
@@ -1093,6 +1093,28 @@ def _describe_workflow(spec: Mapping[str, Any]) -> dict[str, Any]:
     return describe_workflow(spec)
 
 
+def _validate_metrics(spec: Mapping[str, Any]) -> list[ConfigError]:
+    """The problems of a metrics file, which is the kind ``Metrics``.
+
+    The checks are in :mod:`local_data_platform.metrics.model`, which is imported when it is needed. They read no table.
+    """
+    from local_data_platform.metrics.model import validate_metrics
+
+    return validate_metrics(spec)
+
+
+def _metrics_schema() -> dict[str, Any]:
+    from local_data_platform.metrics.model import metrics_schema
+
+    return metrics_schema()
+
+
+def _describe_metrics(spec: Mapping[str, Any]) -> dict[str, Any]:
+    from local_data_platform.metrics.model import describe_metrics
+
+    return describe_metrics(spec)
+
+
 # ---------------------------------------------------------------------- plan
 
 
@@ -1348,6 +1370,9 @@ def _print_plan(item: Mapping[str, Any]) -> None:
                  ("apiVersion", item["api_version"])]
         if "tasks" in item:
             lines.append(("tasks", ", ".join(item["tasks"])))
+        for key in ("semantic_models", "metrics"):
+            if key in item:
+                lines.append((key, ", ".join(item[key])))
         width = max(len(name) for name, _ in lines)
         for name, value in lines:
             print(f"{name.ljust(width)}  {value}", file=sys.stdout)
@@ -1414,6 +1439,7 @@ def add_cli(subparsers: Any, parents: Sequence[argparse.ArgumentParser] = ()) ->
 
 register_kind(DEFAULT_KIND, validate=_validate_pipeline, json_schema=json_schema)
 register_kind("Workflow", validate=_validate_workflow, json_schema=_workflow_schema, describe=_describe_workflow)
+register_kind("Metrics", validate=_validate_metrics, json_schema=_metrics_schema, describe=_describe_metrics)
 
 __all__ = [
     "API_VERSION",

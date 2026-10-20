@@ -15,6 +15,11 @@ table, unless the config names sinks of its own, so the freshness and the gate s
 When every table was built or checked, the build can cut a release, which is :mod:`local_data_platform.gold.release`.
 A release names the snapshot that each gold table ended the build with, so a reader that reads the current release
 sees tables that agree. A build that stops cuts none, and the last release stays current.
+
+A folder that has a metrics file, which is :mod:`local_data_platform.metrics`, has the metrics checked as well. A file
+that is not valid stops the build before anything is built. When every table was built or checked, the names and the
+expressions of the metrics are checked against the tables, and a metric that does not fit its table cuts no release,
+because a release is what readers see, and a reader would meet a metric that cannot be computed.
 """
 
 from __future__ import annotations
@@ -35,6 +40,8 @@ from local_data_platform.spec import DEFAULT_KIND, kind_of_file
 
 if TYPE_CHECKING:
     from local_data_platform.gold.release import ReleaseContext, ReleaseOutcome
+    from local_data_platform.metrics.check import FolderCheck
+    from local_data_platform.metrics.load import Definitions
 
 BUILT, CHECKED, BLOCKED, FAILED, NOT_RUN = "built", "checked", "blocked", "failed", "not run"
 """How a table ended: built here, checked because it is built elsewhere, held back by a gate, failed, or not reached."""
@@ -106,12 +113,15 @@ class BuildResult:
         tables: One outcome for each gold config, in the order they were to be built.
         duration_s: How long the build took.
         release: What the build did about its release, or ``None`` when it was not asked to cut one.
+        metrics: What the check of the metrics files found, or ``None`` when the folder has none or the build stopped
+            before the tables were ready to be checked.
     """
 
     folder: Path
     tables: list[TableOutcome] = field(default_factory=list)
     duration_s: float = 0.0
     release: ReleaseOutcome | None = None
+    metrics: FolderCheck | None = None
 
     @property
     def stopped_by(self) -> TableOutcome | None:
@@ -122,11 +132,13 @@ class BuildResult:
     def exit_code(self) -> int:
         """0 when every table was built or checked, 3 when a gate held a table back, 1 for any other failure.
 
-        A release that could not be cut is a failure too, though every table was built.
+        A release that could not be cut is a failure too, though every table was built, and so are metrics that do not
+        fit the tables.
         """
         stopped = self.stopped_by
         if stopped is None:
-            return 1 if self.release is not None and self.release.error else 0
+            unreleased = self.release is not None and bool(self.release.error)
+            return 1 if unreleased or (self.metrics is not None and bool(self.metrics.problems)) else 0
         return 3 if stopped.status == BLOCKED else 1
 
     def counts(self) -> dict[str, int]:
@@ -138,7 +150,8 @@ class BuildResult:
         """The result as JSON-serialisable primitives."""
         return {"folder": str(self.folder), "counts": self.counts(), "exit_code": self.exit_code,
                 "duration_s": round(self.duration_s, 3), "tables": [item.to_dict() for item in self.tables],
-                "release": self.release.to_dict() if self.release is not None else None}
+                "release": self.release.to_dict() if self.release is not None else None,
+                "metrics": self.metrics.to_dict() if self.metrics is not None else None}
 
 
 # --------------------------------------------------------------------------- finding and ordering
@@ -292,6 +305,31 @@ def check_built_elsewhere(gold: GoldConfig) -> TableOutcome:
     return outcome
 
 
+def _read_metrics(root: Path) -> Definitions | None:
+    """The definitions of the metrics files of a folder, or ``None`` when it has none.
+
+    Raises:
+        ConfigError: If a metrics file is not valid. The message lists every problem.
+        EngineNotFound: If the folder has metrics and DuckDB, which checks them, is not installed.
+    """
+    from local_data_platform.metrics.load import load_metrics, metrics_files
+    from local_data_platform.metrics.sql import import_duckdb
+
+    if not metrics_files(root):
+        return None
+    import_duckdb()
+    return load_metrics(root)
+
+
+def _check_metrics(root: Path, definitions: Definitions) -> FolderCheck:
+    """Check the metrics against the gold tables, which are all built or checked now."""
+    from local_data_platform.metrics.check import FolderCheck, check_definitions, table_schemas
+    from local_data_platform.metrics.load import metrics_files
+
+    return FolderCheck(root, definitions, check_definitions(definitions, table_schemas(root)),
+                       tuple(item.name for item in metrics_files(root)))
+
+
 def _finish_release(result: BuildResult, scope: Any, context: ReleaseContext,
                     sink_for: Callable[[GoldConfig], Any] | None) -> ReleaseOutcome:
     """Cut the release of a build that did not stop, and say what readers still see when none could be cut."""
@@ -303,6 +341,8 @@ def _finish_release(result: BuildResult, scope: Any, context: ReleaseContext,
     if stopped is not None:
         return releases.ReleaseOutcome(current, cut=False, note=f"{stopped.gold.config.identifier} "
                                        f"{'was blocked' if stopped.status == BLOCKED else 'failed'}")
+    if result.metrics is not None and result.metrics.problems:
+        return releases.ReleaseOutcome(current, cut=False, error="the metrics do not fit the gold tables")
     try:
         return releases.cut_release(result.tables, context=context, sink_for=sink_for)
     except releases.ReleaseError as error:
@@ -342,6 +382,7 @@ def build_gold(folder: str | os.PathLike, *, on_table: Callable[[TableOutcome], 
     root = resolve_path(folder)
     if not ordered:
         raise ConfigError(f"{root} has no gold config. A gold config has metadata.docs.layer set to gold")
+    definitions = _read_metrics(root)
     context = None
     scope = None
     if release:
@@ -371,6 +412,8 @@ def build_gold(folder: str | os.PathLike, *, on_table: Callable[[TableOutcome], 
                               "the contract does not hold", error=str(error)))
         except Exception as error:  # noqa: BLE001 - reported with the table, and the build stops
             done(TableOutcome(gold, FAILED, error=f"{type(error).__name__}: {error}"))
+    if definitions is not None and result.stopped_by is None:
+        result.metrics = _check_metrics(root, definitions)
     if scope is not None:
         result.release = _finish_release(result, scope, context, sink_for)
     result.duration_s = time.perf_counter() - started

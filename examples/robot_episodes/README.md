@@ -98,6 +98,8 @@ ldp query examples/robot_episodes/data/silver_frames.json \
     "SELECT robot_id, count(*) AS frames, max(abs(skew_ms)) AS worst_skew_ms FROM silver_frames GROUP BY 1"
 ldp gold build examples/robot_episodes/data       # rebuild both gold tables, in order, and cut a release of them
 ldp gold releases examples/robot_episodes/data    # the releases, newest first
+ldp metrics list examples/robot_episodes/data     # the numbers that the fleet is judged by, defined once
+ldp metrics query examples/robot_episodes/data success_rate,episodes --by robot --grain week
 ldp query examples/robot_episodes/data "SELECT count(*) FROM robots.gold_episode_stats" --release r1
 ldp run examples/robot_episodes/data/gold_episode_stats.json   # or run one of them alone
 ldp datasets list --warehouse examples/robot_episodes/data/warehouse
@@ -117,6 +119,7 @@ the configs of the tables its SQL file reads, so `ldp gold build` builds `gold_e
 | `run.py` | The walkthrough; `run_robotics(workdir, seed=7, spark=False, quiet=False)` returns a summary dict |
 | `generate.py` | The deterministic generator; `python generate.py --out DIR --batch b02 --faulty` writes one batch |
 | `configs/*.json` | Table layouts and quality gates, with paths relative to the work folder |
+| `configs/metrics.json` | The fleet metrics over `gold_robot_daily`, such as `success_rate`, which is successes over episodes and not the average of the daily rates. `ldp metrics` and `ldp gold build` read it |
 | `models/*.sql` | One SQL file for each gold table, which `ldp gold build` runs over the `inputs` of its config |
 | `queries.sql` | Named DuckDB queries: the research questions |
 | `spark/robot_aggregate.scala` | The optional Scala Spark per-robot aggregate |
