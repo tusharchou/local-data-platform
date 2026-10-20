@@ -199,6 +199,54 @@ def parse_docs(block: Any, *, who: Any = "", when: Any = "") -> Docs | None:
                 refresh=_text(block.get("refresh")) or _text(when))
 
 
+# ---------------------------------------------------------------------- reading a contract back
+
+
+def read_contract(table: Any) -> Docs | None:
+    """The contract that an Iceberg table carries: what :func:`apply_contract` wrote into it, read back.
+
+    These are the table properties ``comment``, ``ldp.owner``, ``ldp.layer``, ``ldp.grain`` and ``ldp.primary-key``, and
+    the ``doc`` of each column, which is where every client finds the contract of a table whoever built it. The tags and
+    the refresh are only in the config, so they are empty here.
+
+    Args:
+        table: A pyiceberg table.
+
+    Returns:
+        The :class:`Docs`, or ``None`` when the table carries none of it.
+    """
+    properties = getattr(table, "properties", None) or {}
+    columns = {item.name: item.doc.strip() for item in table.schema().fields
+               if isinstance(item.doc, str) and item.doc.strip()}
+    docs = Docs(layer=_text(properties.get(LAYER)), description=_text(properties.get(COMMENT)),
+                owner=_text(properties.get(OWNER)), grain=_text(properties.get(GRAIN)),
+                primary_key=_names(str(properties.get(PRIMARY_KEY) or "").split(",")), columns=columns)
+    return docs if docs != Docs() else None
+
+
+def resolve_layer(declared: Any = None, properties: Mapping[str, Any] | None = None,
+                  namespace: str | None = None) -> str | None:
+    """The layer of a table: the one its config declares, else the ``ldp.layer`` of the table, else its namespace.
+
+    A namespace tells the layer only when it is called ``bronze``, ``silver`` or ``gold``, which is how a dbt model gets
+    its layer from where it is published.
+
+    Args:
+        declared: The ``metadata.docs.layer`` of the config that writes the table, if there is one.
+        properties: The properties of the Iceberg table.
+        namespace: The namespace of the table.
+
+    Returns:
+        The layer, or ``None`` when nothing says.
+    """
+    for candidate in (declared, (properties or {}).get(LAYER)):
+        text = _text(candidate)
+        if text:
+            return text
+    name = _text(namespace)
+    return name.lower() if name and name.lower() in LAYERS else None
+
+
 # ---------------------------------------------------------------------- the check
 
 
@@ -428,4 +476,4 @@ def docs_from_dbt_node(node: Mapping[str, Any], *, namespace: str | None = None,
 
 __all__ = ["COMMENT", "DOCS_KEYS", "Docs", "ContractResult", "GOLD", "GRAIN", "LAYER", "LAYERS", "OWNER",
            "PRIMARY_KEY", "PROPERTY_KEYS", "apply_contract", "check_contract", "column_names", "contract_error",
-           "docs_from_dbt_node", "docs_problems", "parse_docs", "pending_changes"]
+           "docs_from_dbt_node", "docs_problems", "parse_docs", "pending_changes", "read_contract", "resolve_layer"]

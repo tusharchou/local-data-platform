@@ -33,7 +33,9 @@ run.started ─► run.extracted ─► quality.evaluated ─┬─► run.publi
   `skipped_duplicate`, `blocked_quality` or `failed`.
 - A gold release is not a run of a job. `ldp gold build` records it with one `release.cut` event for each table of the
   release, as a run of its own that has the table's pipeline name, so `ldp runs` shows the release in the history of the
-  table with the status `released`. The OpenLineage sink leaves it alone.
+  table with the status `released`. The OpenLineage sink leaves it alone. `describe_table` of `ldp mcp` and
+  `ldp gold list` leave it out when they say what the latest run of a table was, so a released table still shows the
+  status of its last build.
 
 Each event is a `RunEvent`:
 

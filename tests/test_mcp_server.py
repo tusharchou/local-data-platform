@@ -28,6 +28,7 @@ import pytest
 
 duckdb = pytest.importorskip("duckdb")
 
+from local_data_platform.contracts import Docs, apply_contract  # noqa: E402
 from local_data_platform.exceptions import ConfigError  # noqa: E402
 from local_data_platform.format.iceberg import Iceberg  # noqa: E402
 from local_data_platform.mcp_server import (  # noqa: E402
@@ -40,7 +41,13 @@ from local_data_platform.mcp_server import (  # noqa: E402
 from local_data_platform.mcp_server.audit import AuditLog, iceberg_audit_sink  # noqa: E402
 from local_data_platform.mcp_server.cli import main as mcp_main  # noqa: E402
 from local_data_platform.mcp_server.cli import run_command  # noqa: E402
-from local_data_platform.mcp_server.discovery import ExposedTable, is_allowed, parse_allowlist, redact  # noqa: E402
+from local_data_platform.mcp_server.discovery import (  # noqa: E402
+    ExposedTable,
+    is_allowed,
+    layer_of,
+    parse_allowlist,
+    redact,
+)
 from local_data_platform.mcp_server.guard import first_keyword  # noqa: E402
 from local_data_platform.mcp_server.sandbox import local_path  # noqa: E402
 
@@ -614,6 +621,152 @@ def test_describe_table_reads_latest_run_and_quality_from_ldp(tools, lake):
     assert _refused(tools, "describe_table", table="_ldp.runs").status == "rejected"
 
 
+# ---------------------------------------------------------------------- the contract and the layer
+
+
+RIDES_DOCS = Docs(layer="gold", description="Every ride that was taken.", owner="ride operations",
+                  grain="one row per ride", primary_key=("ride_id",),
+                  columns={"ride_id": "The ride.", "city": "Where it started.", "fare": "What it cost."})
+
+
+def _document(table: Iceberg, docs: Docs) -> None:
+    """Write a contract into a table, as ``ldp run`` does after it publishes."""
+    apply_contract(table.table(), docs)
+
+
+def test_list_tables_says_what_each_table_means_who_owns_it_its_layer_and_its_grain(tools, lake):
+    _document(lake.rides, RIDES_DOCS)
+
+    (table,) = _ok(tools, "list_tables")["tables"]
+
+    assert (table["layer"], table["description"], table["owner"], table["grain"]) == (
+        "gold", "Every ride that was taken.", "ride operations", "one row per ride")
+    assert table["row_count"] == 6 and table["table"] == "demo.rides"  # what it said before is still there
+
+
+def test_a_table_with_no_contract_has_null_text_and_no_layer(tools):
+    (table,) = _ok(tools, "list_tables")["tables"]
+
+    assert (table["layer"], table["description"], table["owner"], table["grain"]) == (None, None, None, None)
+    assert _ok(tools, "describe_table", table="demo.rides")["contract"] == {
+        "layer": None, "description": None, "owner": None, "grain": None, "primary_key": [], "columns": {},
+        "undocumented_columns": ["ride_id", "city", "fare", "pickup_ts"]}
+
+
+def test_describe_table_returns_the_contract_and_names_the_columns_without_a_description(tools, lake):
+    _document(lake.rides, RIDES_DOCS)
+
+    described = _ok(tools, "describe_table", table="demo.rides")
+
+    assert described["contract"] == {
+        "layer": "gold", "description": "Every ride that was taken.", "owner": "ride operations",
+        "grain": "one row per ride", "primary_key": ["ride_id"],
+        "columns": {"ride_id": "The ride.", "city": "Where it started.", "fare": "What it cost."},
+        "undocumented_columns": ["pickup_ts"]}
+    docs = {field["name"]: field["doc"] for field in described["schema"]["fields"]}
+    assert docs == {"ride_id": "The ride.", "city": "Where it started.", "fare": "What it cost.", "pickup_ts": None}
+    assert described["properties"]["comment"] == "Every ride that was taken."  # the table says it in its own metadata
+
+
+def test_a_contract_that_the_table_does_not_carry_is_not_made_up_from_a_config(tools, lake):
+    config = json.loads((lake.configs / "rides.json").read_text())
+    config["metadata"]["docs"] = {"layer": "gold", "description": "In the config only.", "owner": "x", "grain": "g"}
+    (lake.configs / "rides.json").write_text(json.dumps(config))
+
+    (table,) = _ok(tools, "list_tables")["tables"]
+
+    assert table["description"] is None and table["owner"] is None  # a client of the table never sees the config
+
+
+def _three_layers(lake: Lake) -> None:
+    """``demo.rides`` says silver in its own properties, ``demo.secret`` is declared gold by its config over a table
+    that says silver, and ``gold.totals`` says nothing, so it has the layer of its namespace."""
+    _document(lake.rides, Docs(layer="silver"))
+    _document(lake.secret, Docs(layer="silver"))
+    config = json.loads((lake.configs / "secret.json").read_text())
+    config["metadata"]["docs"] = {"layer": "gold", "description": "The secret.", "owner": "x", "grain": "one row each"}
+    (lake.configs / "secret.json").write_text(json.dumps(config))
+    totals = Iceberg("totals", {"identifier": "gold", "warehouse_path": str(lake.warehouse)})
+    totals.put(pa.table({"n": [1]}))
+    (lake.configs / "totals.json").write_text(json.dumps(
+        _config("totals", {"identifier": "gold", "warehouse_path": "../warehouse"})))
+
+
+def test_the_layer_of_a_table_is_its_configs_then_its_own_then_its_namespace(lake):
+    _three_layers(lake)
+
+    found = discover_tables([lake.configs]).tables
+
+    assert {table.identifier: layer_of(table) for table in found} == {
+        "demo.rides": "silver", "demo.secret": "gold", "gold.totals": "gold"}
+    declared = {table.identifier: table.layer for table in found}
+    assert declared == {"demo.rides": None, "demo.secret": "gold", "gold.totals": None}
+
+
+def test_a_table_that_is_a_source_in_one_config_and_a_target_in_another_gets_the_layer_that_declares_it(lake):
+    reader = {"identifier": "reader", "metadata": {
+        "source": {"name": "rides", "format": "ICEBERG",
+                   "catalog": {"identifier": "demo", "warehouse_path": "../warehouse"}},
+        "target": {"name": "copy", "format": "CSV", "path": "copy.csv"}}}
+    (lake.configs / "a_reader.json").write_text(json.dumps(reader))  # found first, and it declares nothing
+    config = json.loads((lake.configs / "rides.json").read_text())
+    config["metadata"]["docs"] = {"layer": "silver"}
+    (lake.configs / "rides.json").write_text(json.dumps(config))
+
+    rides = next(table for table in discover_tables([lake.configs]).tables if table.identifier == "demo.rides")
+
+    assert rides.source.endswith("a_reader.json") and rides.layer == "silver"
+
+
+def test_serving_one_layer_leaves_the_other_tables_out_of_every_tool(lake, tmp_path):
+    _three_layers(lake)
+
+    with LakeTools.from_sources([lake.configs], layer="gold", audit_path=tmp_path / "audit.jsonl",
+                                iceberg_audit=False) as served:
+        assert sorted(served.tables) == ["demo.secret", "gold.totals"]
+        assert sorted(item["table"] for item in _ok(served, "list_tables")["tables"]) == ["demo.secret", "gold.totals"]
+        assert _refused(served, "describe_table", table="demo.rides").status == "rejected"
+        assert _refused(served, "sample_rows", table="demo.rides").status == "rejected"
+        assert not served.call("query", {"sql": "SELECT * FROM demo.rides"}).ok
+        assert "of the gold layer" in served.instructions()
+        assert served.discovery.layer == "gold"
+
+
+def test_without_a_layer_every_layer_is_served_and_the_instructions_say_nothing_about_one(lake, tmp_path):
+    _three_layers(lake)
+
+    with LakeTools.from_sources([lake.configs], audit_path=tmp_path / "audit.jsonl", iceberg_audit=False) as served:
+        assert sorted(served.tables) == ["demo.rides", "demo.secret", "gold.totals"]
+        assert "layer" not in served.instructions().split("through DuckDB")[0]
+        assert served.discovery.layer is None
+
+
+def test_a_layer_is_matched_whatever_its_case_and_a_layer_that_does_not_exist_is_refused(lake):
+    _three_layers(lake)
+
+    assert [table.identifier for table in discover_tables([lake.configs], layer=" Silver ").tables] == ["demo.rides"]
+    with pytest.raises(ConfigError, match=r"the layer has to be one of \['bronze', 'silver', 'gold'\], got 'platinum'"):
+        discover_tables([lake.configs], layer="platinum")
+
+
+def test_a_layer_with_no_table_serves_nothing_and_says_so(lake, tmp_path):
+    _three_layers(lake)
+
+    with LakeTools.from_sources([lake.configs], layer="bronze", audit_path=tmp_path / "audit.jsonl",
+                                iceberg_audit=False) as served:
+        assert served.tables == [] and _ok(served, "list_tables")["tables"] == []
+
+
+def test_the_layer_filter_works_for_the_tables_of_a_catalog_file_too(lake, tmp_path):
+    _document(lake.rides, Docs(layer="gold"))
+    spec = tmp_path / "catalog.json"
+    spec.write_text(json.dumps({"catalog": {"identifier": "demo", "warehouse_path": str(lake.warehouse)}}))
+
+    found = discover_tables(catalogs=[spec], layer="gold")
+
+    assert [table.identifier for table in found.tables] == ["demo.rides"] and found.layer == "gold"
+
+
 def test_sample_rows(tools):
     sample = _ok(tools, "sample_rows", table="demo.rides", n=2)
     assert sample["table"] == "demo.rides" and sample["row_count"] == 2
@@ -896,6 +1049,47 @@ def test_no_iceberg_audit_reaches_lake_tools(monkeypatch):
         with pytest.raises(Stop):
             run_command(parser.parse_args(argv))
         assert seen["iceberg_audit"] is expected
+
+
+def test_ldp_mcp_takes_a_layer_and_passes_it_on(monkeypatch, capsys):
+    pytest.importorskip("mcp")
+    seen = {}
+
+    class Stop(Exception):
+        pass
+
+    def fake_from_sources(configs, catalogs, **kwargs):
+        seen.update(kwargs)
+        raise Stop
+
+    monkeypatch.setattr(LakeTools, "from_sources", staticmethod(fake_from_sources))
+    parser = argparse.ArgumentParser(prog="ldp")
+    add_cli(parser.add_subparsers(dest="command"))
+    for argv, expected in ((["mcp", "--config", "x.json"], None),
+                           (["mcp", "--config", "x.json", "--layer", "gold"], "gold"),
+                           (["mcp", "--config", "x.json", "--layer", "silver"], "silver")):
+        with pytest.raises(Stop):
+            run_command(parser.parse_args(argv))
+        assert seen["layer"] == expected
+    with pytest.raises(SystemExit):
+        parser.parse_args(["mcp", "--layer", "platinum"])
+    assert "invalid choice: 'platinum'" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        parser.parse_args(["mcp", "--help"])
+    assert "--layer {bronze,silver,gold}" in capsys.readouterr().out
+
+
+def test_the_banner_of_a_server_of_one_layer_says_which(lake, tmp_path, capsys, monkeypatch):
+    pytest.importorskip("mcp")
+    import local_data_platform.mcp_server.server as server
+
+    monkeypatch.setattr(server, "serve_stdio", lambda tools: None)
+    _document(lake.rides, Docs(layer="gold"))
+
+    code = mcp_main(["--config", str(lake.configs), "--layer", "gold", "--audit", str(tmp_path / "audit.jsonl"),
+                     "--no-iceberg-audit"])
+
+    assert code == 0 and "serving 1 tables of the gold layer over stdio (demo.rides)" in capsys.readouterr().err
 
 
 def test_cli_errors_are_one_line(tmp_path, capsys, monkeypatch):

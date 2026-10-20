@@ -36,11 +36,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from local_data_platform.contracts import Docs, read_contract, resolve_layer
 from local_data_platform.exceptions import LDPError
+from local_data_platform.gold.status import int_or_none as _int_or_none
+from local_data_platform.gold.status import ldp_status
+from local_data_platform.gold.status import snapshot_operation as _operation
+from local_data_platform.gold.status import snapshot_summary as _summary
 from local_data_platform.logger import get_logger
 
 from .audit import AuditLog, AuditRecord, iceberg_audit_sink
-from .discovery import SYSTEM_NAMESPACE, Discovery, ExposedTable, discover_tables, redact
+from .discovery import Discovery, ExposedTable, discover_tables, redact
 from .errors import DatasetNotFound, InvalidArguments, TableNotAllowed, ToolError
 from .sandbox import DuckDBSandbox, QueryResult
 
@@ -57,9 +62,6 @@ DEFAULT_TIMEOUT_S = 30.0
 MAX_CELL_CHARS = 4096
 """Longer strings (and base64 of longer binaries) in results are cut to this many characters."""
 RECENT_SNAPSHOTS = 10
-TERMINAL_RUN_EVENTS = ("run.published", "run.skipped_duplicate", "run.blocked_quality", "run.failed")
-_TS_COLUMNS = ("ts", "event_ts", "timestamp", "emitted_at", "evaluated_at", "created_at")
-_TABLE_KEY_COLUMNS = ("table_uuid", "table_identifier")
 _DATASET_DIR_PARAMS = ("warehouse", "warehouse_path", "root", "base_dir", "path")
 _TOOL_NAMES = ("list_tables", "describe_table", "query", "sample_rows", "table_history", "get_dataset")
 
@@ -122,24 +124,6 @@ def _iso_ms(timestamp_ms: int | None) -> str | None:
     return dt.datetime.fromtimestamp(timestamp_ms / 1000, tz=dt.timezone.utc).isoformat(timespec="milliseconds")
 
 
-def _int_or_none(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _summary(snapshot: Any) -> dict[str, str]:
-    summary = getattr(snapshot, "summary", None)
-    return dict(summary.additional_properties) if summary is not None else {}
-
-
-def _operation(snapshot: Any) -> str | None:
-    summary = getattr(snapshot, "summary", None)
-    operation = getattr(summary, "operation", None)
-    return getattr(operation, "value", operation)
-
-
 def _total_records(iceberg_table: Any) -> int | None:
     snapshot = iceberg_table.current_snapshot()
     if snapshot is None:
@@ -175,142 +159,27 @@ def _main_lineage(iceberg_table: Any) -> set[int]:
     return lineage
 
 
-# ---------------------------------------------------------------------- _ldp
+# ---------------------------------------------------------------------- the contract
 
 
-def _load_ldp_table(catalog: Any, name: str) -> Any:
-    from pyiceberg.exceptions import NoSuchNamespaceError, NoSuchTableError
-
-    try:
-        return catalog.load_table((SYSTEM_NAMESPACE, name))
-    except (NoSuchTableError, NoSuchNamespaceError):
-        return None
+CONTRACT_FIELDS = ("layer", "description", "owner", "grain")
+"""The parts of the contract that ``list_tables`` returns for each table."""
 
 
-def _parse_payload(row: dict[str, Any]) -> dict[str, Any]:
-    payload = row.get("payload")
-    if isinstance(payload, str):
-        try:
-            payload = json.loads(payload)
-        except json.JSONDecodeError:
-            return row
-    if isinstance(payload, Mapping):
-        row = dict(row)
-        row["payload"] = dict(payload)
-    return row
+def _contract(iceberg_table: Any, exposed: ExposedTable) -> dict[str, Any]:
+    """What a table says about itself: its layer, meaning, owner, grain, key and the description of each column.
 
-
-def _field(row: Mapping[str, Any] | None, key: str) -> Any:
-    """``row[key]``, or the same key inside the row's ``payload`` object."""
-    if row is None:
-        return None
-    if row.get(key) is not None:
-        return row[key]
-    payload = row.get("payload")
-    return payload.get(key) if isinstance(payload, Mapping) else None
-
-
-def _ldp_rows(catalog: Any, name: str, table_uuid: str, identifier: str) -> list[dict[str, Any]] | None:
-    """The ``_ldp.<name>`` rows about one table, oldest first; ``None`` if the table is absent.
-
-    A row is about the table when its ``table_uuid`` matches, or its ``table_identifier``
-    does (the first run of a new table emits ``run.started`` before the table has a UUID).
+    It is read from the Iceberg table, where ``ldp run`` and ``ldp gold sync`` write it, so it is the same for every
+    client. A table with no contract has ``None`` for the text, which is what an agent can test for. The layer is the
+    one that the config of the table declares, else the table's own, else the namespace when that is ``bronze``,
+    ``silver`` or ``gold``.
     """
-    ldp_table = _load_ldp_table(catalog, name)
-    if ldp_table is None:
-        return None
-    columns = [item.name for item in ldp_table.schema().fields]
-    keys = {column: (table_uuid if column == "table_uuid" else identifier)
-            for column in _TABLE_KEY_COLUMNS if column in columns}
-    if not keys:
-        logger.debug("_ldp.%s has none of the columns %s; cannot attribute rows", name, _TABLE_KEY_COLUMNS)
-        return []
-    try:
-        from pyiceberg.expressions import EqualTo, Or
-
-        expressions = [EqualTo(column, value) for column, value in keys.items()]
-        row_filter = expressions[0] if len(expressions) == 1 else Or(*expressions)
-        rows = ldp_table.scan(row_filter=row_filter).to_arrow().to_pylist()
-    except Exception:  # noqa: BLE001 - e.g. a non-string column type; filter in Python instead
-        rows = [row for row in ldp_table.scan().to_arrow().to_pylist()
-                if any(str(row.get(column)) == value for column, value in keys.items())]
-    ts_column = next((column for column in _TS_COLUMNS if column in columns), None)
-    for row in rows:
-        row["_ts"] = row.get(ts_column) if ts_column else None
-    rows.sort(key=lambda row: (str(row["_ts"] or ""), str(row.get("run_id") or ""),
-                               _int_or_none(row.get("attempt")) or 0, _int_or_none(row.get("seq")) or 0,
-                               _int_or_none(row.get("check_index")) or 0))
-    return [_parse_payload(row) for row in rows]
-
-
-def _latest_run(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Summarize the most recent run in ``_ldp.runs`` rows: status, times and event types."""
-    if not rows:
-        return None
-    last = rows[-1]
-    run_id, attempt = last.get("run_id"), last.get("attempt")
-    run = [row for row in rows if row.get("run_id") == run_id and row.get("attempt") == attempt]
-    types = [row.get("type") for row in run]
-    finished = next((row for row in reversed(run) if row.get("type") == "run.finished"), None)
-    terminal = next((kind for kind in reversed(types) if kind in TERMINAL_RUN_EVENTS), None)
-    status = _field(finished, "status") if finished is not None else None
-    if status is None:
-        status = terminal[len("run."):] if terminal else ("finished" if finished is not None else "running")
-    return jsonable({
-        "run_id": run_id,
-        "attempt": attempt,
-        "pipeline": _field(last, "pipeline"),
-        "status": status,
-        "started_at": run[0].get("_ts"),
-        "finished_at": finished.get("_ts") if finished is not None else None,
-        "snapshot_id": next((_field(row, "snapshot_id") for row in reversed(run)
-                             if _field(row, "snapshot_id") is not None), None),
-        "idempotency_key": next((_field(row, "idempotency_key") for row in reversed(run)
-                                 if _field(row, "idempotency_key") is not None), None),
-        "events": types,
-    })
-
-
-def _latest_quality(quality_rows: list[dict[str, Any]] | None, run_rows: list[dict[str, Any]] | None,
-                    iceberg_table: Any) -> dict[str, Any] | None:
-    """The latest quality verdict for a table.
-
-    The newest ``quality.evaluated`` event in ``_ldp.runs`` decides which evaluation is
-    latest; its per-check rows come from ``_ldp.quality_results`` when they exist. Without
-    ``_ldp`` rows, the current snapshot's ``ldp.quality`` property is used.
-    """
-    evaluated = [row for row in (run_rows or []) if row.get("type") == "quality.evaluated"]
-    quality_rows = quality_rows or []
-    if evaluated:
-        event = evaluated[-1]
-        checks = [row for row in quality_rows if row.get("event_id") == event.get("event_id")]
-    elif quality_rows:
-        event = quality_rows[-1]
-        checks = [row for row in quality_rows if row.get("event_id") == event.get("event_id")]
-    else:
-        snapshot = iceberg_table.current_snapshot()
-        if snapshot is not None and "ldp.quality" in _summary(snapshot):
-            return {"source": "snapshot", "snapshot_id": snapshot.snapshot_id,
-                    "status": _summary(snapshot)["ldp.quality"]}
-        return None
-    payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
-    details = [{"check": _field(row, "check_name"), "column": _field(row, "column_name"),
-                "passed": _field(row, "passed"), "failing_rows": _field(row, "failing_rows"),
-                "details": _field(row, "details")} for row in checks]
-    verdicts = [item["passed"] for item in details if item["passed"] is not None]
-    passed = payload.get("passed")
-    if passed is None and verdicts:
-        passed = all(bool(verdict) for verdict in verdicts)
-    return jsonable({
-        "source": f"{SYSTEM_NAMESPACE}.quality_results" if checks else f"{SYSTEM_NAMESPACE}.runs",
-        "run_id": event.get("run_id"),
-        "evaluated_at": event.get("_ts"),
-        "passed": passed,
-        "on_failure": payload.get("on_failure", _field(event, "on_failure")),
-        "checks_run": payload.get("checks_run", len(details)),
-        "checks_failed": payload.get("checks_failed", sum(1 for verdict in verdicts if not verdict)),
-        "checks": details,
-    })
+    docs = read_contract(iceberg_table) or Docs()
+    names = [item.name for item in iceberg_table.schema().fields]
+    return {"layer": resolve_layer(exposed.layer, iceberg_table.properties, ".".join(exposed.namespace)),
+            "description": docs.description, "owner": docs.owner, "grain": docs.grain,
+            "primary_key": list(docs.primary_key), "columns": dict(docs.columns),
+            "undocumented_columns": [name for name in names if name not in docs.columns]}
 
 
 # ---------------------------------------------------------------------- tools
@@ -391,14 +260,16 @@ class LakeTools:
 
     @classmethod
     def from_sources(cls, configs: Iterable[str | os.PathLike] = (), catalogs: Iterable[str | os.PathLike] = (), *,
-                     allow: str | Iterable[str] | None = None, audit_path: str | os.PathLike | None = None,
-                     iceberg_audit: bool = True, **kwargs: Any) -> LakeTools:
+                     allow: str | Iterable[str] | None = None, layer: str | None = None,
+                     audit_path: str | os.PathLike | None = None, iceberg_audit: bool = True,
+                     **kwargs: Any) -> LakeTools:
         """Discover tables, open the audit log and build the tools.
 
         Args:
             configs: Config files or folders of them.
             catalogs: Catalog spec files.
             allow: The table allowlist.
+            layer: ``bronze``, ``silver`` or ``gold`` to serve only the tables of that layer.
             audit_path: The JSONL audit file; defaults to :func:`default_audit_path`.
             iceberg_audit: Also audit to ``_ldp.audit`` in the first catalog when
                 :func:`~local_data_platform.mcp_server.audit.iceberg_audit_sink` finds a sink.
@@ -407,7 +278,7 @@ class LakeTools:
         Returns:
             The tools. Close them with :meth:`close`.
         """
-        discovery = discover_tables(configs, catalogs, allow=allow)
+        discovery = discover_tables(configs, catalogs, allow=allow, layer=layer)
         sink = None
         if iceberg_audit and discovery.catalogs:
             first = discovery.catalogs[0]
@@ -427,12 +298,14 @@ class LakeTools:
         table_arg = {"type": "string", "description": "A table identifier from list_tables, e.g. 'demo.rides'."}
         return [
             ToolSpec("list_tables", "List tables",
-                     "List every table this server exposes, with the name to use in SQL, its row count and when it "
-                     "last changed. Call this first.",
+                     "List every table this server exposes, with what it means (description), who owns it (owner), its "
+                     "layer and its grain (what one row is), the name to use in SQL, its row count and when it last "
+                     "changed. A table that says nothing about itself has null for those. Call this first.",
                      {"type": "object", "properties": {}, "additionalProperties": False}),
             ToolSpec("describe_table", "Describe a table",
-                     "Show a table's schema, partition spec, row count, recent snapshots, freshness (time since the "
-                     "last commit) and the latest pipeline run and data-quality status recorded in _ldp.",
+                     "Show a table's contract (what it means, who owns it, its grain and key, and what each column "
+                     "holds), its schema, partition spec, row count, recent snapshots, freshness (time since the last "
+                     "commit) and the latest pipeline run and data-quality status recorded in _ldp.",
                      {"type": "object", "properties": {"table": table_arg}, "required": ["table"],
                       "additionalProperties": False}),
             ToolSpec("query", "Run a read-only SQL query",
@@ -471,8 +344,10 @@ class LakeTools:
 
     def instructions(self) -> str:
         """Server instructions shown to the agent at connect time."""
-        return (f"Read-only access to {len(self._tables)} Apache Iceberg tables through DuckDB. Start with "
-                f"list_tables, then describe_table or sample_rows. query runs one SELECT or WITH statement (DuckDB "
+        scope = f" of the {self.discovery.layer} layer" if self.discovery.layer else ""
+        return (f"Read-only access to {len(self._tables)} Apache Iceberg tables{scope} through DuckDB. Start with "
+                f"list_tables, which says what each table means and who owns it, then describe_table or sample_rows. "
+                f"query runs one SELECT or WITH statement (DuckDB "
                 f"dialect), returns at most {self.max_rows} rows and stops after {self.timeout_s:g} seconds. For "
                 f"time travel on a table whose access is 'native', query iceberg_scan('<metadata_location from "
                 f"describe_table>', snapshot_from_id => <snapshot_id from table_history>). Every call is audited.")
@@ -591,6 +466,10 @@ class LakeTools:
                 "aliases": self.sandbox.aliases(identifier),
                 "namespace": ".".join(table.namespace),
                 "name": table.name,
+                "layer": None,
+                "description": None,
+                "owner": None,
+                "grain": None,
                 "access": self.sandbox.access(identifier),
                 "source": table.source,
             }
@@ -599,6 +478,8 @@ class LakeTools:
                 snapshot = iceberg_table.current_snapshot()
                 info["row_count"] = _total_records(iceberg_table)
                 info["last_updated"] = _iso_ms(snapshot.timestamp_ms) if snapshot is not None else None
+                contract = _contract(iceberg_table, table)
+                info.update({key: contract[key] for key in CONTRACT_FIELDS})
             except Exception as error:  # noqa: BLE001 - list what we can
                 info["error"] = str(error)
             tables.append(info)
@@ -619,18 +500,8 @@ class LakeTools:
             "age_seconds": round((now_ms - snapshot.timestamp_ms) / 1000, 3) if snapshot is not None else None,
             "current_snapshot_id": snapshot.snapshot_id if snapshot is not None else None,
         }
-        catalog = exposed.catalog.catalog
         table_uuid = str(iceberg_table.metadata.table_uuid)
-        ldp: dict[str, Any] = {}
-        try:
-            runs = _ldp_rows(catalog, "runs", table_uuid, exposed.identifier)
-            quality = _ldp_rows(catalog, "quality_results", table_uuid, exposed.identifier)
-            ldp = {"runs_table": runs is not None, "quality_table": quality is not None,
-                   "latest_run": _latest_run(runs or []), "quality": _latest_quality(quality, runs, iceberg_table)}
-        except Exception as error:  # noqa: BLE001 - describe the table even if _ldp is unreadable
-            logger.warning("Could not read _ldp status for %s: %s", exposed.identifier, error)
-            ldp = {"error": str(error), "latest_run": None,
-                   "quality": _latest_quality(None, None, iceberg_table)}
+        ldp = ldp_status(exposed.catalog.catalog, iceberg_table, exposed.identifier)
         latest_run = ldp.get("latest_run")
         if latest_run:
             freshness["last_run_at"] = latest_run.get("finished_at") or latest_run.get("started_at")
@@ -639,6 +510,7 @@ class LakeTools:
             "table": exposed.identifier,
             "sql_name": self.sandbox.sql_name(exposed.identifier),
             "access": self.sandbox.access(exposed.identifier),
+            "contract": _contract(iceberg_table, exposed),
             "table_uuid": table_uuid,
             "format_version": iceberg_table.metadata.format_version,
             "location": iceberg_table.location(),
