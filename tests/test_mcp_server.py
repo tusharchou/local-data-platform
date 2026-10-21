@@ -31,6 +31,7 @@ duckdb = pytest.importorskip("duckdb")
 from local_data_platform.contracts import Docs, apply_contract  # noqa: E402
 from local_data_platform.exceptions import ConfigError  # noqa: E402
 from local_data_platform.format.iceberg import Iceberg  # noqa: E402
+from local_data_platform.logger import PACKAGE_LOGGER  # noqa: E402
 from local_data_platform.mcp_server import (  # noqa: E402
     LakeTools,
     QueryRejected,
@@ -1105,6 +1106,21 @@ def test_cli_errors_are_one_line(tmp_path, capsys, monkeypatch):
     assert mcp_main(["--config", str(tmp_path / "missing.json")]) == 1
     assert "not found" in capsys.readouterr().err
     assert not (tmp_path / ".ldp").exists()  # a server that answered nothing leaves no audit file
+
+
+def test_main_leaves_logging_as_it_found_it(lake, tmp_path, monkeypatch):
+    pytest.importorskip("mcp")
+    import local_data_platform.mcp_server.server as server
+
+    monkeypatch.setattr(server, "serve_stdio", lambda tools: None)
+    package_logger = logging.getLogger(PACKAGE_LOGGER)
+    before = (package_logger.level, list(package_logger.handlers))
+
+    assert mcp_main(["-v", "--config", str(lake.configs), "--audit", str(tmp_path / "audit.jsonl"),
+                     "--no-iceberg-audit"]) == 0
+    assert mcp_main(["--config", str(tmp_path / "missing.json")]) == 1
+
+    assert (package_logger.level, list(package_logger.handlers)) == before
 
 
 def test_audit_file_is_created_on_the_first_record(tmp_path):
