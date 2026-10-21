@@ -135,11 +135,11 @@ client. The design is in [the v0.1.4 contract](design/v0_1_4.md).
 ### Metrics
 
 A business number such as revenue should be the same number wherever it is asked for. The `metrics.json` files that are in
-the folders of `--config` (see [Define metrics](../README.md#define-metrics)) say what each metric means, who owns it
-and what it can be grouped by, and `query_metric` computes it from those definitions, so an agent does not write the
-SQL for revenue and does not get it a little different each time. The files are read again at each call, so an edited
-file needs no restart. A metric whose table the server does not serve, because of `--allow` or `--layer`, is not listed
-and is unknown, so a metric never says more about a table than the table does.
+the folders of `--config` (see [the metrics section of the v0.1.4 contract](design/v0_1_4.md#g5-metrics)) say what each
+metric means, who owns it and what it can be grouped by, and `query_metric` computes it from those definitions, so an
+agent does not write the SQL for revenue and does not get it a little different each time. The files are read again at
+each call, so an edited file needs no restart. A metric whose table the server does not serve, because of `--allow` or
+`--layer`, is not listed and is unknown, so a metric never says more about a table than the table does.
 
 ```json
 {"metrics": ["revenue", "avg_ticket"], "by": ["kitchen"], "grain": "month",
