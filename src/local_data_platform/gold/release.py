@@ -37,7 +37,7 @@ import os
 import re
 import uuid
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -631,12 +631,13 @@ def release_snapshots(folder: str | os.PathLike, *, release: str | None = None, 
 
 
 def register_release(engine: Any, folder: str | os.PathLike, *, release: str | None = None,
-                     live: bool = False) -> dict[str, int]:
+                     live: bool = False, tables: Collection[str] | None = None) -> dict[str, int]:
     """Register every gold table of a folder in a ``DuckDBEngine``, each at its snapshot in the release.
 
     A table is registered as ``<namespace>.<table>``, and works in SQL as that and by its bare name. A table that the
     release does not hold, and every table when ``live`` is set or no release has been cut, is registered at its
-    current snapshot.
+    current snapshot. With ``tables``, only those are registered, so a reader that needs one table does not need the
+    others to exist.
 
     Returns:
         The snapshot that each table was registered at, for the tables that a release named.
@@ -653,6 +654,8 @@ def register_release(engine: Any, folder: str | os.PathLike, *, release: str | N
     bare = Counter(gold.config.metadata["target"]["name"] for gold in found)
     used: dict[str, int] = {}
     for gold in found:
+        if tables is not None and gold.table not in tables:
+            continue
         table = iceberg_from_config(gold.config, "target", must_exist=True)
         snapshot = snapshot_for(gold.table, chosen)
         try:

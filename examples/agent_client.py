@@ -2,14 +2,18 @@
 
 It starts ``ldp mcp`` as a subprocess, talks to it over stdio with the ``mcp`` SDK's
 client, and calls every tool the way an agent would: ``list_tables``, ``describe_table``,
-``sample_rows``, ``table_history``, ``query`` and ``get_dataset``. Then it tries what an
-agent must not be able to do (``COPY``, reading ``/etc/passwd``, several statements,
-``SET``, ``ATTACH``) and checks that each one is refused. Finally it reads the audit log.
+``sample_rows``, ``table_history``, ``query``, ``get_dataset``, ``list_metrics`` and
+``query_metric``. The metric tools compute a number that a metrics file defines, from the
+current release of a gold table, and bind what the agent asks for as values. Then it tries
+what an agent must not be able to do (``COPY``, reading ``/etc/passwd``, several statements,
+``SET``, ``ATTACH``, a metric that does not exist) and checks that each one is refused, and
+that SQL in a filter is only a value. Finally it reads the audit log.
 
 Usage::
 
     python examples/agent_client.py                       # builds a small lake in a temp folder
     python examples/agent_client.py --config ldp_demo/rides.json   # serves an existing config
+    python examples/agent_client.py --config ldp_demo/restaurant/config   # serves a folder with metrics
     make demo-agent                                       # runs 'ldp demo', then this script on it
 
 It exits with 0 when every call behaved as expected and 1 otherwise. It needs the
@@ -34,6 +38,8 @@ from typing import Any
 
 NAMESPACE = "agent_demo"
 DATASET = "rides_long_trips"
+GOLD_NAMESPACE = "gold"
+INJECTION = "NYC' OR '1'='1"
 REFUSED_SQL = {
     "COPY to a file": "COPY (SELECT 1 AS x) TO 'stolen.csv'",
     "read /etc/passwd": "SELECT * FROM read_csv('/etc/passwd')",
@@ -97,11 +103,48 @@ def build_lake(workdir: Path) -> Path:
 
         table = Iceberg("rides", {"identifier": NAMESPACE, "warehouse_path": str(workdir / "warehouse")})
         version = datasets.pin(table, DATASET, row_filter="distance_km > 15", properties={"split": "train"})
-        print(f"  pinned dataset {DATASET} v{version.version}: {version.row_count} rows at snapshot "
+        print(f"  pinned dataset {DATASET} v{version.version}: {version.row_count} rides at snapshot "
               f"{version.snapshot_id}")
     except ImportError:
         print("  (local_data_platform.datasets is not installed; get_dataset will say so)")
+    build_gold_layer(workdir)
     return config_path
+
+
+def build_gold_layer(workdir: Path) -> None:
+    """Build a gold table of rides by day and city, define three metrics over it, and cut a release."""
+    from local_data_platform.gold.build import build_gold
+
+    catalog = {"identifier": GOLD_NAMESPACE, "warehouse_path": "warehouse"}
+    (workdir / "rides_daily.json").write_text(json.dumps({
+        "identifier": "rides_daily", "who": "ops@example.com",
+        "metadata": {
+            "source": {"name": "rides_daily", "format": "DUCKDB", "inputs": ["rides.json"],
+                       "sql": "SELECT CAST(pickup_ts AS DATE) AS ride_date, city, count(*) AS rides, "
+                              "CAST(sum(fare) AS DECIMAL(18, 2)) AS fares FROM rides GROUP BY 1, 2"},
+            "target": {"name": "rides_daily", "format": "ICEBERG", "write_mode": "overwrite", "catalog": catalog},
+            "docs": {"layer": "gold", "description": "Rides and fares for each day and city.",
+                     "grain": "one row per day and city",
+                     "columns": {"ride_date": "The day of the pickup.", "city": "The city of the ride.",
+                                 "rides": "How many rides.", "fares": "What the riders paid."}}}}, indent=2))
+    (workdir / "metrics.json").write_text(json.dumps({
+        "apiVersion": "ldp/v1", "kind": "Metrics", "identifier": "ride_metrics", "who": "ops@example.com",
+        "semantic_models": [{
+            "name": "rides_daily", "table": f"{GOLD_NAMESPACE}.rides_daily",
+            "time_dimension": {"column": "ride_date", "grains": ["day", "week", "month", "quarter", "year"]},
+            "dimensions": ["city"],
+            "measures": [{"name": "fares_sum", "agg": "sum", "expr": "fares"},
+                         {"name": "rides_sum", "agg": "sum", "expr": "rides"}]}],
+        "metrics": [
+            {"name": "fares", "type": "simple", "measure": "fares_sum", "format": "currency",
+             "description": "What the riders paid."},
+            {"name": "rides", "type": "simple", "measure": "rides_sum", "description": "How many rides were taken."},
+            {"name": "avg_fare", "type": "ratio", "numerator": "fares_sum", "denominator": "rides_sum",
+             "format": "currency", "description": "Fares divided by rides."}]}, indent=2))
+    result = build_gold(workdir, release=True)
+    release = result.release.release.name if result.release is not None and result.release.release else "none"
+    print(f"  built gold.rides_daily with {result.tables[0].rows} rows, release {release}, "
+          f"{len(result.metrics.definitions.metrics) if result.metrics else 0} metrics fit it")
 
 
 # ---------------------------------------------------------------------- the server
@@ -147,7 +190,8 @@ async def drive(command: list[str], configs: list[str], audit: Path, dataset: st
         listed = await client.list_tools()
         names = sorted(tool.name for tool in listed.tools)
         print(f"\nConnected to {client.server_info.name if client.server_info else 'server'}; tools: {names}")
-        expected = sorted(["describe_table", "get_dataset", "list_tables", "query", "sample_rows", "table_history"])
+        expected = sorted(["describe_table", "get_dataset", "list_metrics", "list_tables", "query", "query_metric",
+                           "sample_rows", "table_history"])
         if names != expected:
             problems.append(f"tools are {names}, expected {expected}")
 
@@ -220,14 +264,63 @@ async def drive(command: list[str], configs: list[str], audit: Path, dataset: st
                 rows = await call("query", {"sql": f"SELECT count(*) AS n FROM ({data['sql']})"})
                 print(f"  re-read through the pinned snapshot: {rows.get('rows')}")
 
-        print("\n8. things an agent must not be able to do")
+        metrics = await metric_steps(call)
+        print("\n10. things an agent must not be able to do")
         for label, bad_sql in REFUSED_SQL.items():
             refused = await call("query", {"sql": bad_sql}, expect_error=True)
             error = refused.get("error", {})
             print(f"  {label:<18} -> {error.get('type')}: {str(error.get('message'))[:80]}")
         refused = await call("describe_table", {"table": "_ldp.runs"}, expect_error=True)
         print(f"  {'hidden table':<18} -> {refused.get('error', {}).get('type')}")
+        if metrics:
+            await metric_refusals(call, metrics, problems)
     return problems
+
+
+async def metric_steps(call: Any) -> list[dict[str, Any]]:
+    """Steps 8 and 9: list the metrics, then compute the ones of the first table. Returns the metrics."""
+    print("\n8. list_metrics")
+    listed = await call("list_metrics", {})
+    metrics = listed.get("metrics", [])
+    for item in metrics:
+        print(f"  {item['name']:<12} {item['format']:<9} {item['description']} (table {item['table']}, by "
+              f"{', '.join(item['dimensions']) or 'nothing'}, grains {', '.join(item['grains']) or 'none'})")
+    if not metrics:
+        print(f"  none. {listed.get('note')}")
+        print("\n9. query_metric\n  skipped, because there is no metric to compute")
+        return []
+    first = metrics[0]
+    asked = [item["name"] for item in metrics if item["table"] == first["table"]][:3]
+    arguments: dict[str, Any] = {"metrics": asked}
+    if first["dimensions"]:
+        arguments["by"] = first["dimensions"][:1]
+    if first["grains"]:
+        arguments["grain"] = "month" if "month" in first["grains"] else first["grains"][0]
+    print(f"\n9. query_metric {arguments}")
+    answer = await call("query_metric", arguments)
+    print("  " + " | ".join(column["name"] for column in answer.get("columns", [])))
+    for row in answer.get("rows", []):
+        print("  " + " | ".join(f"{value:.2f}" if isinstance(value, float) else str(value) for value in row))
+    print(f"  ({answer.get('row_count')} rows, read {answer.get('source')})")
+    print("  the SQL the server compiled, with $1 for each value it binds:")
+    print("    " + str(answer.get("sql")).replace("\n", "\n    "))
+    return metrics
+
+
+async def metric_refusals(call: Any, metrics: list[dict[str, Any]], problems: list[str]) -> None:
+    """What an agent must not be able to do with the metric tools, and what a hostile filter turns into."""
+    first = metrics[0]
+    refused = await call("query_metric", {"metrics": ["no_such_metric"]}, expect_error=True)
+    error = refused.get("error", {})
+    print(f"  {'unknown metric':<18} -> {error.get('type')}: {str(error.get('message'))[:80]}")
+    if first["dimensions"]:
+        dimension = first["dimensions"][0]
+        hostile = await call("query_metric", {"metrics": [first["name"]], "by": [dimension],
+                                              "filters": [f"{dimension}={INJECTION}"]})
+        print(f"  {'SQL in a filter':<18} -> {hostile.get('row_count')} rows, bound as {hostile.get('parameters')}")
+        if hostile.get("row_count") != 0 or hostile.get("parameters") != [INJECTION] or INJECTION in str(
+                hostile.get("sql")):
+            problems.append(f"a filter was not kept as a value: {hostile}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -252,7 +345,8 @@ def main(argv: list[str] | None = None) -> int:
             temp = tempfile.mkdtemp(prefix="ldp_agent_demo_")
             workdir = Path(temp)
         print(f"Building a small lake in {workdir}")
-        configs = [str(build_lake(workdir))]
+        build_lake(workdir)
+        configs = [str(workdir)]
         audit = Path(args.audit) if args.audit else workdir / "mcp_audit.jsonl"
     else:
         audit = Path(args.audit) if args.audit else Path(configs[0]).parent / "mcp_audit.jsonl"
@@ -261,7 +355,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Starting the server: {' '.join(command)} --config {' --config '.join(configs)}")
         problems = anyio.run(drive, command, configs, audit, args.dataset)
         records = [json.loads(line) for line in audit.read_text().splitlines()] if audit.is_file() else []
-        print(f"\n9. audit log {audit}: {len(records)} records")
+        print(f"\n11. audit log {audit}: {len(records)} records")
         for record in records[-3:]:
             print(f"  {record['ts']} {record['tool']:<14} {record['status']:<8} rows={record['rows']} "
                   f"sql={(record.get('sql') or '')[:50]!r}")

@@ -8,7 +8,7 @@ Layers, from the outside in:
 
 * :mod:`.cli`: ``ldp mcp`` (:func:`add_cli`) and ``python -m local_data_platform.mcp_server``.
 * :mod:`.server`: the MCP low-level server over stdio (:func:`build_server`, :func:`serve_stdio`).
-* :mod:`.tools`: the six tools as plain Python, with argument validation and auditing
+* :mod:`.tools`: the eight tools as plain Python, with argument validation and auditing
   (:class:`LakeTools`).
 * :mod:`.sandbox`: the locked-down DuckDB connection (:class:`DuckDBSandbox`).
 * :mod:`.guard`: the one-``SELECT`` statement guard (:func:`check_sql`).

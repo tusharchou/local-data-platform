@@ -40,11 +40,14 @@ make demo-agent                           # runs ldp demo, then a scripted agent
 
 `make demo-agent` runs `examples/agent_client.py`. The script starts the server as a subprocess
 (`ldp mcp` when the installed `ldp` has it, else `python -m local_data_platform.mcp_server`) and
-connects to it with the SDK's stdio client. It calls every tool, then tries the things an agent
-must not be able to do: `COPY` to a file, reading `/etc/passwd`, sending two statements, `SET`,
-`ATTACH`, and opening an `_ldp` system table. It checks that each one is refused, and prints the
-tail of the audit log. Run it on its own with `python examples/agent_client.py`, which builds a
-small lake in a temporary folder, or pass `--config` to point it at your own configs.
+connects to it with the SDK's stdio client. It calls every tool, including `list_metrics` and
+`query_metric`, then tries the things an agent must not be able to do. They are `COPY` to a file,
+reading `/etc/passwd`, sending two statements, `SET`, `ATTACH`, opening an `_ldp` system table and
+asking for a metric that does not exist. It checks that each one is refused, that SQL in a filter is kept as
+a value, and prints the tail of the audit log. Run it on its own with
+`python examples/agent_client.py`, which builds a small lake with a gold table, three metrics and a
+release in a temporary folder, or pass `--config` to point it at your own configs. A folder with no
+`metrics.json` has no metrics, and the script says so and skips them.
 
 ## Connect an agent
 
@@ -112,6 +115,8 @@ back with `isError: true` and `{"error": {"type", "message"}}`.
 | `sample_rows` | `table`, optional `n` (default 10) | The first `n` rows in scan order, in the same shape as `query`. |
 | `table_history` | `table`, optional `limit` (default 50) | Snapshots newest first, each with `committed_at`, `operation`, the added, deleted and total records, `is_current`, `on_main` (on the current snapshot's lineage) and the `ldp.*` snapshot properties such as `ldp.run-id` and `ldp.idempotency-key`. Also the branch and tag `refs`. |
 | `get_dataset` | `name`, or `name@vN` | The latest (or Nth) pinned `DatasetVersion`: its table, snapshot, row filter, selected fields, row count and schema fingerprint. When the table is served natively, it also returns `sql` that re-reads exactly the pinned rows (see below). It returns `{"available": false, "reason"}` when the install has no `local_data_platform.datasets`. |
+| `list_metrics` | none | Each metric that the `metrics.json` files of the `--config` folders define, with its `description`, `owner`, `type`, `format` (`number`, `percent` or `currency`), `table`, `semantic_model`, `dimensions`, `time_column` and `grains`. Also `files`, `problems` (what is wrong with a metrics file, and then there are no metrics) and `note`. See below. |
+| `query_metric` | `metrics`, optional `by`, `grain`, `filters`, `start`, `end` and `max_rows` | The metrics computed over one table. `columns` (name, Arrow type, `kind` of `time`, `dimension` or `metric`, and the `format` and `description` of a metric), `rows`, `row_count`, `truncated`, `max_rows` and `duration_ms` as for `query`, and also `sql`, `parameters`, `table`, `semantic_model`, `grain`, `release` and `source`. See below. |
 
 ### What a table says about itself
 
@@ -126,6 +131,39 @@ client. The design is in [the v0.1.4 contract](design/v0_1_4.md).
   `doc` of each column is also in the schema.
 - The `layer` is the one that the config of the table declares, else the table's own, else the namespace when that is
   called `bronze`, `silver` or `gold`.
+
+### Metrics
+
+A business number such as revenue should be the same number wherever it is asked for. The `metrics.json` files that are in
+the folders of `--config` (see [Define metrics](../README.md#define-metrics)) say what each metric means, who owns it
+and what it can be grouped by, and `query_metric` computes it from those definitions, so an agent does not write the
+SQL for revenue and does not get it a little different each time. The files are read again at each call, so an edited
+file needs no restart. A metric whose table the server does not serve, because of `--allow` or `--layer`, is not listed
+and is unknown, so a metric never says more about a table than the table does.
+
+```json
+{"metrics": ["revenue", "avg_ticket"], "by": ["kitchen"], "grain": "month",
+ "filters": ["city=Pune"], "start": "2026-01-01", "end": "2026-03-31"}
+```
+
+- `metrics` and `by` are lists, or one text with commas. `grain` is one of `day`, `week`, `month`, `quarter` and `year`,
+  and has to be one that `list_metrics` gives for the metric. `filters` are `dimension=value` and a dimension that is
+  given twice matches either value. `start` and `end` are days, and both are included.
+- **Values are bound.** The server compiles the SQL from the definitions, and every value that the agent gave, a filter or
+  a day, is a parameter of the type of its column. `filters: ["city=x' OR '1'='1"]` matches no row and changes nothing.
+  The result has the `sql` with `$1`, `$2` and so on and the `parameters`, so the call can be checked.
+- **Same limits as `query`.** The SQL passes the statement guard and runs in the sandbox, the rows are capped at `max_rows`
+  and at the server's cap, the query is stopped at the timeout, and the call is audited with its arguments, its table and
+  its compiled SQL.
+- **The release.** `query_metric` reads the current release of the gold tables, through a view of the table at the
+  snapshot that the release names, so two metrics of two calls come from tables that agree. `release` and `source` say
+  what was read. A table that no release holds is read as it is, and `source` says that. `query` and the other tools read
+  the tables as they are now.
+- **Numbers are numbers.** A sum that DuckDB makes a decimal comes back as a JSON number, and each column says its `kind`
+  and `format`, so an agent knows that `0.5` of a `percent` is half.
+- **Refusals list what is valid.** An unknown metric, dimension or grain, a date that is not `YYYY-MM-DD`, a grain that the
+  table does not allow, and metrics of two tables each fail with `InvalidArguments`, and the message names the valid
+  names and says which table each metric is on.
 
 ### Latest run and quality in `describe_table`
 

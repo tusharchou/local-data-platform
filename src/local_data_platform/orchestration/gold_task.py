@@ -25,7 +25,8 @@ A gold task ends with one of these statuses, and the runner emits its ``run.star
 * ``blocked_quality``: a quality check or a contract held a table back. Nothing after it was built, no release was cut,
   and the last release stays current. The data has to change, so a scheduler must not retry, and the workflow exits
   with 3.
-* ``failed``: a table failed in any other way, or the release could not be cut.
+* ``failed``: a table failed in any other way, or the release could not be cut, which it is when the metrics of
+  the folder do not fit the gold tables.
 
 This module needs only the standard library when it is imported. The gold layer is found when a task is planned or run.
 """
@@ -170,7 +171,8 @@ def run(task: Task, ctx: RunContext) -> TaskOutcome:
                     "snapshot_id": item.snapshot_id, "run_status": getattr(item.result, "status", None)}
                    for item in result.tables],
         "release": outcome.release.name if outcome is not None and outcome.release is not None else None,
-        "release_cut": bool(outcome is not None and outcome.cut)}
+        "release_cut": bool(outcome is not None and outcome.cut),
+        "metrics_problems": list(result.metrics.problems) if result.metrics is not None else []}
     stopped = result.stopped_by
     if stopped is not None:
         first = (stopped.error or "").splitlines()[0] if stopped.error else ""

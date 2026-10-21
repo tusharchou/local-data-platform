@@ -123,9 +123,12 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
                     "recorded in the _ldp namespace of each catalog, through the iceberg sink, unless a config "
                     "names sinks of its own. When every table was built or checked it cuts a release, which names "
                     "the snapshot of each gold table, so that a reader sees tables that agree. A build that a gate "
-                    "blocks cuts none, and the last release stays current.",
+                    "blocks cuts none, and the last release stays current. When DIR has a metrics file, its names and "
+                    "expressions are checked against the tables, as ldp metrics validate does, and a release is cut "
+                    "only if they fit.",
         epilog="Exit status is 0 when every table was built or checked, 3 when a gate held a table back, and 1 on any "
-               "other failure, a release that could not be cut included. Example: ldp gold build ldp_demo/robots")
+               "other failure, a release that could not be cut and metrics that do not fit their tables included. "
+               "Example: ldp gold build ldp_demo/robots")
     build.add_argument("folder", metavar="DIR", help="a folder of dataset configs")
     build.add_argument("--no-release", action="store_true", dest="no_release",
                        help="build the tables without cutting a release")
@@ -268,6 +271,10 @@ def _cmd_build(args: argparse.Namespace) -> int:
         print(f"gold build {result.folder}: {counts['built']} built, {counts['checked']} checked, "
               f"{counts['blocked']} blocked, {counts['failed']} failed, {counts['not run']} not run in "
               f"{result.duration_s:.1f}s")
+        if result.metrics is not None and not result.metrics.problems:
+            definitions = result.metrics.definitions
+            print(f"metrics: {_plural(len(definitions.models), 'semantic model')} and "
+                  f"{_plural(len(definitions.metrics), 'metric')} fit the gold tables")
         if result.release is not None:
             print(_describe_release(result))
     stopped = result.stopped_by
@@ -275,6 +282,11 @@ def _cmd_build(args: argparse.Namespace) -> int:
         print(f"ldp: {stopped.gold.config.identifier} {stopped.status}", file=sys.stderr)
         for line in (stopped.error or "").splitlines():
             print(f"  {line}", file=sys.stderr)
+    if result.metrics is not None and result.metrics.problems and not args.json:
+        print(f"ldp: {_plural(len(result.metrics.problems), 'problem')} in the metrics of {result.folder}",
+              file=sys.stderr)
+        for problem in result.metrics.problems:
+            print(f"  - {problem}", file=sys.stderr)
     if result.release is not None and result.release.error and not args.json:
         print("ldp: the release was not cut", file=sys.stderr)
         for line in result.release.error.splitlines():

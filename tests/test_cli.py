@@ -572,7 +572,7 @@ def test_python_dash_m_runs_the_cli():
 # ---------------------------------------------------------------------- module commands (platform contract C9)
 
 MODULE_COMMAND_NAMES = ("catalog", "schema", "plan", "runs", "commits", "datasets", "maintain", "spark", "mcp", "dbt",
-                        "workflow", "backfill", "schedule", "gold")
+                        "workflow", "backfill", "schedule", "gold", "metrics")
 
 
 def _command_names(parser) -> list[str]:
@@ -735,6 +735,16 @@ def test_format_table_truncates_and_formats_floats():
     rows = [{"value": 1.0 * i} for i in range(5)]
     text = format_table(rows, max_rows=2, float_digits=2)
     assert text.splitlines()[2:] == [" 0.00", " 1.00", "... 3 more rows", "(5 rows)"]
+
+
+def test_format_table_right_aligns_the_columns_it_is_told_to_even_when_their_cells_are_text():
+    rows = [{"name": "a", "share": "50.0%", "total": "1,234"}, {"name": "bbb", "share": "7.5%", "total": "56"}]
+
+    assert format_table(rows).splitlines()[:4] == ["name  share  total", "----  -----  -----", "a     50.0%  1,234",
+                                                   "bbb   7.5%   56"]
+    assert format_table(rows, right=["share", "total"]).splitlines()[:4] == [
+        "name  share  total", "----  -----  -----", "a     50.0%  1,234", "bbb    7.5%     56"]
+    assert format_table(rows, right=("missing",)) == format_table(rows)
 
 
 def test_format_table_handles_empty_input():

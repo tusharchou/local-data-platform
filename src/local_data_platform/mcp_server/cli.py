@@ -101,9 +101,11 @@ def add_cli(subparsers: Any, parents: Sequence[argparse.ArgumentParser] = ()) ->
         COMMAND, parents=list(parents),
         help="serve Iceberg tables read-only to AI agents over MCP (stdio)",
         description="Run a read-only Model Context Protocol server over stdio. It exposes list_tables, "
-                    "describe_table, query, sample_rows, table_history and get_dataset, runs SQL in a locked-down "
-                    "DuckDB, and audits every call. list_tables says what each table means, who owns it, its layer "
-                    "and its grain, and --layer gold serves only the gold tables. Needs the mcp and duckdb extras: "
+                    "describe_table, query, sample_rows, table_history, get_dataset, list_metrics and query_metric, "
+                    "runs SQL in a locked-down DuckDB, and audits every call. list_tables says what each table means, "
+                    "who owns it, its layer and its grain, and --layer gold serves only the gold tables. The metrics "
+                    "files of the --config folders define the metrics that list_metrics lists and query_metric "
+                    "computes from the current release. Needs the mcp and duckdb extras: "
                     'pip install "local-data-platform[mcp,duckdb]".')
     return add_arguments(parser, verbose=not parents)
 
@@ -127,8 +129,12 @@ def run_command(args: argparse.Namespace) -> int:
             reasons = "; ".join(f"{item['table']}: {item['reason']}" for item in tools.unavailable) or "none found"
             raise ConfigError(f"no tables to serve ({reasons})")
         scope = f" of the {args.layer} layer" if args.layer else ""
-        print(f"ldp mcp: serving {len(tools.tables)} tables{scope} over stdio ({', '.join(tools.tables)}); "
+        found = tools.list_metrics()
+        metrics = f", {len(found['metrics'])} metrics" if found["metrics"] else ""
+        print(f"ldp mcp: serving {len(tools.tables)} tables{scope}{metrics} over stdio ({', '.join(tools.tables)}); "
               f"audit log {tools.audit.path}", file=sys.stderr)
+        for problem in found["problems"]:
+            print(f"ldp mcp: warning: the metrics are not served. {problem}", file=sys.stderr)
         serve_stdio(tools)
     finally:
         tools.close()

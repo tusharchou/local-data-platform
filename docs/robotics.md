@@ -169,6 +169,8 @@ humanoids (28 joints, 30 Hz RGB and depth):
    injected faults (dropped frames on `h06`, depth-clock drift on `h03`, a clock step on `h07`, a
    recorder stall on `h02`, an unknown task label) and is blocked.
 3. `ldp gold build` builds `gold_episode_stats` and `gold_robot_daily` from silver, each from one SQL file in `models/`.
+   `configs/metrics.json` defines the fleet metrics over `gold_robot_daily`, such as `success_rate`, and `ldp metrics query`
+   computes them, for example `ldp metrics query examples/robot_episodes/data success_rate --by robot --grain week`.
 4. `humanoid_train`, `humanoid_eval` (robot `h08` held out) and `humanoid_frames` are pinned after
    day 1, still load identically after day 3 rewrites gold, and `humanoid_train@v2` adds day 3.
 5. Research queries in `queries.sql`: success rate by task and by robot, frame-drop rate by robot and

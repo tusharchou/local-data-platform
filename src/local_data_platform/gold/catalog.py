@@ -139,7 +139,8 @@ class CatalogEntry:
             again after it, so that readers of the release do not see the newer data.
         problems: What a gold table lacks of its contract. Empty for a table of another layer.
         notes: Other things worth knowing, such as a table that does not exist yet.
-        metrics: The metrics defined on the table. There are none until 0.1.4 item 5 defines them.
+        metrics: The metrics defined on the table by the metrics files of the folder, each as ``{"name", "description",
+            "owner", "type", "format", "dimensions", "grains"}``.
         detailed: Whether ``runs``, ``releases``, ``sample`` and ``query`` were collected.
         runs: The last runs, newest first.
         releases: Every release that holds the table, newest first.
@@ -217,12 +218,14 @@ class CatalogEntry:
         return f"{self.release} (behind live)" if self.release_state == "behind" else self.release
 
     def document(self) -> str:
-        """The text of the entry as one document, for search: the names, the meaning and the columns, and no numbers."""
+        """The text of the entry as one document, for search: the names, the meaning, the columns and the metrics, and
+        no numbers."""
         lines = [self.table, self.layer or "", self.description or "", f"owner {self.owner}" if self.owner else "",
                  f"grain {self.grain}" if self.grain else "",
                  f"key {', '.join(self.primary_key)}" if self.primary_key else "",
                  f"tags {', '.join(self.tags)}" if self.tags else "",
-                 *(f"{column.name} {column.description or ''}".strip() for column in self.columns)]
+                 *(f"{column.name} {column.description or ''}".strip() for column in self.columns),
+                 *(f"metric {item.get('name')} {item.get('description') or ''}".strip() for item in self.metrics)]
         return "\n".join(line for line in lines if line)
 
     def to_dict(self) -> dict[str, Any]:
@@ -424,8 +427,36 @@ def _releases_of(scope: releases.ReleaseScope, cache: dict[Any, list[releases.Re
     return cache[scope]
 
 
+def _metrics_of(folder: str, gold_tables: list[str]) -> dict[str, tuple[Mapping[str, Any], ...]]:
+    """The metrics that the metrics files of a folder define, by the gold table they are about.
+
+    A metrics file that cannot be read is logged and leaves the catalog without metrics, because the catalog describes
+    tables, and ``ldp metrics validate`` and ``ldp gold build`` are what report a file that is wrong.
+    """
+    from local_data_platform.metrics.load import NO_FILES, read_definitions
+    from local_data_platform.metrics.load import resolve_table as resolve_gold
+
+    found, problems = read_definitions(folder)
+    if found is None:
+        if problems and not problems[0].startswith(NO_FILES):
+            logger.warning("Could not read the metrics of %s: %s", folder, "; ".join(problems))
+        return {}
+    by_table: dict[str, list[Mapping[str, Any]]] = {}
+    for model in found.models:
+        try:
+            table = resolve_gold(model.table, gold_tables)
+        except ConfigError:
+            continue
+        for metric in found.metrics_of(model):
+            info = found.describe(metric)
+            by_table.setdefault(table, []).append({key: info[key] for key in (
+                "name", "description", "owner", "type", "format", "dimensions", "grains")})
+    return {table: tuple(items) for table, items in by_table.items()}
+
+
 def _entry(identifier: str, path: Path, config: Any, *, folder: str, catalogs: Any, cache: dict[Any, Any],
-           all_layers: bool, detail: bool, runs: int, sample: int) -> CatalogEntry | None:
+           all_layers: bool, detail: bool, runs: int, sample: int,
+           metrics: Mapping[str, tuple[Mapping[str, Any], ...]] | None = None) -> CatalogEntry | None:
     """The entry of one table, or ``None`` when it is not in a layer that was asked for."""
     from local_data_platform.mcp_server.discovery import Unavailable
 
@@ -505,7 +536,8 @@ def _entry(identifier: str, path: Path, config: Any, *, folder: str, catalogs: A
         rows=_rows(iceberg) if iceberg is not None else None,
         refreshed_at=_refreshed_at(iceberg) if iceberg is not None else None, run=run, quality=quality,
         release=current.name if in_current is not None else None, release_state=state,
-        problems=_problems(layer, docs, [column.name for column in columns]), notes=tuple(notes), **extra)
+        problems=_problems(layer, docs, [column.name for column in columns]), notes=tuple(notes),
+        metrics=(metrics or {}).get(identifier, ()), **extra)
 
 
 def _order(entry: CatalogEntry) -> tuple[int, str]:
@@ -538,6 +570,8 @@ def collect(folder: str | os.PathLike, *, all_layers: bool = False, only: str | 
     chosen = _targets(find_configs(folder))
     if not chosen:
         raise ConfigError(f"{resolve_path(folder)} has no dataset config that writes an Iceberg table")
+    metrics = _metrics_of(text, [table for table, (_, config) in chosen.items()
+                                 if config.docs is not None and config.docs.gold])
     if only is not None:
         identifier = resolve_table(chosen, only, text)
         chosen = {identifier: chosen[identifier]}
@@ -548,7 +582,7 @@ def collect(folder: str | os.PathLike, *, all_layers: bool = False, only: str | 
     try:
         for identifier, (path, config) in chosen.items():
             entry = _entry(identifier, path, config, folder=text, catalogs=catalogs, cache=cache,
-                           all_layers=all_layers, detail=detail, runs=runs, sample=sample)
+                           all_layers=all_layers, detail=detail, runs=runs, sample=sample, metrics=metrics)
             if entry is not None:
                 entries.append(entry)
     finally:

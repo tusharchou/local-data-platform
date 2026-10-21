@@ -238,11 +238,14 @@ call:
 | `ldp mcp --config CONFIG ...` | Serve tables to an agent over MCP (stdio) | `python -m local_data_platform.mcp_server ...`, same options |
 | `ldp dbt init\|build\|test\|docs\|exec PROJECT_DIR` | Run a dbt project over your Iceberg tables; `build` writes the models marked `ldp_publish` back to Iceberg (needs the `dbt` extra) | `dbt_layer.register_sources(...)`, `dbt_layer.publish.plan_publish(...)` and `publish(...)` |
 | `ldp gold sync CONFIG [--dbt-manifest FILE] [--dry-run] [--json]` | Write the contract of a config (its `metadata.docs`) into its existing Iceberg table, with no new data. `--dbt-manifest` reads it from a dbt manifest, for a table that dbt built, and `--dry-run` only says what would change. See [Table contracts](#table-contracts) | `gold.sync.sync_config(path)`, `contracts.apply_contract(table, docs)` |
-| `ldp gold build DIR [--no-release] [--json]` | Build the gold tables of a folder in the order that their `inputs` say, and check the ones that are built elsewhere. One line for each table, and a gate that blocks a table stops the build with exit status 3. When every table passed, it cuts a release, unless `--no-release` says not to. See [Build the gold tables](#build-the-gold-tables) | `gold.build.build_gold(folder, release=True)` |
+| `ldp gold build DIR [--no-release] [--json]` | Build the gold tables of a folder in the order that their `inputs` say, and check the ones that are built elsewhere. One line for each table, and a gate that blocks a table stops the build with exit status 3. When every table passed, and the metrics of the folder fit them, it cuts a release, unless `--no-release` says not to. See [Build the gold tables](#build-the-gold-tables) | `gold.build.build_gold(folder, release=True)` |
 | `ldp gold releases DIR [--show RELEASE] [--json]` | List the releases of the gold tables of a folder, newest first, or the tables of one release. See [Release the gold tables](#release-the-gold-tables) | `gold.release.list_releases(folder)`, `current_release(folder)`, `snapshot_for(table, release)` |
 | `ldp gold list DIR [--all-layers] [--json] [--strict]` | One row for each gold table of a folder, with what it means, who owns it, what one row is, its rows, when its data last changed, the status of its last run, the verdict of its last quality check and the release it is in. A table with no contract shows `no description`. `--all-layers` adds the other tables, and `--strict` exits with 1 when a gold table lacks part of its contract, for CI. See [Browse the gold tables](#browse-the-gold-tables) | `gold.catalog.collect(folder)` |
 | `ldp gold show DIR TABLE [--runs N] [--no-samples] [--json]` | Describe one table: its contract, every column with its type and description, its last runs, the releases that include it, a few sample rows and an `ldp query` line that reads it | `gold.catalog.collect(folder, only=table, detail=True)` |
 | `ldp gold docs DIR --out FILE [--format html\|md] [--all-layers] [--no-samples]` | Write the catalog as one self-contained page with a search box, or as Markdown for a MkDocs site | `gold.render.html_page(catalog)`, `gold.render.markdown_page(catalog)` |
+| `ldp metrics list DIR [--json]` | One row for each metric of the `metrics.json` files of a folder, with its description, owner, format, table, dimensions and grains. See [Define metrics](#define-metrics) | `metrics.load_metrics(folder)` |
+| `ldp metrics validate DIR [--json]` | Check every name and expression of the metrics against the schema of the gold tables, list every problem, and exit with 1 if there is one. No row is read, and `ldp gold build` runs the same check | `metrics.validate_folder(folder)` |
+| `ldp metrics query DIR METRICS [--by DIMS] [--grain GRAIN] [--filter DIM=VALUE] [--from DAY] [--to DAY] [--release RN\|--live] [--sql] [--out FILE] [--raw] [--json]` | Compute metrics from the current release of the gold tables, grouped and filtered, and print them in their format. `--sql` prints the SQL and runs nothing, and `--out` writes CSV, Parquet or JSONL | `metrics.query(folder, metrics, by=..., grain=..., filters=[...])` returns a `pyarrow.Table` |
 | `ldp spark CONFIG` | Run the Scala Spark job on a config's table (needs scala-cli) | `engine.spark.ScalaSparkJob` |
 
 ## Config schema
@@ -265,10 +268,11 @@ and a `metadata` block:
 
 A config may also say `"apiVersion": "ldp/v1"` and `"kind": "Pipeline"`. `kind` says what a JSON file is. `Pipeline`
 is the default, so every config here is one, and a config has the same spec hash with and without it. `Workflow` is
-the second kind. A kind is written exactly as shown, so `workflow` fails with a message that names `Workflow`, and
-`Metrics`, `Report` and `Profiles` are reserved for later milestones. `ldp plan` validates each file of a folder as its
-kind, and `ldp query`, `ldp mcp --config` and `ldp dbt` read the tables of the `Pipeline` files only, so a folder can
-hold workflow files next to its configs. `ldp schema --kind Workflow` prints the schema of another kind.
+the second kind and `Metrics` the third, see [Define metrics](#define-metrics). A kind is written exactly as shown, so
+`workflow` fails with a message that names `Workflow`, and `Report` and `Profiles` are reserved for later milestones.
+`ldp plan` validates each file of a folder as its kind, and `ldp query`, `ldp mcp --config` and `ldp dbt` read the
+tables of the `Pipeline` files only, so a folder can hold workflow and metrics files next to its configs.
+`ldp schema --kind Metrics` prints the schema of another kind.
 
 Partition transforms are `identity`, `year`, `month`, `day`, `hour`, `bucket[N]` and
 `truncate[W]`. On pyiceberg 0.10 and later, writing with any transform except `identity` needs the
@@ -583,6 +587,7 @@ ldp gold build examples/robot_episodes/data
 gold_episode_stats  built          96 rows  snapshot 3844274472678295321  4 of 4 checks passed
 gold_robot_daily    built          16 rows  snapshot 1985638678580193697  2 of 2 checks passed
 gold build examples/robot_episodes/data: 2 built, 0 checked, 0 blocked, 0 failed, 0 not run in 0.6s
+metrics: 1 semantic model and 5 metrics fit the gold tables
 release r1 cut with 2 tables and 112 rows in robots
 ```
 
@@ -598,6 +603,10 @@ The last line is the release that the build cuts, see [Release the gold tables](
   `on_failure` `warn`.
 - The runs are recorded in `_ldp.runs` and `_ldp.quality_results`, through the `iceberg` sink, unless the config names
   sinks of its own, so the freshness and the gate status of a gold table show in `describe_table` of `ldp mcp`.
+- A folder with a `metrics.json` has its metrics checked, see [Define metrics](#define-metrics). A file that is not
+  valid stops the build before anything is built. When every table was built or checked, the names and expressions are
+  checked against the tables, and the build says so with a `metrics:` line. Metrics that do not fit cut no release and
+  the exit status is 1, and the readers still see the last release.
 
 ### Release the gold tables
 
@@ -618,6 +627,7 @@ ldp query examples/robot_episodes/data "SELECT count(*) FROM robots.gold_episode
 gold_episode_stats  built          96 rows  snapshot 7902942047508908069  4 of 4 checks passed
 gold_robot_daily    built          16 rows  snapshot 7453607785734378588  2 of 2 checks passed
 gold build examples/robot_episodes/data: 2 built, 0 checked, 0 blocked, 0 failed, 0 not run in 0.6s
+metrics: 1 semantic model and 5 metrics fit the gold tables
 release r1 cut with 2 tables and 112 rows in robots
 ```
 
@@ -690,14 +700,16 @@ robots.gold_robot_daily  (gold)
 
 Columns (9)
   ...
+Metrics
+  ...
 Releases that include it (1)
   ...
 Read it
   ldp query examples/robot_episodes/data "SELECT * FROM robots.gold_robot_daily LIMIT 10"
 ```
 
-`show` also prints every column with its type and description, the last 5 runs, the releases that include the table and 5
-sample rows. The last line is an `ldp query` line that reads the table, ready to copy. `TABLE` is a table with its
+`show` also prints every column with its type and description, the metrics defined on the table, the last 5 runs, the
+releases that include the table and 5 sample rows. The last line is an `ldp query` line that reads the table, ready to copy. `TABLE` is a table with its
 namespace, or its bare name when only one table has it, and it can be a table of any layer.
 
 - The tables are the Iceberg tables that the dataset configs of the folder write. A gold table is one whose
@@ -743,6 +755,114 @@ wrote docs/catalog.md, 2 tables, 7.4 KB. Open it as a Markdown file.
 `ldp mcp` says the same things to an agent. `list_tables` returns the layer, description, owner and grain of each table, and
 `describe_table` returns the contract. `ldp mcp --config DIR --layer gold` serves only the gold tables, so no tool and no
 SQL can reach the tables upstream of them.
+
+### Define metrics
+
+Revenue, orders and average ticket should mean one thing in every report, export and answer of an agent. A
+`metrics.json` file next to the configs of the gold tables defines each number once, with what it means, who answers
+for it and how a person reads it. The robot example has one, `examples/robot_episodes/configs/metrics.json`.
+
+```json
+{
+  "apiVersion": "ldp/v1", "kind": "Metrics", "identifier": "robot_fleet_metrics", "who": "fleet operations",
+  "semantic_models": [{
+    "name": "robot_daily", "table": "robots.gold_robot_daily",
+    "time_dimension": {"column": "recorded_on", "grains": ["day", "week", "month", "quarter", "year"]},
+    "dimensions": [{"name": "robot", "column": "robot_id"}],
+    "measures": [{"name": "episode_sum", "agg": "sum", "expr": "episodes"},
+                 {"name": "success_sum", "agg": "sum", "expr": "successes"}]}],
+  "metrics": [
+    {"name": "episodes", "type": "simple", "measure": "episode_sum",
+     "description": "How many episodes the robots recorded."},
+    {"name": "success_rate", "type": "ratio", "numerator": "success_sum", "denominator": "episode_sum",
+     "format": "percent", "description": "The share of episodes that succeeded."}]
+}
+```
+
+A semantic model names one gold table, its `time_dimension` (a date column and the grains that its numbers may be
+reported at), its `dimensions` and its `measures`. A measure is an aggregate, `sum`, `count`, `count_distinct`, `avg`,
+`min` or `max`, over a SQL expression of the columns of the table. A metric is `simple`, which is one measure, or a
+`ratio`, which is one measure over another. It has a `description`, an `owner` (its own, or the `who` of the file) and
+a `format` of `number`, `percent` or `currency`. The terms follow MetricFlow, so an exporter can follow later.
+`ldp plan DIR` validates the file as `Metrics`, and `ldp schema --kind Metrics` prints its schema.
+
+```bash
+ldp metrics list examples/robot_episodes/data
+ldp metrics query examples/robot_episodes/data episodes,success_rate,frame_drop_rate --by robot --grain week
+```
+
+```text
+metric             description                                       owner                       format   table                    dimensions  grains
+-----------------  ------------------------------------------------  --------------------------  -------  -----------------------  ----------  -------------------------------
+episodes           How many episodes the robots recorded.            fleet operations            number   robots.gold_robot_daily  robot       day, week, month, quarter, year
+success_rate       The share of episodes that succeeded.             fleet operations            percent  robots.gold_robot_daily  robot       day, week, month, quarter, year
+frame_drop_rate    The share of frames that were dropped.            fleet operations            percent  robots.gold_robot_daily  robot       day, week, month, quarter, year
+worst_skew_ms      The largest RGB to depth gap of any frame, in...  fleet operations            number   robots.gold_robot_daily  robot       day, week, month, quarter, year
+active_robot_days  Days with a recording, added up over robots.      robot learning researchers  number   robots.gold_robot_daily  robot       day, week, month, quarter, year
+(5 rows)
+
+week        robot  episodes  success_rate  frame_drop_rate
+----------  -----  --------  ------------  ---------------
+2026-08-31  h01          12         83.3%             0.3%
+2026-08-31  h02          12         75.0%             0.5%
+2026-08-31  h03          12         83.3%             0.3%
+2026-08-31  h04          12         91.7%             0.4%
+2026-08-31  h05          12         41.7%             0.4%
+2026-08-31  h06          12         66.7%             0.3%
+2026-08-31  h07          12         75.0%             0.4%
+2026-08-31  h08          12         66.7%             0.0%
+(8 rows)
+read release r1, cut 2026-10-20 08:34:32 UTC
+```
+
+`--filter dimension=value` keeps the rows of a dimension, `--from` and `--to` take days that are both included, and
+`--sql` prints what would run, with the value of each parameter, and runs nothing.
+
+```bash
+ldp metrics query examples/robot_episodes/data success_rate --filter robot=h05 --grain month --from 2026-09-01 --sql
+```
+
+```text
+SELECT
+  CAST(date_trunc('month', "recorded_on") AS DATE) AS "month",
+  sum(successes) / NULLIF(sum(episodes), 0) AS "success_rate"
+FROM "robots"."gold_robot_daily"
+WHERE "robot_id" = $1 AND "recorded_on" >= $2
+GROUP BY 1
+ORDER BY 1
+-- $1 = "h05"
+-- $2 = DATE '2026-09-01'
+```
+
+- **A ratio is a ratio of sums.** `success_rate` is the sum of the successes over the sum of the episodes of the group,
+  and never the average of the daily rates, which is a different number when the days have different counts. A group
+  with no episodes has no value and not infinity.
+- **A value is never SQL.** A filter value, a date and every other value that a person gives is bound as a parameter of
+  the type of its column, so `--filter robot="h05' OR '1'='1"` matches no robot. Names go into the SQL only after they
+  were checked against the definitions, and an unknown metric, dimension or grain is refused with the valid names and the
+  closest one.
+- **A query reads one table.** Metrics of two semantic models are refused with the table of each, because that would need
+  a join, which this version does not have.
+- **`grains` is where the numbers are right.** A number that counts customers at the start of a month is wrong at any
+  other grain, so its model allows only `month`, and another grain is refused. A query with no grain adds the whole
+  period into one row, which is the same step as adding up years, so it needs `year` to be allowed.
+- **The format is for people.** `percent` shows `0.5` as `50.0%` and `currency` has two decimals, on a terminal. `--raw`
+  shows what was computed, and `--out FILE`, `--json` and the Python function always give the values as computed.
+  `--out` writes CSV, Parquet or JSONL by the ending of the name.
+- **The tables are read as the current release holds them.** `--release r1` reads an older one and `--live` reads the
+  tables as they are now, as `ldp query` does. The line under the table says which was read. A release pins the data and
+  not the definitions, so an old release that is read with a definition that needs a column that it lacks fails with a
+  message that says so.
+- **The definitions are checked against the tables.** `ldp metrics validate DIR` checks that every table is a gold table
+  that exists, that every dimension and the time column are columns, that the time column is a `DATE` or a `TIMESTAMP`,
+  that each expression is one plain SQL expression that works on the table, and that every metric is a number. It lists
+  every problem and exits with 1. `ldp gold build` runs the same check and cuts no release when metrics do not fit.
+- **In code**, `local_data_platform.metrics.query(folder, "episodes,success_rate", by="robot", grain="week")` returns a
+  `pyarrow.Table`, and `metrics.compile_for(...)` returns the SQL and its parameters without running anything.
+
+`ldp mcp` has two more tools for the same numbers, `list_metrics` and `query_metric`, see
+[MCP server for agents](#mcp-server-for-agents). The gold catalog shows the metrics of each table, in `ldp gold show`,
+on the page of `ldp gold docs`, and in its search.
 
 ## Catalogs and object storage
 
@@ -1003,6 +1123,8 @@ on stdio and read-only. Install the `mcp` extra, then point your MCP client at `
 | `sample_rows(table, n)` | A sample of rows |
 | `table_history(table)` | The table's snapshot history |
 | `get_dataset(name)` | A pinned dataset version |
+| `list_metrics()` | The metrics that the `metrics.json` files of the `--config` folders define, each with what it means, its owner, format, table, dimensions and grains |
+| `query_metric(metrics, by, grain, filters, start, end, max_rows)` | Some metrics of one table, computed from the current release of the gold tables as the definitions say, with every value bound as a parameter |
 
 The guardrails are on by default. A query must be exactly one `SELECT` or `WITH` statement, as
 DuckDB's parser sees it, so `COPY`, `ATTACH`, `INSTALL`, `SET`, `read_csv('/etc/passwd')` and
@@ -1012,7 +1134,10 @@ Results are capped in rows and time, `--allow` limits the tables, and every call
 tool, the SQL, row counts, duration and any error, never the result data. Records go to a JSONL file
 as each call ends, and to the `_ldp.audit` Iceberg table in the first served catalog when the
 server stops (`--no-iceberg-audit` turns that off).
-`make demo-agent` runs a scripted client against the demo table. See
+`query_metric` runs in the same sandbox as `query`, with the same row cap, timeout and audit, and its audit record
+has the arguments and the compiled SQL. It reads the current release of the gold tables, and `query` reads the tables
+as they are now. `python examples/agent_client.py` builds a small lake with a gold table, three metrics and a release,
+and calls both tools. `make demo-agent` runs a scripted client against the demo table. See
 [MCP server for agents](docs/agents.md).
 
 ## Reproducible datasets and robotics

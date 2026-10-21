@@ -1,0 +1,63 @@
+{
+  "apiVersion": "ldp/v1",
+  "kind": "Metrics",
+  "identifier": "robot_fleet_metrics",
+  "who": "fleet operations",
+  "what": "the numbers that the fleet is judged by",
+  "semantic_models": [
+    {
+      "name": "robot_daily",
+      "table": "robots.gold_robot_daily",
+      "description": "One row per robot per day.",
+      "time_dimension": {"column": "recorded_on", "grains": ["day", "week", "month", "quarter", "year"]},
+      "dimensions": [
+        {"name": "robot", "column": "robot_id", "description": "The robot."}
+      ],
+      "measures": [
+        {"name": "episode_sum", "agg": "sum", "expr": "episodes", "description": "Episodes recorded."},
+        {"name": "success_sum", "agg": "sum", "expr": "successes", "description": "Episodes that succeeded."},
+        {"name": "frame_sum", "agg": "sum", "expr": "frames", "description": "Frames recorded."},
+        {"name": "dropped_sum", "agg": "sum", "expr": "dropped_frames", "description": "Frames that were dropped."},
+        {"name": "worst_skew", "agg": "max", "expr": "max_skew_ms", "description": "The largest RGB to depth gap."},
+        {"name": "robot_day_count", "agg": "count", "description": "Rows, which are robots on days."}
+      ]
+    }
+  ],
+  "metrics": [
+    {
+      "name": "episodes",
+      "type": "simple",
+      "measure": "episode_sum",
+      "description": "How many episodes the robots recorded."
+    },
+    {
+      "name": "success_rate",
+      "type": "ratio",
+      "numerator": "success_sum",
+      "denominator": "episode_sum",
+      "format": "percent",
+      "description": "The share of episodes that succeeded."
+    },
+    {
+      "name": "frame_drop_rate",
+      "type": "ratio",
+      "numerator": "dropped_sum",
+      "denominator": "frame_sum",
+      "format": "percent",
+      "description": "The share of frames that were dropped."
+    },
+    {
+      "name": "worst_skew_ms",
+      "type": "simple",
+      "measure": "worst_skew",
+      "description": "The largest RGB to depth gap of any frame, in ms."
+    },
+    {
+      "name": "active_robot_days",
+      "type": "simple",
+      "measure": "robot_day_count",
+      "owner": "robot learning researchers",
+      "description": "Days with a recording, added up over robots."
+    }
+  ]
+}

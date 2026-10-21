@@ -17,6 +17,7 @@ Commands::
     ldp commits CONFIG                     (format.iceberg.commit)
     ldp datasets pin|list|export ...       (datasets)
     ldp gold sync|build|releases|list|show|docs ...   (gold.cli)
+    ldp metrics list|validate|query ...    (metrics.cli)
     ldp maintain CONFIG                    (maintenance)
     ldp spark CONFIG                       (engine.spark)
     ldp mcp --config DIR_OR_FILE           (mcp_server)
@@ -89,6 +90,7 @@ MODULE_COMMANDS = (
     ("local_data_platform.orchestration.cli", ("workflow", "backfill")),
     ("local_data_platform.orchestration.schedule_cli", ("schedule",)),
     ("local_data_platform.gold.cli", ("gold",)),
+    ("local_data_platform.metrics.cli", ("metrics",)),
 )
 """``(module, commands)``: each module's ``add_cli(subparsers, parents=...)`` registers its commands."""
 
@@ -114,7 +116,8 @@ def _cell(value: Any, float_digits: int | None = None) -> str:
     return str(value)
 
 
-def format_table(data: Any, max_rows: int | None = None, float_digits: int | None = None) -> str:
+def format_table(data: Any, max_rows: int | None = None, float_digits: int | None = None,
+                 right: Sequence[str] = ()) -> str:
     """Render rows as an aligned plain-text table.
 
     Args:
@@ -122,6 +125,8 @@ def format_table(data: Any, max_rows: int | None = None, float_digits: int | Non
         max_rows: Show at most this many rows, then a ``... N more rows`` line.
         float_digits: Show floats with exactly this many decimals. By default
             floats show up to 6 decimals, without trailing zeros.
+        right: Columns to right-align though their cells are text, such as numbers that were
+            formatted with thousands separators or a percent sign.
 
     Returns:
         The table as text, with a header and a separator line. Numbers are
@@ -139,9 +144,12 @@ def format_table(data: Any, max_rows: int | None = None, float_digits: int | Non
     if not columns:
         return "(no columns)"
     cells = [[_cell(row.get(column), float_digits) for column in columns] for row in rows]
-    numeric = [bool(rows) and all(isinstance(row.get(column), (int, float)) and not isinstance(row.get(column), bool)
-                                  for row in rows if row.get(column) is not None)
-               for column in columns]
+
+    def is_number(column: str) -> bool:
+        values = [row.get(column) for row in rows if row.get(column) is not None]
+        return bool(rows) and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values)
+
+    numeric = [column in right or is_number(column) for column in columns]
     widths = [max([len(column)] + [len(line[i]) for line in cells]) for i, column in enumerate(columns)]
 
     def render(values: Sequence[str]) -> str:
