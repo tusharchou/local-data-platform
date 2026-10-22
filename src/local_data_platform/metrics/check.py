@@ -135,7 +135,7 @@ def _check_measure(connection: Any, duckdb: Any, label: str, table: str, view: s
                 for name in missing]
     try:
         row = connection.execute(f"DESCRIBE SELECT {aggregate(measure.agg, measure.expr)} AS v FROM {quote(view)}"
-                                 ).fetchone()
+                                 ).fetchall()[0]
     except duckdb.Error as error:
         first = str(error).strip().splitlines()[0] if str(error).strip() else type(error).__name__
         return [f"{here}: {measure.agg} of {measure.expr!r} does not work on {table}. {first}"]

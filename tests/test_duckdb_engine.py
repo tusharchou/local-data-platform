@@ -766,8 +766,8 @@ class RecordingConnection:
             raise duckdb.IOException("simulated failure")
         return self
 
-    def fetchone(self):
-        return (True, True)
+    def fetchall(self):
+        return [(True, True)]
 
     def unregister(self, name):
         self.statements.append(f"UNREGISTER {name}")

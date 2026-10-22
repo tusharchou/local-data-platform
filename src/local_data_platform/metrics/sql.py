@@ -136,7 +136,7 @@ def _walk(node: Any, columns: list[str], problems: list[str], aggregates: frozen
 
 def _select_item(connection: Any, text: str) -> dict[str, Any] | None:
     """The one select item of ``text`` when it is one ``SELECT`` of one expression with no table, else ``None``."""
-    data = json.loads(connection.execute("SELECT json_serialize_sql(?)", [text]).fetchone()[0])
+    data = json.loads(connection.execute("SELECT json_serialize_sql(?)", [text]).fetchall()[0][0])
     if data.get("error"):
         return None
     statements = data.get("statements") or []
@@ -161,7 +161,7 @@ def inspect_expression(connection: Any, expr: str) -> Inspection:
         expr: The SQL expression.
     """
     wrapped = f"SELECT ({expr}) AS v"
-    raw = json.loads(connection.execute("SELECT json_serialize_sql(?)", [wrapped]).fetchone()[0])
+    raw = json.loads(connection.execute("SELECT json_serialize_sql(?)", [wrapped]).fetchall()[0][0])
     if raw.get("error"):
         message = str(raw.get("error_message") or "is not valid SQL").splitlines()[0]
         return Inspection(problems=(f"is not a SQL expression: {message}",))

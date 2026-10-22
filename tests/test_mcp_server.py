@@ -150,7 +150,31 @@ ALLOWED_SQL = [
     "SELECT 1 /* ; COPY (SELECT 1) TO 'x.csv' */",
     "SELECT 1 AS \"; DROP TABLE x\"",
     "SELECT $$;$$ AS dollar_quoted",
+    # The keyword of a write as a name or in a string is not a write. These go through the walk of the guard.
+    "SELECT update FROM (SELECT 1 AS \"update\")",
+    "SELECT delete, insert FROM (SELECT 1 AS delete, 2 AS insert)",
+    "SELECT * FROM (SELECT 1 AS merge) q",
+    "WITH copy AS (SELECT 1 AS a) SELECT * FROM copy",
+    "WITH update AS (SELECT 1 AS a) SELECT * FROM update",
+    "WITH RECURSIVE t(update) AS (SELECT 1 UNION ALL SELECT update + 1 FROM t WHERE update < 3) SELECT * FROM t",
+    "SELECT 1 AS update UNION ALL SELECT 2",
+    "SELECT 'insert into t values (1)' AS s, 'update t set a = 1' AS u",
 ]
+
+# DuckDB 1.x refuses these when it parses them. DuckDB 2.0 parses each as a SELECT and runs the write.
+WRITING_QUERIES = {
+    "cte_delete_inside": "WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x",
+    "cte_insert_inside": "WITH x AS (INSERT INTO t VALUES (1) RETURNING *) SELECT * FROM x",
+    "cte_insert_or_replace_inside": "WITH x AS (INSERT OR REPLACE INTO t VALUES (3) RETURNING *) SELECT * FROM x",
+    "cte_update_inside": "WITH x AS (UPDATE t SET a = 1 RETURNING *) SELECT * FROM x",
+    "cte_copy_query_inside": "WITH x AS (COPY (SELECT 1) TO 'x.csv') SELECT * FROM x",
+    "cte_copy_table_inside": "WITH x AS (COPY t TO 'x.csv') SELECT * FROM x",
+    "second_cte_deletes": "WITH a AS (SELECT 1 AS n), b AS (DELETE FROM t RETURNING *) SELECT * FROM a, b",
+    "subquery_cte_deletes": "SELECT * FROM (WITH y AS (DELETE FROM t RETURNING *) SELECT * FROM y) q",
+    "scalar_subquery_cte_deletes": "SELECT (WITH y AS (DELETE FROM t RETURNING *) SELECT count(*) FROM y)",
+    "cte_delete_between_comments": "WITH x AS (/* a */ DELETE /* b */ FROM t RETURNING *) SELECT * FROM x",
+    "cte_delete_in_lower_case": "with x as (delete from t returning *) select * from x",
+}
 
 REJECTED_SQL = {
     "copy": "COPY (SELECT 1) TO 'x.csv'",
@@ -200,7 +224,7 @@ REJECTED_SQL = {
     "paren_copy": "(COPY (SELECT 1) TO 'x.csv')",
     "cte_insert": "WITH x AS (SELECT 1 AS a) INSERT INTO t SELECT * FROM x",
     "cte_copy": "WITH x AS (SELECT 1) COPY x TO 'x.csv'",
-    "cte_delete_inside": "WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x",
+    **WRITING_QUERIES,
     "subquery_copy": "SELECT * FROM (COPY (SELECT 1) TO 'x.csv')",
     "select_into": "SELECT 1 INTO t",
     "quoted_select": "\"SELECT\" 1",
@@ -223,6 +247,40 @@ def test_guard_rejects_everything_else(name):
         check_sql(REJECTED_SQL[name])
 
 
+def _duckdb_parses_a_write_in_a_cte() -> bool:
+    try:
+        duckdb.connect().extract_statements(WRITING_QUERIES["cte_delete_inside"])
+    except duckdb.Error:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _duckdb_parses_a_write_in_a_cte(),
+                    reason="DuckDB before 2.0 refuses a write in a CTE when it parses it, so the walk is not reached")
+@pytest.mark.parametrize("name", sorted(WRITING_QUERIES))
+def test_guard_walks_a_select_that_holds_a_write_and_says_so(name):
+    assert duckdb.connect().extract_statements(WRITING_QUERIES[name])[0].type == duckdb.StatementType.SELECT
+    with pytest.raises(QueryRejected, match="writes with INSERT, UPDATE, DELETE or COPY"):
+        check_sql(WRITING_QUERIES[name])
+
+
+def test_guard_refuses_a_text_with_the_keyword_of_a_write_when_duckdb_cannot_show_it_only_reads():
+    class CannotSerialize:
+        def __init__(self, real):
+            self.real = real
+
+        def extract_statements(self, sql):
+            return self.real.extract_statements(sql)
+
+        def execute(self, *arguments):
+            raise duckdb.Error("cannot serialize")
+
+    with pytest.raises(QueryRejected, match="cannot show that this one only reads"):
+        check_sql("SELECT update FROM (SELECT 1 AS \"update\")", CannotSerialize(duckdb.connect()))
+    # A text without the keyword of a write is never walked, so it goes through whatever the connection does.
+    assert check_sql("SELECT 1", CannotSerialize(duckdb.connect())).type == duckdb.StatementType.SELECT
+
+
 def test_guard_rejects_non_strings_and_huge_sql():
     with pytest.raises(QueryRejected, match="string"):
         check_sql(None)
@@ -235,6 +293,20 @@ def test_first_keyword_skips_comments_and_parentheses():
     assert first_keyword("  WITH a AS (SELECT 1) SELECT 1") == "with"
     assert first_keyword("-- only a comment") == ""
     assert first_keyword("pragma version") == "pragma"
+
+
+def test_the_locked_sandbox_refuses_a_write_in_a_cte_and_answers_a_query_that_only_names_one(tools):
+    def rows() -> list[dict]:
+        return tools.sandbox.query("SELECT count(*) AS n FROM demo.rides", max_rows=5, timeout_s=5).table.to_pylist()
+
+    before = rows()
+    for sql in WRITING_QUERIES.values():
+        with pytest.raises(QueryRejected):
+            tools.sandbox.query(sql.replace(" t ", " demo.rides ").replace(" t)", " demo.rides)"), max_rows=5,
+                                timeout_s=5)
+    named = tools.sandbox.query("SELECT update FROM (SELECT 1 AS \"update\")", max_rows=5, timeout_s=5)
+    assert named.table.to_pylist() == [{"update": 1}]
+    assert rows() == before
 
 
 def test_import_database_is_refused_before_duckdb_parses_it(tmp_path):

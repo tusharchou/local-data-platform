@@ -298,7 +298,10 @@ def _register_one(connection: Any, table: Any, use_views: bool, mode: str,
             try:
                 connection.execute(f"CREATE TABLE {relation} AS SELECT * FROM _ldp_copy")
             finally:
-                connection.unregister("_ldp_copy")
+                try:
+                    connection.unregister("_ldp_copy")
+                except duckdb.TransactionException:
+                    pass  # DuckDB 2.0 refuses it once the CREATE failed and aborted the transaction, which rolls back
             rows = data.num_rows
     except duckdb.CatalogException as error:
         text = str(error)
@@ -349,7 +352,7 @@ def _drop_leftovers(connection: Any, previous: dict[tuple[str, str], str],
         touched.add(schema)
     for schema in sorted(touched - {"main", STATE_SCHEMA}):
         remaining = connection.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema = ?",
-                                       [schema]).fetchone()[0]
+                                       [schema]).fetchall()[0][0]
         if remaining == 0:
             connection.execute(f"DROP SCHEMA IF EXISTS {_quote(schema)}")
     return dropped

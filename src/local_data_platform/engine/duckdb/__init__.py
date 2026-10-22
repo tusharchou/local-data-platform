@@ -499,11 +499,11 @@ class DuckDBEngine(Engine):
     def _load_iceberg_extension(self) -> str | None:
         duckdb = _import_duckdb()
         try:
-            row = self._connection.execute(
-                "SELECT installed, loaded FROM duckdb_extensions() WHERE extension_name = 'iceberg'").fetchone()
-            if row is None:
+            rows = self._connection.execute(
+                "SELECT installed, loaded FROM duckdb_extensions() WHERE extension_name = 'iceberg'").fetchall()
+            if not rows:
                 return "this DuckDB build has no iceberg extension"
-            installed, loaded = row
+            installed, loaded = rows[0]
             if loaded:
                 return None
             if not installed:

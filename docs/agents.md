@@ -201,10 +201,10 @@ DuckDB SQL.
 
 ## Guardrails
 
-The protection comes in layers, and each layer was checked against DuckDB 1.5.6 and the mcp SDK
-2.2.0.
+The protection comes in layers, and each layer was checked against DuckDB 1.5.6 and 2.0.0 and the
+mcp SDK 2.2.0.
 
-**1. The statement guard** (`mcp_server/guard.py`). Before anything runs, the SQL must pass two
+**1. The statement guard** (`mcp_server/guard.py`). Before anything runs, the SQL must pass three
 checks:
 
 - DuckDB's tokenizer runs first. It drops comments and keeps string literals whole. The first
@@ -216,6 +216,13 @@ checks:
   of type `SELECT`. This check rejects multiple statements, however they are hidden in comments
   or strings, and CTE-wrapped writes such as `WITH x AS (...) INSERT ...`, which parse as
   `INSERT`.
+- DuckDB 1.x refuses a write inside a CTE, such as `WITH x AS (DELETE ...) SELECT ...` or
+  `WITH x AS (COPY ... TO 'f') SELECT ...`, when it parses the text. DuckDB 2.0 parses it as a
+  `SELECT` and runs it. So when the text has the keyword `INSERT`, `UPDATE`, `DELETE`, `MERGE` or
+  `COPY`, the guard has DuckDB serialize the query with `json_serialize_sql`. It rejects the query
+  unless every query node in it is a `SELECT`, a set operation or a CTE, and it rejects a text that
+  DuckDB cannot serialize. A query that uses one of these words as a name, or inside a string, goes
+  through.
 
 **2. The DuckDB sandbox** (`mcp_server/sandbox.py`). The connection is set up in this order:
 
@@ -249,7 +256,7 @@ What the tests check (`tests/test_mcp_server.py`):
 | Attempt | Stopped by |
 |---|---|
 | `COPY ... TO`, `EXPORT DATABASE`, `ATTACH`, `DETACH`, `INSTALL`, `LOAD`, `SET`, `RESET`, `PRAGMA`, `CALL`, `CHECKPOINT`, `CREATE` (including `SECRET` and `MACRO`), `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `IMPORT`, transactions, `PREPARE`/`EXECUTE` | the guard (`QueryRejected`) |
-| Two statements, including behind `--` or `/* */` comments or inside string tricks; `/* SELECT */ COPY ...`; CTE-wrapped `INSERT` or `COPY` | the guard |
+| Two statements, including behind `--` or `/* */` comments or inside string tricks; `/* SELECT */ COPY ...`; CTE-wrapped `INSERT` or `COPY`; `DELETE`, `INSERT`, `UPDATE` or `COPY` inside a CTE or a subquery | the guard |
 | `read_csv('/etc/passwd')`, `read_text`, `read_blob('file:///...')`, `read_parquet` outside the warehouse, `glob('/*')`, `glob('~/*')` | DuckDB (`AccessDenied`) |
 | Reading the catalog `.db`, another table's data files or its `iceberg_scan`, `..` traversal out of an allowed folder, a sibling folder with the same prefix | DuckDB (`AccessDenied`) |
 | `SELECT * FROM query('COPY ...')` and `json_execute_serialized_sql(...)` | DuckDB: only a `SELECT` runs inside them |
