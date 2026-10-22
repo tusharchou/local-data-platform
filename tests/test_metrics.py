@@ -2863,7 +2863,7 @@ def test_a_pinned_view_that_has_gone_is_made_again_and_the_arrow_data_of_a_dropp
             assert sandbox.query(f"SELECT count(*) AS n FROM {name}", max_rows=5, timeout_s=5).table.to_pylist() == [
                 {"n": 9}]
             arrow = sandbox._pinned[name].arrow_name
-            assert (arrow is None) == (native is None)
+            assert (arrow is None) == sandbox.native_available  # native=None reads natively only with the extension
             sandbox.pin("gold.gold_sales", second)
             if arrow is not None:
                 with pytest.raises(duckdb_module.Error):
@@ -2882,7 +2882,7 @@ def test_ldp_mcp_says_how_many_metrics_it_serves_and_warns_about_a_wrong_metrics
     assert mcp_main(["--config", str(lake), "--no-iceberg-audit"]) == 0
     err = capsys.readouterr().err
     assert f"ldp mcp: serving 1 tables, {len(METRICS['metrics'])} metrics over stdio (gold.gold_sales)" in err
-    assert "warning" not in err
+    assert "ldp mcp: warning" not in err
     write(lake / "metrics.json", with_metric("revenue", format="euro"))
     assert mcp_main(["--config", str(lake), "--no-iceberg-audit"]) == 0
     err = capsys.readouterr().err

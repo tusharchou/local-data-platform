@@ -147,7 +147,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     Returns:
         0 when the client disconnects, 1 on error.
     """
-    from local_data_platform.logger import configure_cli_logging
+    from local_data_platform.logger import PACKAGE_LOGGER, configure_cli_logging
 
     parser = add_arguments(argparse.ArgumentParser(prog="python -m local_data_platform.mcp_server",
                                                    description="Serve Iceberg tables read-only over MCP stdio."))
@@ -156,6 +156,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SystemExit as exit_:
         return 0 if exit_.code in (0, None) else 1
     verbose = bool(getattr(args, "verbose", False))
+    package_logger = logging.getLogger(PACKAGE_LOGGER)
+    saved_level, saved_handlers = package_logger.level, list(package_logger.handlers)
     configure_cli_logging(logging.DEBUG if verbose else logging.WARNING)
     try:
         return args.handler(args)
@@ -169,6 +171,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise
         print(f"ldp mcp: error: {type(error).__name__}: {error} (run with -v for the traceback)", file=sys.stderr)
         return 1
+    finally:
+        # Leave logging as we found it, as ldp does, so main() can be called more than once in a process.
+        for handler in list(package_logger.handlers):
+            if handler not in saved_handlers:
+                package_logger.removeHandler(handler)
+        package_logger.setLevel(saved_level)
 
 
 __all__ = ["COMMAND", "add_arguments", "add_cli", "main", "run_command"]
