@@ -481,6 +481,24 @@ def test_the_json_schema_is_valid_and_accepts_the_file_of_these_tests():
     assert not list(jsonschema.Draft202012Validator(schema).iter_errors(METRICS))
 
 
+EXAMPLE_METRICS = sorted((Path(__file__).resolve().parents[1] / "examples").glob("*/config*/metrics.json"))
+
+
+def test_the_metrics_files_of_the_examples_are_valid_without_a_table():
+    assert [path.parent.parent.name for path in EXAMPLE_METRICS] == ["restaurant", "robot_episodes"]
+    for path in EXAMPLE_METRICS:
+        assert messages(json.loads(path.read_text())) == [], path
+
+
+def test_the_json_schema_accepts_the_metrics_files_of_the_examples():
+    jsonschema = pytest.importorskip("jsonschema")
+    validator = jsonschema.Draft202012Validator(kind_schema("Metrics"))
+
+    assert EXAMPLE_METRICS
+    for path in EXAMPLE_METRICS:
+        assert not list(validator.iter_errors(json.loads(path.read_text()))), path
+
+
 @pytest.mark.parametrize("label", [
     "an unknown top-level key", "an unknown key of a model", "a model with no table", "a time dimension with no column",
     "a grain that does not exist and a grain twice", "no grains", "an empty list of grains",
@@ -2891,3 +2909,65 @@ def test_ldp_mcp_says_how_many_metrics_it_serves_and_warns_about_a_wrong_metrics
     (lake / "metrics.json").unlink()
     assert mcp_main(["--config", str(lake), "--no-iceberg-audit"]) == 0
     assert "metrics" not in capsys.readouterr().err.replace("the metrics are not served", "")
+
+
+# --------------------------------------------------------------------------- the churn metrics of the example
+
+CHURN_FILE = Path(__file__).resolve().parents[1] / "examples" / "restaurant" / "config" / "metrics.json"
+CHURN_SCHEMA = pa.schema([("month", pa.date32()), ("customers_at_start", pa.int64()), ("churned", pa.int64()),
+                          ("churn_rate", pa.float64()), ("active_customers", pa.int64())])
+ISSUE_47 = [
+    (dt.date(2023, 2, 1), 3, 3, 1.0, 1),
+    (dt.date(2023, 3, 1), 1, 0, 0.0, 2),
+    (dt.date(2023, 4, 1), 2, 1, 0.5, 1),
+    (dt.date(2023, 5, 1), 1, 1, 1.0, 0),
+    (dt.date(2023, 6, 1), 0, 0, None, 1),
+]
+"""``churn_by_month`` as the model of the restaurant example gives it for the orders of issue #47, which
+``test_restaurant_warehouse.py`` builds with dbt. January, the first month, has no row."""
+
+
+@pytest.fixture
+def churn_lake(tmp_path):
+    """A folder with the table of issue #47 and the ``metrics.json`` that the restaurant example ships."""
+    sales(tmp_path, ISSUE_47, CHURN_SCHEMA, name="churn_by_month")
+    metrics_file(tmp_path, json.loads(CHURN_FILE.read_text()))
+    return tmp_path
+
+
+def test_the_churn_metrics_that_the_restaurant_example_ships_fit_the_columns_of_its_model(churn_lake, capsys):
+    code, out, err = cli(capsys, "metrics", "validate", churn_lake)
+
+    assert (code, err) == (0, "")
+    assert out == f"metrics.json: 1 semantic model and 2 metrics fit the gold tables of {churn_lake.resolve()}\n"
+
+
+def test_the_example_of_issue_47_runs_through_ldp_metrics_query_and_february_is_100_percent(churn_lake, capsys):
+    code, out, err = cli(capsys, "metrics", "query", churn_lake, "churn_rate", "--grain", "month")
+
+    lines = out.splitlines()
+    assert (code, err) == (0, "")
+    assert lines[:2] == ["month       churn_rate", "----------  ----------"]
+    assert [cells(line) for line in lines[2:7]] == [
+        ["2023-02-01", "100.0%"], ["2023-03-01", "0.0%"], ["2023-04-01", "50.0%"], ["2023-05-01", "100.0%"],
+        ["2023-06-01", "NULL"]]  # nobody ordered in May, so June has no rate
+    assert lines[7] == "(5 rows)"
+    assert not any(line.startswith("2023-01") for line in lines), "January has no row in the model, so no value"
+
+
+def test_the_churn_metrics_give_the_rows_of_the_sql_written_by_hand_and_a_month_with_no_customers_has_no_rate(
+        churn_lake):
+    table = metrics.query(churn_lake, "churn_rate,active_customers", grain="month")
+
+    by_hand = hand("SELECT month, sum(churned) / NULLIF(sum(customers_at_start), 0), sum(active_customers) FROM t "
+                   "GROUP BY month ORDER BY month", rows=ISSUE_47, schema=CHURN_SCHEMA)
+    assert close(answer(table), by_hand)
+    assert [row[1] for row in answer(table)] == [1.0, 0.0, 0.5, 1.0, None]
+    assert [row[2] for row in answer(table)] == [1, 2, 1, 0, 1]
+
+
+@pytest.mark.parametrize("options", [{"grain": "day"}, {"grain": "week"}, {"grain": "quarter"}, {"grain": "year"}, {}],
+                         ids=["day", "week", "quarter", "year", "whole period"])
+def test_the_churn_metrics_allow_only_the_month_grain_so_that_no_one_adds_up_rates_by_mistake(churn_lake, options):
+    with pytest.raises(ConfigError, match=r"the grains \['month'\]"):
+        metrics.query(churn_lake, "churn_rate,active_customers", **options)

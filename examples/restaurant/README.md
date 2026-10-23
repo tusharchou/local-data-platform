@@ -24,7 +24,7 @@ extra, `run.py` says which one to install and exits with 1. The design is in [PR
 |---|---|---|
 | 1. Excel to CSV | `ExcelToCSV` turns the sheet `Restaurants` of `restaurants.xlsx`, whose header is on row 2 below a title row, into `landing/restaurants.csv` | `config/restaurants_to_csv.json` |
 | 2. Ingest | `ExcelToIceberg` and `CSVToIceberg` load `raw.restaurants`, `raw.customers` and the first batch of `raw.orders` (January to June 2026). Each load passes its quality checks first. The orders are partitioned by `day(order_ts)` and `restaurant_id` | `config/*.json` |
-| 3. Model | `ldp dbt build` registers the raw tables as dbt sources, runs 7 models and 26 data tests, and publishes `silver.fct_orders`, `gold.churn_by_month` and `gold.revenue_by_restaurant_day` | `dbt/` |
+| 3. Model | `ldp dbt build` registers the raw tables as dbt sources, runs 7 models and 27 data tests, and publishes `silver.fct_orders`, `gold.churn_by_month` and `gold.revenue_by_restaurant_day` | `dbt/` |
 | 4. Churn | `ldp query` reads churn for February to June | |
 | 5. Batch 2 | July arrives with 5 late orders from June. The build upserts only those 108 rows of `fct_orders` and rebuilds the gold tables | |
 | 6. Time travel | `ldp query --snapshot` reads June's churn as it was published after batch 1, and now | |
@@ -35,7 +35,7 @@ The walkthrough prints each step. This is what it prints for the build, the chur
 ```text
 == 3. Model it with dbt: ldp dbt build
    $ ldp dbt build <workdir>/dbt
-   7 models and 26 data tests: 33 of 33 passed, in 10.9s
+   7 models and 27 data tests: 34 of 34 passed, in 10.9s
    published silver.fct_orders: upsert, 0 -> 745 rows
    published gold.churn_by_month: overwrite, 0 -> 5 rows
    published gold.revenue_by_restaurant_day: overwrite, 0 -> 534 rows
@@ -64,8 +64,9 @@ The walkthrough prints each step. This is what it prints for the build, the chur
 A customer churns **in the month they stop ordering**. For month M:
 
 - `customers_at_start` is the number of customers with an order in month M minus 1,
-- `churned` is the number of those customers with no order in month M, and
-- `churn_rate` is `churned` divided by `customers_at_start`, or null when `customers_at_start` is 0.
+- `churned` is the number of those customers with no order in month M,
+- `churn_rate` is `churned` divided by `customers_at_start`, or null when `customers_at_start` is 0, and
+- `active_customers` is the number of customers with an order in month M, which is 0 in a month with no order.
 
 The first month has no row, because there is no month before it. The months run from the first month with an order to
 the last, so a month in which nobody ordered still has a row. The definition is in the model
@@ -75,14 +76,44 @@ gold layer in 0.1.4 and the insights in 0.1.7, use the same convention.
 An example from [issue #47](https://github.com/tusharchou/local-data-platform/issues/47), which
 `tests/test_restaurant_warehouse.py` reproduces:
 
-| Orders | Month | `customers_at_start` | `churned` | `churn_rate` |
-|---|---|---|---|---|
-| C1, C2 and C3 in January | 2023-01 | no row | | |
-| C4 in February | 2023-02 | 3 | 3 | 1.0 |
-| C4 and C1 in March | 2023-03 | 1 | 0 | 0.0 |
-| C1 in April | 2023-04 | 2 | 1 | 0.5 |
-| nobody in May | 2023-05 | 1 | 1 | 1.0 |
-| C1 in June | 2023-06 | 0 | 0 | null |
+| Orders | Month | `customers_at_start` | `churned` | `churn_rate` | `active_customers` |
+|---|---|---|---|---|---|
+| C1, C2 and C3 in January | 2023-01 | no row | | | |
+| C4 in February | 2023-02 | 3 | 3 | 1.0 | 1 |
+| C4 and C1 in March | 2023-03 | 1 | 0 | 0.0 | 2 |
+| C1 in April | 2023-04 | 2 | 1 | 0.5 | 1 |
+| nobody in May | 2023-05 | 1 | 1 | 1.0 | 0 |
+| C1 in June | 2023-06 | 0 | 0 | null | 1 |
+
+### The churn as metrics
+
+`config/metrics.json` defines two metrics over `gold.churn_by_month`, so that a person, a report or an agent asks for the
+number and does not write the SQL again. `churn_rate` is `churned` over `customers_at_start`, in percent, and
+`active_customers` is the customers with an order in the month. The time dimension of the model allows only the grain
+`month`, because adding up months would count a customer once for each month, so a query by quarter or by year, or with no
+grain, is refused with the grains that are allowed. The restaurant example publishes no release, so the tables are read as
+they are now. This is what the command prints after the run, for every month of the model.
+
+```bash
+ldp metrics query ldp_demo/restaurant/config churn_rate,active_customers --grain month
+```
+
+```text
+month       churn_rate  active_customers
+----------  ----------  ----------------
+2026-02-01       23.5%                68
+2026-03-01       35.3%                71
+2026-04-01       33.8%                75
+2026-05-01       30.7%                74
+2026-06-01       21.6%                80
+2026-07-01       40.0%                64
+(6 rows)
+read the tables as they are now, because no release has been cut yet
+```
+
+A month that has no churn rate, such as June of the example of issue #47, prints `NULL`. `tests/test_restaurant_warehouse.py`
+checks that the metrics give the same value as the model for every month, for this data and for the example of issue #47,
+and `tests/test_metrics.py` runs the same file over the five rows of that example without dbt.
 
 ## Late orders, and how `fct_orders` loads
 
@@ -107,7 +138,7 @@ after batch 1 still holds the old number, and `ldp query --snapshot` reads it.
 | `raw.customers` | `config/customers.json`, overwrite | The 150 customers |
 | `raw.orders` | `config/orders.json`, append | Every order of every batch loaded, and nothing is removed |
 | `silver.fct_orders` | dbt, incremental, upsert on `order_id` | One row for each order, the latest version |
-| `gold.churn_by_month` | dbt, table, overwrite | Churn by month |
+| `gold.churn_by_month` | dbt, table, overwrite | Churn and active customers by month |
 | `gold.revenue_by_restaurant_day` | dbt, table, overwrite | Orders and revenue for each restaurant on each day |
 
 The other models, `stg_restaurants`, `stg_customers`, `stg_orders` and `customer_activity_monthly`, stay in dbt. A
@@ -121,6 +152,7 @@ the two gold models, an `owner` and a `grain` in their `meta`. LDP writes it int
 ldp snapshots ldp_demo/restaurant/config/churn_by_month.json
 ldp query ldp_demo/restaurant/config "SELECT c.month, c.churn_rate, count(o.order_id) AS orders FROM churn_by_month c JOIN fct_orders o ON date_trunc('month', o.order_ts) = c.month GROUP BY ALL ORDER BY c.month"
 ldp query ldp_demo/restaurant/config/churn_by_month.json "SELECT * FROM churn_by_month WHERE month = DATE '2026-06-01'" --snapshot SNAPSHOT_ID
+ldp metrics query ldp_demo/restaurant/config churn_rate,active_customers --grain month
 ldp runs ldp_demo/restaurant/config/fct_orders.json
 ldp dbt docs ldp_demo/restaurant/dbt --serve
 ldp mcp --config ldp_demo/restaurant/config
@@ -128,10 +160,11 @@ ldp mcp --config ldp_demo/restaurant/config
 
 ## The tests
 
-`dbt/models/schema.yml` has 26 data tests. Every key has a `unique` and a `not_null` test, except `stg_orders.order_id`:
-the raw orders keep every version of an order, so it is not unique there, and `fct_orders` is where it must be.
-Orders have `relationships` tests to customers and to restaurants, `channel` has `accepted_values`, and a singular test
-in `dbt/tests/` checks that `churn_rate` is between 0 and 1. All of them pass on the generated data.
+`dbt/models/schema.yml` has 27 data tests. Every key has a `unique` and a `not_null` test, except `stg_orders.order_id`,
+because the raw orders keep every version of an order, so it is not unique there, and `fct_orders` is where it must be.
+Orders have `relationships` tests to customers and to restaurants, `channel` has `accepted_values`, `active_customers` is
+`not_null`, and a singular test in `dbt/tests/` checks that `churn_rate` is between 0 and 1. All of them pass on the
+generated data.
 
 The quality checks of the ingest configs run before a batch is written, and look at one file: its types, its channels
 and whether a key is missing. dbt's tests look at everything that has been loaded. A batch that has the same new order

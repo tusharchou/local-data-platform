@@ -12,10 +12,12 @@ from local_data_platform import Config
 from local_data_platform.exceptions import ConfigError
 from local_data_platform.spec import (
     API_VERSION,
+    DEFAULT_KIND,
     add_cli,
     canonical_spec,
     idempotency_key,
     json_schema,
+    kind_of_file,
     parse_window,
     plan,
     spec_hash,
@@ -24,7 +26,10 @@ from local_data_platform.spec import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-EXAMPLE_CONFIGS = sorted((REPO_ROOT / "examples").glob("*/config/*.json"))
+# Dataset configs only. A folder of example configs also holds files of other kinds, such as the metrics of the
+# restaurant example. A file whose kind cannot be read stays in the list, so that the test reports it.
+EXAMPLE_CONFIGS = sorted(path for path in (REPO_ROOT / "examples").glob("*/config/*.json")
+                         if kind_of_file(path) in (DEFAULT_KIND, None))
 
 SPEC = {
     "apiVersion": "ldp/v1",

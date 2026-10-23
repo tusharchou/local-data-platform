@@ -25,6 +25,11 @@ def test_every_recipe_runs_in_order(tmp_path):
     assert "[{'city': 'BKK', 'revenue': 25.0}, {'city': 'NYC', 'revenue': 40.0}]" in out
     assert "rides_csv: read 3 rows, wrote 3 rows" in out
     assert (tmp_path / "exports" / "rides.csv").is_file()
+    # The churn recipe: the churn of the restaurant example for the orders of issue #47, and then the number that the
+    # pandas snippet of that issue gives for the same orders, which counts inactive rows and not lost customers.
+    assert "\n".join(["2023-02-01 3 3 1.0", "2023-03-01 1 0 0.0", "2023-04-01 2 1 0.5", "2023-05-01 1 1 1.0",
+                      "2023-06-01 0 0 None", "[25.0, 75.0, 50.0, 75.0, 100.0, 75.0]"]) in out
+    assert "2023-01-01" not in out, "January, the first month, has no row"
     # The Excel recipe: a sheet below a title row, as a CSV in the folder that stands for Google Drive.
     assert (tmp_path / "drive" / "sales.csv").read_text().splitlines() == [
         '"day","dish","orders","revenue"',

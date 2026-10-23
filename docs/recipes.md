@@ -196,3 +196,108 @@ print(open(f"{drive}/sales.csv").read())
 
 Dates become timestamps, whole numbers `int64` and other numbers `float64`. To load the sheet into an Iceberg table
 instead, make the target an Iceberg block, as in [the quickstart](quickstart.md).
+
+## Monthly churn from an orders table
+
+Needs the `duckdb` extra, which `pip install "local-data-platform[duckdb]"` installs. A customer churns in the month they
+stop ordering. For a month M, `customers_at_start` is the number of customers with an order in the month before, `churned` is how many of
+them have no order in month M, and `churn_rate` is the second divided by the first, with no value when nobody was there to
+lose. The first month has no row, because there is no month before it, and the months run from the first order to the
+last, so a month with no order has a row. This is the definition of `churn_by_month` in the restaurant example, which
+computes it with dbt, and the one that its metrics `churn_rate` and `active_customers` report.
+
+```python
+import datetime as dt
+
+import pyarrow as pa
+
+from local_data_platform.engine.duckdb import DuckDBEngine
+
+# C1, C2 and C3 order in January, C4 in February, C4 and C1 in March, C1 in April and in June.
+placed = [("C1", dt.date(2023, 1, 5)), ("C2", dt.date(2023, 1, 12)), ("C3", dt.date(2023, 1, 20)),
+          ("C4", dt.date(2023, 2, 3)), ("C4", dt.date(2023, 3, 2)), ("C1", dt.date(2023, 3, 15)),
+          ("C1", dt.date(2023, 4, 10)), ("C1", dt.date(2023, 6, 5))]
+orders = pa.table({"order_id": [f"O{n}" for n in range(1, len(placed) + 1)],
+                   "customer_id": [customer for customer, _ in placed],
+                   "ordered_on": [day for _, day in placed]})
+
+ACTIVITY = """
+WITH activity AS (   -- one row for each customer and each month in which they ordered
+    SELECT DISTINCT customer_id, CAST(date_trunc('month', ordered_on) AS DATE) AS month FROM orders
+),
+months AS (          -- every month from the first order to the last
+    SELECT CAST(month AS DATE) AS month
+    FROM (SELECT min(month) AS first_month, max(month) AS last_month FROM activity),
+         generate_series(first_month, last_month, INTERVAL 1 MONTH) AS series(month)
+)"""
+
+CHURN = ACTIVITY + """,
+counts AS (
+    SELECT months.month,
+           count(previous.customer_id) AS customers_at_start,
+           count(previous.customer_id) FILTER (WHERE kept.customer_id IS NULL) AS churned
+    FROM months
+    LEFT JOIN activity AS previous ON previous.month = CAST(months.month - INTERVAL 1 MONTH AS DATE)
+    LEFT JOIN activity AS kept ON kept.customer_id = previous.customer_id AND kept.month = months.month
+    WHERE months.month > (SELECT min(month) FROM activity)   -- the first month has no month before it
+    GROUP BY months.month
+)
+SELECT month, customers_at_start, churned, CAST(churned AS DOUBLE) / NULLIF(customers_at_start, 0) AS churn_rate
+FROM counts ORDER BY month
+"""
+
+# What the snippet in issue #47 computes. It needs a status for each customer in each month, so make that table.
+INACTIVE = ACTIVITY + """,
+status AS (
+    SELECT customers.customer_id, months.month,
+           CASE WHEN activity.customer_id IS NULL THEN 'inactive' ELSE 'active' END AS status
+    FROM (SELECT DISTINCT customer_id FROM orders) AS customers
+    CROSS JOIN months
+    LEFT JOIN activity ON activity.customer_id = customers.customer_id AND activity.month = months.month
+)
+SELECT month, 100.0 * count(*) FILTER (WHERE status = 'inactive') / count(*) AS churn_rate
+FROM status GROUP BY month ORDER BY month
+"""
+
+with DuckDBEngine() as duck:
+    duck.register_arrow(orders, "orders")
+    for row in duck.query(CHURN).to_pylist():
+        print(row["month"], row["customers_at_start"], row["churned"], row["churn_rate"])
+    print([round(row["churn_rate"], 1) for row in duck.query(INACTIVE).to_pylist()])
+```
+
+<!-- docs-runner: output -->
+```text
+2023-02-01 3 3 1.0
+2023-03-01 1 0 0.0
+2023-04-01 2 1 0.5
+2023-05-01 1 1 1.0
+2023-06-01 0 0 None
+[25.0, 75.0, 50.0, 75.0, 100.0, 75.0]
+```
+
+All three customers of January are gone in February, so February is 3 of 3. C4 and C1 order in March, so nobody of
+February is lost and March is 0 of 1. Nobody orders in May, so June has no customer at the start and no churn rate. The
+last line has other numbers for the same orders.
+
+The pandas snippet in [issue #47](https://github.com/tusharchou/local-data-platform/issues/47) gives those other numbers,
+because it counts inactive rows and not lost customers. Its churn rate for a month is the share of the customers in the
+month whose status is inactive, and it needs a status for each customer in each month, which an orders table does not
+have, so `INACTIVE` makes the table first. Run on that table, the snippet itself gives the same six numbers as the last
+line. They differ from the churn above in three ways.
+
+- A customer who stays away is counted again in every month. C2 and C3 ordered only in January, so the snippet counts them
+  in each of the five months after it, and the churn counts them once, in February, the month they stopped.
+- A customer who has not ordered yet is counted. C4 is inactive in January, before the first order, and the snippet calls
+  that churn in a month that has no churn.
+- It divides by all four customers in every month. The churn rate divides by the customers who ordered in the month
+  before, who are 1 in March.
+
+A customer who stops ordering leaves no row in an orders table, so a count of inactive rows never sees the lost customers
+unless someone makes the rows. The restaurant example reports the churn above as the metric `churn_rate`, and the
+customers with an order in the month as `active_customers`. Both are only by month, because adding up the months would
+count a customer once for each month. After `make demo-warehouse`, this prints them.
+
+```bash
+ldp metrics query ldp_demo/restaurant/config churn_rate,active_customers --grain month
+```

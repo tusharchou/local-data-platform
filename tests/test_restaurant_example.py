@@ -6,6 +6,7 @@ dbt and checks the numbers it prints.
 
 import csv
 import datetime as dt
+import json
 import os
 import re
 import sys
@@ -19,7 +20,7 @@ from local_data_platform.exceptions import DataQualityError, EngineNotFound
 from local_data_platform.format.excel import Excel
 from local_data_platform.pipeline.builders import iceberg_from_config
 from local_data_platform.pipeline.registry import create_pipeline
-from local_data_platform.spec import plan
+from local_data_platform.spec import plan, validate_spec
 from tests.support import load_example_module
 
 pytest.importorskip("openpyxl")
@@ -297,7 +298,7 @@ def test_a_batch_with_an_unknown_channel_is_stopped_by_the_ingest_checks(workdir
 
 def test_the_work_folder_gets_the_configs_the_dbt_project_and_the_workflow_files(workdir):
     assert (workdir / run.MARKER).is_file()
-    assert sorted(path.stem for path in (workdir / "config").glob("*.json")) == sorted(INGEST_CONFIGS)
+    assert sorted(path.stem for path in (workdir / "config").glob("*.json")) == sorted([*INGEST_CONFIGS, "metrics"])
     assert (workdir / "dbt" / "ldp_dbt.json").is_file() and (workdir / "dbt" / "models" / "schema.yml").is_file()
     assert not (workdir / "dbt" / "target").exists()
     assert (workdir / "workflows" / "daily_orders.json").is_file()
@@ -453,10 +454,30 @@ def test_the_churn_model_and_its_description_say_what_churn_is():
     for words in ("customers_at_start is the number of customers with an order in month M minus 1",
                   "churned is the number of those customers with no order in month M",
                   "churn_rate is churned divided by customers_at_start, or null when customers_at_start is 0",
+                  "active_customers is the number of customers with an order in month M",
                   "The first month has no row"):
         assert words in " ".join(description.split())
     sql = model_sql("churn_by_month")
     assert "month a customer stops ordering" in sql and "when customers_at_start = 0 then null" in sql
+
+
+def test_the_churn_metrics_are_defined_over_the_churn_table_and_only_by_month():
+    spec = json.loads((EXAMPLE / "config" / "metrics.json").read_text())
+
+    assert [str(error) for error in validate_spec(spec)] == []
+    [semantic] = spec["semantic_models"]
+    assert semantic["table"] == "gold.churn_by_month"
+    assert semantic["time_dimension"] == {"column": "month", "grains": ["month"]}, "a sum over months is not a churn"
+    measures = {item["name"]: (item["agg"], item["expr"]) for item in semantic["measures"]}
+    metrics = {item["name"]: item for item in spec["metrics"]}
+    assert list(metrics) == ["churn_rate", "active_customers"]
+    rate = metrics["churn_rate"]
+    assert (rate["type"], rate["format"]) == ("ratio", "percent")
+    assert (measures[rate["numerator"]], measures[rate["denominator"]]) == (("sum", "churned"),
+                                                                            ("sum", "customers_at_start"))
+    active = metrics["active_customers"]
+    assert (active["type"], measures[active["measure"]]) == ("simple", ("sum", "active_customers"))
+    assert all(item["description"] for item in (rate, active))
 
 
 def test_the_schema_tests_cover_every_key_the_relationships_and_the_channels():
