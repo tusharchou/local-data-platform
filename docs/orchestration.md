@@ -8,7 +8,7 @@
 
 ## The story
 
-The restaurant chain's system exports its orders every night, as two CSV files, one for the orders of the day and one for their lines. Someone has to load the two files into the lakehouse every night, check them, build the models that read them and tidy up. Three things go wrong sooner or later. A file has a row that breaks a rule. A night is loaded twice because someone ran the job again to be safe. The laptop was off, and a night was not loaded at all.
+The restaurant chain's system exports its orders every night, as two CSV files, one for the orders of the day and one for their lines. Someone has to load the two files into the lakehouse every night, check them, build the models that read them, release the gold table and tidy up. Three things go wrong sooner or later. A file has a row that breaks a rule. A night is loaded twice because someone ran the job again to be safe. The laptop was off, and a night was not loaded at all.
 
 The chapter has eight parts, and they are what a small data team does about it.
 
@@ -50,24 +50,27 @@ python ../../examples/restaurant/generate.py --out exports
 Wrote 22 files to exports: 6 restaurants, 150 customers, 883 orders in 9 batches, 2195 order lines and 94 reviews
 ```
 
-This guide uses the restaurants and customers, which change rarely, and the seven nightly drops from 1 to 7 August 2026. A drop is an orders file and an order lines file. Each line carries the time of its order, as a restaurant system would export it, so that a window can pick the lines of a day.
+This guide uses the restaurants, the customers, the menu and the reviews, which change rarely, and the seven nightly drops from 1 to 7 August 2026. A drop is an orders file and an order lines file. Each line carries the time of its order, as a restaurant system would export it, so that a window can pick the lines of a day.
 
 | File | Rows | What it is |
 |---|---|---|
-| `restaurants.xlsx` and `customers.csv` | 6 and 150 | The two tables the models join to |
+| `restaurants.xlsx`, `customers.csv`, `menu_items.csv` and `reviews.csv` | 6, 150, 36 and 94 | The four small tables the models read |
 | `orders_2026-08-01.csv` to `orders_2026-08-07.csv` | 3, 4, 7, 7, 1, 3 and 5 | The orders of each night |
 | `order_lines_2026-08-01.csv` to `order_lines_2026-08-07.csv` | 8, 10, 20, 16, 4, 11 and 13 | The lines of each night |
 
-Make the folders, copy in the configs, the dbt project and the workflow files of the example, and load the two small tables once, as in the first part of the warehousing guide.
+Make the folders, copy in the configs, the dbt project and the workflow files of the example, and load the four small tables once, as in the first part of the warehousing guide. The file `metrics.json` describes the gold tables of the whole data mart. The workflow builds one of them, and a gold build holds the metrics of its folder to the tables that exist, so take the file out of this folder.
 
 ```bash
 mkdir landing drops
-cp exports/restaurants.xlsx exports/customers.csv landing/
+cp exports/restaurants.xlsx exports/customers.csv exports/menu_items.csv exports/reviews.csv landing/
 cp -R ../../examples/restaurant/config config
+rm config/metrics.json
 cp -R ../../examples/restaurant/dbt dbt
 cp -R ../../examples/restaurant/workflows workflows
 ldp run config/restaurants.json
 ldp run config/customers.json
+ldp run config/menu_items.json
+ldp run config/reviews.json
 ```
 
 <!-- docs-runner: output -->
@@ -75,6 +78,10 @@ ldp run config/customers.json
 restaurants: read 6 rows, wrote 6 rows in ...s (quality: 4 of 4 checks passed)
 ...
 customers: read 150 rows, wrote 150 rows in ...s (quality: 4 of 4 checks passed)
+...
+menu_items: read 36 rows, wrote 36 rows in ...s (quality: 5 of 5 checks passed)
+...
+reviews: read 94 rows, wrote 94 rows in ...s (quality: 5 of 5 checks passed)
 ```
 
 The restaurant system exports one night at a time. Three nights have arrived, 1 to 3 August. Copy them into `drops`, the folder the workflow reads. Then make the third night go wrong. In its first order, the channel becomes `drive_thru`, which the orders config does not accept.
@@ -126,7 +133,7 @@ The key is the whole idea. A run that publishes its rows also writes the key int
 
 ## Part 2. A workflow file
 
-A night has more than one step. The orders and their lines are loaded, the models read them, and old snapshots are tidied away. A workflow file declares the steps and what each waits for. This is `workflows/daily_orders.json`.
+A night has more than one step. The orders and their lines are loaded, the models read them, the gold table is checked and released, and old snapshots are tidied away. A workflow file declares the steps and what each waits for. This is `workflows/daily_orders.json`.
 
 ```json
 {
@@ -144,11 +151,16 @@ A night has more than one step. The orders and their lines are loaded, the model
     {
       "id": "models",
       "depends_on": ["orders", "order_lines"],
-      "dbt": {"project": "../dbt", "select": ["+revenue_by_restaurant_day", "stg_customers"]}
+      "dbt": {"project": "../dbt", "select": ["+gold_daily_sales", "stg_customers"]}
+    },
+    {
+      "id": "gold",
+      "depends_on": ["models"],
+      "gold": {"dir": "../config"}
     },
     {
       "id": "tidy",
-      "depends_on": ["models"],
+      "depends_on": ["gold"],
       "maintain": {"config": "orders.json", "expire": 7, "apply": true}
     }
   ]
@@ -164,9 +176,9 @@ The file says four things.
 | `metadata.retries` | How often a task that fails with an error that another try may fix is run again. `max_attempts` counts every try, so 2 is one retry, and `delay_s` is the longest wait before it. A task can have `retries` of its own |
 | `tasks` | The steps. Each has an `id`, an optional `depends_on`, and one kind. The kinds are `pipeline` (a dataset config), `dbt` (a dbt project, built for the window), `maintain` (the options of `ldp maintain`) and `gold` (the gold tables of a folder, built for the window, with a release cut at the end). Paths are relative to the workflow file |
 
-Here the orders and their lines wait for nothing, the models wait for both, and the tidy task waits for the models. The `select` of the dbt task builds the daily revenue model, what it reads, and `stg_customers`, which a data test of `fct_orders` reads, and it runs their data tests. A model that fails a data test blocks the task, as a quality check blocks a pipeline. Tasks run one at a time, in dependency order.
+Here the orders and their lines wait for nothing, the models wait for both, the gold task waits for the models, and the tidy task waits for the gold task. The `select` of the dbt task builds the daily sales model, what it reads, and `stg_customers`, which a data test of `fct_orders` reads, and it runs their data tests. A model that fails a data test blocks the task, as a quality check blocks a pipeline. Tasks run one at a time, in dependency order.
 
-A `gold` task, `{"id": "gold", "depends_on": ["models"], "gold": {"dir": "config"}}`, builds the gold tables of a folder for the window, in the order that their inputs say, and cuts a release when every table passed its gate, so that readers of the gold layer see tables from one build. It runs each gold config as a pipeline task runs a config, so the same window again writes nothing and cuts no second release. It is described in [the gold releases design](design/v0_1_4.md#g3-gold-releases).
+The `gold` task builds the gold tables of a folder for the window, in the order that their inputs say, and cuts a release when every table passed its gate, so that readers of the gold layer see tables from one build. The folder is `../config`, where the dbt project publishes the configs of its models. A table that dbt built is checked and not built again. The task runs each gold config as a pipeline task runs a config, so the same window again writes nothing and cuts no second release. It is described in [the gold releases design](design/v0_1_4.md#g3-gold-releases).
 
 `metadata` can also have `catchup` and `start`, which Part 7 uses, and `observability`, which adds event sinks to the ledger. `ldp workflow plan` checks the file and every config it names, and prints the tasks in the order they run with the key of each pipeline for a window.
 
@@ -179,16 +191,17 @@ ldp workflow plan workflows/daily_orders.json --window 2026-08-01/2026-08-02
 workflow  daily_orders
 ...
 window    2026-08-01T00:00:00Z/2026-08-02T00:00:00Z
-tasks     4
+tasks     5
 ...
 1 ... orders ... pipeline ... 847cb7c1bd0b ...
 2 ... order_lines ... pipeline ... 4a19d60bf8a5 ...
 3 ... models ... dbt ... orders, order_lines ...
-4 ... tidy ... maintain ... models ...
-(4 rows)
+4 ... gold ... gold ... models ...
+5 ... tidy ... maintain ... gold ...
+(5 rows)
 ```
 
-The key of the orders task is the key that `ldp plan` printed a moment ago.
+The key of the orders task is the key that `ldp plan` printed a moment ago. The plan also warns, on standard error, that `../config` has no gold config yet. dbt writes the config of a model when it publishes it, so the folder has none before the first run, and the warning goes away after it.
 
 ## Part 3. Run one day
 
@@ -205,14 +218,17 @@ workflow daily_orders  run ...  window 2026-08-01T00:00:00Z/2026-08-02T00:00:00Z
 orders ... pipeline ... published ... 3 ... 3 ...
 order_lines ... pipeline ... published ... 8 ... 8 ...
 models ... dbt ... succeeded ...
+gold ... gold ... succeeded ...
 tidy ... maintain ... succeeded ...
-(4 rows)
+(5 rows)
 models published silver.fct_orders: upsert, 0 -> 3 rows, ...
-models published gold.revenue_by_restaurant_day: overwrite, 0 -> 3 rows, ...
-succeeded: 2 published, 2 succeeded in ...
+models published gold.gold_daily_sales: overwrite, 0 -> 3 rows, ...
+gold checked gold.gold_daily_sales: 3 rows, ...
+gold cut release r1
+succeeded: 2 published, 3 succeeded in ...
 ```
 
-The orders and their lines were written once, under their keys. The models were built, and the two models that are marked for publishing were written to Iceberg as the warehousing guide describes. Run the same command again.
+The orders and their lines were written once, under their keys. The models were built, and the two models that are marked for publishing were written to Iceberg as the warehousing guide describes. The gold task found the table that dbt wrote, ran its gate on it, and cut release r1, so that a reader of the gold layer sees that table at that snapshot. Run the same command again.
 
 ```bash
 ldp workflow run workflows/daily_orders.json --window 2026-08-01/2026-08-02
@@ -223,12 +239,15 @@ ldp workflow run workflows/daily_orders.json --window 2026-08-01/2026-08-02
 orders ... pipeline ... skipped_duplicate ...
 order_lines ... pipeline ... skipped_duplicate ...
 models ... dbt ... skipped_duplicate ...
+gold ... gold ... skipped_duplicate ...
 tidy ... maintain ... succeeded ...
-(4 rows)
-succeeded: 3 skipped_duplicate, 1 succeeded in ...
+(5 rows)
+gold checked gold.gold_daily_sales: 3 rows, ...
+gold cut no release, and r1 is current
+succeeded: 4 skipped_duplicate, 1 succeeded in ...
 ```
 
-Nothing was read and nothing was written. The two pipelines found their keys. The dbt task has no key, because a model is a function of its inputs, so the runner looks at the ledger instead. It skips a build when the last build of that window succeeded, the project is the same, and no task before it wrote anything in this run.
+Nothing was read and nothing was written. The two pipelines found their keys. The dbt task has no key, because a model is a function of its inputs, so the runner looks at the ledger instead. It skips a build when the last build of that window succeeded, the project is the same, and no task before it wrote anything in this run. The gold task checked the table again, found it where release r1 has it, and cut no second release.
 
 ## Part 4. A backfill, a bad row and a fix
 
@@ -259,7 +278,7 @@ ldp backfill workflows/daily_orders.json --from 2026-08-01 --to 2026-08-04 2>&1 
 [2/3] 2026-08-02T00:00:00Z/2026-08-03T00:00:00Z  published
 [3/3] 2026-08-03T00:00:00Z/2026-08-04T00:00:00Z  blocked
 ...
-orders: DataQualityError: 1 of 5 data quality checks failed:
+orders: DataQualityError: 1 of 7 data quality checks failed:
 - accepted_values(channel): 1 of 7 rows have a channel outside ['dine_in', 'takeaway', 'delivery']; e.g. ['drive_thru']
 ...
 backfill daily_orders: 1 published, 1 skipped, 1 blocked, 0 failed in ...
@@ -272,20 +291,21 @@ The first day was skipped without being read, the second was loaded, and the thi
 The ledger next to the workflow file records every run. `ldp runs` lists them, newest first. This is the third night.
 
 ```bash
-ldp runs workflows/.ldp/events.jsonl --limit 5
+ldp runs workflows/.ldp/events.jsonl --limit 6
 ```
 
 <!-- docs-runner: output -->
 ```text
 ... tidy ... upstream_failed ...
+... gold ... upstream_failed ...
 ... models ... upstream_failed ...
 ... order_lines ... published ...
 ... orders ... blocked_quality ...
 ... daily_orders ... blocked_quality ...
-(5 rows)
+(6 rows)
 ```
 
-The orders were blocked. The order lines did not depend on them, so they were loaded. The models and the tidy task waited for the orders and did not run, so they are `upstream_failed`. A failed or blocked task stops what depends on it, and the rest still runs.
+The orders were blocked. The order lines did not depend on them, so they were loaded. The models, the gold task and the tidy task waited for the orders and did not run, so they are `upstream_failed`, and no release was cut for that night. A failed or blocked task stops what depends on it, and the rest still runs.
 
 Now the restaurant system sends the third night again, with the right channel. Run the same command. There is no flag for resuming.
 
@@ -301,7 +321,7 @@ ldp backfill workflows/daily_orders.json --from 2026-08-01 --to 2026-08-04
 backfill daily_orders: 1 published, 2 skipped, 0 blocked, 0 failed in ...
 ```
 
-Only the third night ran. Its orders were published, its order lines were found by their key, and the models and the tidy task ran, because they had not run for that night yet. A third run does nothing at all.
+Only the third night ran. Its orders were published, its order lines were found by their key, and the models, the gold task and the tidy task ran, because they had not run for that night yet. A third run does nothing at all.
 
 ```bash
 ldp backfill workflows/daily_orders.json --from 2026-08-01 --to 2026-08-04
@@ -387,6 +407,7 @@ ldp workflow run workflows/daily_orders.json --window 2026-08-04/2026-08-05 2>&1
 orders ... pipeline ... failed ...
 order_lines ... pipeline ... failed ...
 models ... dbt ... upstream_failed ...
+gold ... gold ... upstream_failed ...
 tidy ... maintain ... upstream_failed ...
 ...
 exit status 1
@@ -429,7 +450,7 @@ tick 2026-08-05T02:05:00Z: 1 workflow, 1 window due, 1 published, 0 skipped, 0 b
 The workflow run went on with its second attempt, and each pipeline task went on with its third. The earlier tries are in the ledger, and the table has the night once.
 
 ```bash
-ldp runs workflows/.ldp/events.jsonl --attempts --limit 14
+ldp runs workflows/.ldp/events.jsonl --attempts --limit 20
 ```
 
 <!-- docs-runner: output -->
@@ -564,7 +585,7 @@ print(result.status, result.exit_code, result.counts())
 
 <!-- docs-runner: output -->
 ```text
-succeeded 0 {'published': 2, 'succeeded': 2}
+succeeded 0 {'published': 2, 'succeeded': 3}
 ```
 
 A wrapper only has to turn a result that is not a success into a failure of its own kind. Leave the retries to the workflow, which retries what another try may fix, and to the orchestrator for the rest.

@@ -14,7 +14,7 @@ The chapter has three parts, and they are what a small data team does with expor
 
 1. Load them into Iceberg tables, with checks, and query them.
 2. Put a dbt project on top of the tables, and publish a model of your own back to Iceberg.
-3. Use the finished restaurant project to get monthly customer churn. Then load the second batch, see what changes, and look at a table as it was.
+3. Use the finished restaurant project to get monthly customer churn and the gold tables of a data mart. Then load the second batch, see what changes, and look at a table as it was.
 
 ## Install
 
@@ -58,7 +58,7 @@ The other files are used by later milestones of the [roadmap](roadmap.md). From 
 
 ## Part 1. Load the raw tables
 
-A restaurant system drops its exports into a folder. Make that folder, which is called `landing`, and put the first files in it. The orders config reads `landing/orders.csv`, so batch 1 goes there under that name. Then copy the example's configs. There is one JSON config for each dataset, and `metrics.json`, which defines numbers and not a dataset. Part 3 uses it.
+A restaurant system drops its exports into a folder. Make that folder, which is called `landing`, and put the first files in it. The orders config reads `landing/orders.csv`, so batch 1 goes there under that name. Then copy the example's configs. There is one JSON config for each dataset, and `metrics.json`, which defines numbers and not a dataset. Part 3 loads the menu, the order lines and the reviews with their configs, and uses the metrics.
 
 ```bash
 mkdir landing
@@ -72,10 +72,13 @@ ls config landing
 ```text
 config:
 customers.json
+menu_items.json
 metrics.json
+order_lines.json
 orders.json
 restaurants.json
 restaurants_to_csv.json
+reviews.json
 
 landing:
 customers.csv
@@ -167,7 +170,7 @@ restaurants: read 6 rows, wrote 6 rows in ...s (quality: 4 of 4 checks passed)
 customers: read 150 rows, wrote 150 rows in ...s (quality: 4 of 4 checks passed)
   target raw.customers: overwrite, 0 -> 150 rows, snapshot ...
 ...
-orders: read 745 rows, wrote 745 rows in ...s (quality: 5 of 5 checks passed)
+orders: read 745 rows, wrote 745 rows in ...s (quality: 7 of 7 checks passed)
   target raw.orders: append, 0 -> 745 rows, snapshot ...
 ...
 ```
@@ -439,26 +442,56 @@ find restaurant_dbt/models -name "*.sql" | sort
 ```text
 restaurant_dbt/models/gold/churn_by_month.sql
 restaurant_dbt/models/gold/customer_activity_monthly.sql
-restaurant_dbt/models/gold/revenue_by_restaurant_day.sql
+restaurant_dbt/models/gold/gold_daily_sales.sql
+restaurant_dbt/models/gold/gold_menu_item_weekly.sql
+restaurant_dbt/models/gold/gold_restaurant_scorecard.sql
 restaurant_dbt/models/silver/fct_orders.sql
 restaurant_dbt/models/staging/stg_customers.sql
+restaurant_dbt/models/staging/stg_menu_items.sql
+restaurant_dbt/models/staging/stg_order_lines.sql
 restaurant_dbt/models/staging/stg_orders.sql
 restaurant_dbt/models/staging/stg_restaurants.sql
+restaurant_dbt/models/staging/stg_reviews.sql
 ```
 
-It has seven models.
+It has twelve models.
 
 | Model | What it is |
 |---|---|
-| `stg_restaurants`, `stg_customers`, `stg_orders` | Views that tidy the three raw tables. `stg_orders` keeps every version of an order, because the raw orders are append-only |
+| `stg_restaurants`, `stg_customers`, `stg_menu_items`, `stg_order_lines`, `stg_orders`, `stg_reviews` | Views that tidy the six raw tables. `stg_orders` keeps every version of an order, because the raw orders are append-only, and `stg_order_lines` gives each line a key of its own |
 | `fct_orders` | One row for each order, the latest version of it. It is incremental, and it is published to the namespace `silver` |
 | `customer_activity_monthly` | One row for each customer and each month in which they ordered |
 | `churn_by_month` | The share of customers who stop ordering in each month, and how many customers ordered. It is published to `gold` |
-| `revenue_by_restaurant_day` | Orders and revenue for each restaurant on each day. It is published to `gold` |
+| `gold_daily_sales` | Orders, revenue and the average ticket for each restaurant on each day. It is published to `gold` |
+| `gold_menu_item_weekly` | What each menu item sold in each week. It is published to `gold` |
+| `gold_restaurant_scorecard` | The orders and the revenue of the last 30 days, the rating and the rank in its city for each restaurant. It is published to `gold` |
 
-The two gold models are gold tables, so each names its `owner` and `grain` in its `meta`, and `schema.yml` describes every column of them.
+The four gold models are gold tables, so each names its `owner` and `grain` in its `meta`, and `schema.yml` describes every column of them. Each also has a gate, a list of checks in its `meta` that run before the table is written, and a table that fails its gate is not written.
 
-Build it. dbt runs the seven models and 27 data tests, and LDP publishes the three models that carry the mark.
+The project reads three more raw tables than the first two parts loaded, the menu, the order lines and the reviews. Load them with their configs. The order lines come in batches, like the orders, and the config reads `landing/order_lines.csv`.
+
+```bash
+cp exports/menu_items.csv exports/reviews.csv landing/
+cp exports/order_lines_batch1.csv landing/order_lines.csv
+ldp run config/menu_items.json
+ldp run config/reviews.json
+ldp run config/order_lines.json
+```
+
+<!-- docs-runner: output -->
+```text
+menu_items: read 36 rows, wrote 36 rows in ...s (quality: 5 of 5 checks passed)
+  target raw.menu_items: overwrite, 0 -> 36 rows, snapshot ...
+...
+reviews: read 94 rows, wrote 94 rows in ...s (quality: 5 of 5 checks passed)
+  target raw.reviews: overwrite, 0 -> 94 rows, snapshot ...
+...
+order_lines: read 1829 rows, wrote 1829 rows in ...s (quality: 4 of 4 checks passed)
+  target raw.order_lines: append, 0 -> 1829 rows, snapshot ...
+...
+```
+
+Build it. dbt runs the twelve models and 41 data tests, and LDP publishes the five models that carry the mark.
 
 ```bash
 ldp dbt build restaurant_dbt
@@ -467,19 +500,26 @@ ldp dbt build restaurant_dbt
 <!-- docs-runner: output -->
 ```text
 ...
-... Found 7 models, 27 data tests, 3 sources, ...
+... Found 12 models, 41 data tests, 6 sources, ...
 ...
-... Done. PASS=34 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=34
+... Done. PASS=53 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=53
 ldp: published silver.fct_orders: upsert, 0 -> 745 rows, snapshot ...
 ldp: published gold.churn_by_month: overwrite, 0 -> 5 rows, snapshot ...
-ldp: published gold.revenue_by_restaurant_day: overwrite, 0 -> 534 rows, snapshot ...
+...
+ldp: published gold.gold_daily_sales: overwrite, 0 -> 534 rows, snapshot ...
+...
+ldp: published gold.gold_menu_item_weekly: overwrite, 0 -> 795 rows, snapshot ...
+...
+ldp: published gold.gold_restaurant_scorecard: overwrite, 0 -> 6 rows, snapshot ...
 ```
 
-The three tables have configs in `config`, next to the ones for the raw tables, because this project's `ldp_dbt.json` publishes there. So one folder of configs now holds the raw, silver and gold tables, and one query can join them.
+Below each gold table, LDP printed its gate, such as `Data quality: 5 of 5 checks passed`, with a line for each check. The checks ran on the rows before they were written, and a table that fails one is not written.
+
+The five tables have configs in `config`, next to the ones for the raw tables, because this project's `ldp_dbt.json` publishes there. So one folder of configs now holds the raw, silver and gold tables, and one query can join them.
 
 ### Tests
 
-The 27 data tests are declared in `models/schema.yml`. A key must be unique and not null. An order must belong to a restaurant that exists, so its `restaurant_id` has to be in `stg_restaurants`. The channel must be one of three values.
+The 41 data tests are declared in `models/schema.yml`. A key must be unique and not null. An order must belong to a restaurant that exists, so its `restaurant_id` has to be in `stg_restaurants`. The channel must be one of three values.
 
 ```yaml
       - name: order_id
@@ -521,7 +561,7 @@ ldp dbt test restaurant_dbt
 <!-- docs-runner: output -->
 ```text
 ...
-... Done. PASS=27 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=27
+... Done. PASS=41 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=41
 ```
 
 ### Churn
@@ -595,23 +635,33 @@ sleep 1
 date -u +"%Y-%m-%d %H:%M:%S" > batch_1_published.txt
 ```
 
-Now replace the file that the orders config reads with batch 2, load it, and build again.
+Now replace the files that the orders and the order lines configs read with batch 2, load them, and build again.
 
 ```bash
 cp exports/orders_batch2.csv landing/orders.csv
+cp exports/order_lines_batch2.csv landing/order_lines.csv
 ldp run config/orders.json
+ldp run config/order_lines.json
 ldp dbt build restaurant_dbt
 ```
 
 <!-- docs-runner: output -->
 ```text
-orders: read 108 rows, wrote 108 rows in ...s (quality: 5 of 5 checks passed)
+orders: read 108 rows, wrote 108 rows in ...s (quality: 7 of 7 checks passed)
   target raw.orders: append, 745 -> 853 rows, snapshot ...
 ...
-... Done. PASS=34 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=34
+order_lines: read 284 rows, wrote 284 rows in ...s (quality: 4 of 4 checks passed)
+  target raw.order_lines: append, 1829 -> 2113 rows, snapshot ...
+...
+... Done. PASS=53 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=53
 ldp: published silver.fct_orders: upsert, 745 -> 853 rows, snapshot ...
 ldp: published gold.churn_by_month: overwrite, 5 -> 6 rows, snapshot ...
-ldp: published gold.revenue_by_restaurant_day: overwrite, 534 -> 621 rows, snapshot ...
+...
+ldp: published gold.gold_daily_sales: overwrite, 534 -> 621 rows, snapshot ...
+...
+ldp: published gold.gold_menu_item_weekly: overwrite, 795 -> 928 rows, snapshot ...
+...
+ldp: published gold.gold_restaurant_scorecard: overwrite, 6 -> 6 rows, snapshot ...
 ```
 
 Five of the 108 orders were placed in June and only reached the lake in July. A model that kept only the orders placed after the newest one it already had would skip them. `fct_orders` does not, because it compares each incoming order with its own row. This is the model's header and the end of its query.

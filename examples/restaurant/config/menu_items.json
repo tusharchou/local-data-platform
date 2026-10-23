@@ -1,0 +1,37 @@
+{
+  "identifier": "menu_items",
+  "who": "restaurant owner",
+  "what": "the menu items of every restaurant, as exported",
+  "where": "landing/menu_items.csv",
+  "when": "whenever a new export is downloaded",
+  "how": "batch overwrite",
+  "metadata": {
+    "source": {
+      "name": "menu_items",
+      "format": "CSV",
+      "path": "../landing/menu_items.csv"
+    },
+    "target": {
+      "name": "menu_items",
+      "format": "ICEBERG",
+      "catalog": {
+        "identifier": "raw",
+        "warehouse_path": "../warehouse"
+      },
+      "write_mode": "overwrite"
+    },
+    "quality": {
+      "on_failure": "fail",
+      "checks": [
+        {"check": "row_count", "min": 1},
+        {"check": "not_null", "columns": ["menu_item_id", "restaurant_id", "name"]},
+        {"check": "unique", "columns": ["menu_item_id"]},
+        {"check": "range", "column": "price", "min": 0},
+        {"check": "schema", "columns": {
+          "menu_item_id": "string", "restaurant_id": "string", "name": "string", "category": "string",
+          "price": "double"}}
+      ]
+    },
+    "observability": {"sinks": ["jsonl"]}
+  }
+}

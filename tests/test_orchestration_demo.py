@@ -22,6 +22,7 @@ from local_data_platform import Config
 from local_data_platform.events import read_jsonl, summarize_runs
 from local_data_platform.exceptions import EngineNotFound
 from local_data_platform.format.iceberg.commit import commit_log
+from local_data_platform.gold import release as releases
 from local_data_platform.pipeline.builders import iceberg_from_config
 from local_data_platform.spec import plan
 from tests.support import load_example_module
@@ -82,8 +83,11 @@ def test_the_daily_workflow_and_its_two_configs_are_valid_and_every_pipeline_can
     assert (workflow["kind"], workflow["identifier"], workflow["metadata"]["schedule"]) == (
         "Workflow", "daily_orders", "5 2 * * *")
     assert [(task["id"], task.get("depends_on", [])) for task in workflow["tasks"]] == [
-        ("orders", []), ("order_lines", []), ("models", ["orders", "order_lines"]), ("tidy", ["models"])]
-    assert next(task for task in workflow["tasks"] if task["id"] == "models")["dbt"]["project"] == "../dbt"
+        ("orders", []), ("order_lines", []), ("models", ["orders", "order_lines"]), ("gold", ["models"]),
+        ("tidy", ["gold"])]
+    models = next(task for task in workflow["tasks"] if task["id"] == "models")["dbt"]
+    assert models == {"project": "../dbt", "select": ["+gold_daily_sales", "stg_customers"]}
+    assert next(task for task in workflow["tasks"] if task["id"] == "gold")["gold"] == {"dir": "../config"}
 
 
 def test_the_windowed_orders_config_is_the_orders_config_of_the_warehouse_layer_with_a_window():
@@ -123,12 +127,13 @@ def test_a_ledger_in_the_example_folder_is_not_copied_into_a_work_folder(tmp_pat
 
 def test_the_layer_needs_no_extra_and_skips_the_models_task_with_a_line_that_says_how_to_install_dbt(demo):
     assert demo.summary["models"] is False
-    assert 'Skipping the models task: dbt is not installed (pip install "local-data-platform[dbt]")' in demo.text
+    assert ('Skipping the models and gold tasks: dbt is not installed (pip install "local-data-platform[dbt]")'
+            in demo.text)
     shipped = json.loads((EXAMPLE / "workflows" / "daily_orders.json").read_text())
     used = json.loads((demo.workdir / "workflows" / "daily_orders.json").read_text())
     assert [task["id"] for task in used["tasks"]] == ["orders", "order_lines", "tidy"]
     assert next(task for task in used["tasks"] if task["id"] == "tidy")["depends_on"] == ["orders", "order_lines"]
-    assert [task["id"] for task in shipped["tasks"]] == ["orders", "order_lines", "models", "tidy"], \
+    assert [task["id"] for task in shipped["tasks"]] == ["orders", "order_lines", "models", "gold", "tidy"], \
         "the file in the example is not changed"
 
 
@@ -142,6 +147,16 @@ def test_the_workflow_without_models_makes_what_waited_for_the_models_wait_for_w
         {"id": "a", "pipeline": "a.json"}, {"id": "b", "pipeline": "b.json"},
         {"id": "n", "depends_on": ["a", "b"], "maintain": {"config": "a.json"}}, {"id": "z", "pipeline": "z.json"}]
     assert spec["tasks"][2]["id"] == "m", "the spec it was given is not changed"
+
+
+def test_the_workflow_without_models_also_leaves_out_the_gold_task_that_builds_what_the_models_publish():
+    spec = json.loads((EXAMPLE / "workflows" / "daily_orders.json").read_text())
+
+    tasks = run.without_models(spec)["tasks"]
+
+    assert [(task["id"], task.get("depends_on")) for task in tasks] == [
+        ("orders", None), ("order_lines", None), ("tidy", ["orders", "order_lines"])]
+    assert all("gold" not in task and "dbt" not in task for task in tasks)
 
 
 def test_the_first_backfill_publishes_two_days_and_a_data_gate_holds_back_the_third(demo):
@@ -199,7 +214,7 @@ def test_each_day_has_its_rows_once_in_the_raw_tables(demo):
     assert [row["day"] for row in days] == list(DAYS[:4])
     assert [row["raw.orders"] for row in days] == ORDERS_PER_DAY
     assert [row["raw.order_lines"] for row in days] == LINES_PER_DAY
-    assert all("gold.revenue_by_restaurant_day" not in row for row in days), "no models, no gold table"
+    assert all("gold.gold_daily_sales" not in row for row in days), "no models, no gold table"
     assert {name: info["rows"] for name, info in demo.summary["tables"].items()} == {
         "raw.orders": 21, "raw.order_lines": 54}
 
@@ -344,9 +359,9 @@ def test_the_helpers_read_a_count_line_and_change_a_channel_in_a_drop(tmp_path):
     assert run.change_channel(drop, "dine_in") == ("O1", "drive_thru")
 
 
-def test_an_unknown_layer_names_both_layers(tmp_path):
-    with pytest.raises(ValueError, match=r"the layers are \['warehouse', 'orchestration'\]"):
-        run.run_restaurant(tmp_path / "work", layer="gold", quiet=True)
+def test_an_unknown_layer_names_the_three_layers(tmp_path):
+    with pytest.raises(ValueError, match=r"the layers are \['warehouse', 'orchestration', 'gold'\]"):
+        run.run_restaurant(tmp_path / "work", layer="bronze", quiet=True)
 
 
 # ====================================================================== with dbt
@@ -362,23 +377,42 @@ def test_with_dbt_the_models_task_builds_the_gold_table_for_each_day_and_waits_f
     demo = narrated(tmp_path / "work")
 
     assert connections == []  # not one request to a proxy, so dbt and ldp stayed offline
-    assert demo.summary["models"] is True and "Skipping the models task" not in demo.text
-    assert demo.summary["dimensions"] == {"raw.restaurants": 6, "raw.customers": 150}
+    assert demo.summary["models"] is True and "Skipping the models" not in demo.text
+    assert demo.summary["dimensions"] == {"raw.restaurants": 6, "raw.customers": 150, "raw.menu_items": 36,
+                                          "raw.reviews": 94}
+    assert not (demo.workdir / "config" / "metrics.json").exists(), "one gold table here, so no metrics to check"
     assert [demo.summary[name]["exit"] for name in ("first_backfill", "second_backfill", "third_backfill", "tick")] == [
         3, 0, 0, 0]
-    assert [row["gold.revenue_by_restaurant_day"] for row in demo.summary["days"]] == GOLD_PER_DAY
+    assert [row["gold.gold_daily_sales"] for row in demo.summary["days"]] == GOLD_PER_DAY
     assert demo.summary["tables"]["silver.fct_orders"]["rows"] == 21
-    assert demo.summary["tables"]["gold.revenue_by_restaurant_day"]["rows"] == sum(GOLD_PER_DAY)
-    assert "gold.revenue_by_restaurant_day so far: 2026-08-01 3 rows, 2026-08-02 3 rows\n" in demo.text
-    assert "gold.revenue_by_restaurant_day now: 2026-08-01 3 rows, 2026-08-02 3 rows, 2026-08-03 4 rows, " \
+    assert demo.summary["tables"]["gold.gold_daily_sales"]["rows"] == sum(GOLD_PER_DAY)
+    assert "gold.gold_daily_sales so far: 2026-08-01 3 rows, 2026-08-02 3 rows\n" in demo.text
+    assert "gold.gold_daily_sales now: 2026-08-01 3 rows, 2026-08-02 3 rows, 2026-08-03 4 rows, " \
            "2026-08-04 4 rows" in demo.text
     assert "Running with dbt" not in demo.text and "Completed successfully" not in demo.text, "dbt's log stays out"
     flows = story(demo.workdir / "workflows" / ".ldp" / "events.jsonl")
-    ok = {"orders": "published", "order_lines": "published", "models": "succeeded", "tidy": "succeeded"}
+    ok = {"orders": "published", "order_lines": "published", "models": "succeeded", "gold": "succeeded",
+          "tidy": "succeeded"}
     assert [flow["tasks"] for flow in flows] == [
         ok, ok,
         {"orders": "blocked_quality", "order_lines": "published", "models": "upstream_failed",
-         "tidy": "upstream_failed"},
-        {"orders": "published", "order_lines": "skipped_duplicate", "models": "succeeded", "tidy": "succeeded"},
+         "gold": "upstream_failed", "tidy": "upstream_failed"},
+        {"orders": "published", "order_lines": "skipped_duplicate", "models": "succeeded", "gold": "succeeded",
+         "tidy": "succeeded"},
         ok]
     assert os.path.isfile(demo.workdir / "dbt" / "target" / "run_results.json")
+
+
+@pytest.mark.dbt
+def test_with_dbt_each_day_that_passes_the_gate_cuts_a_release_of_the_gold_table_and_the_blocked_day_cuts_none(
+        tmp_path):
+    demo = narrated(tmp_path / "work", quiet=True)
+
+    known = releases.list_releases(demo.workdir / "config")
+
+    assert [release.name for release in reversed(known)] == ["r1", "r2", "r3", "r4"], "one for each day that passed"
+    assert [[item.table for item in release.tables] for release in known] == [["gold.gold_daily_sales"]] * 4
+    assert [release.workflow["task"] for release in known] == ["gold"] * 4
+    assert [release.window[0][:10] for release in reversed(known)] == [
+        "2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04"]
+    assert [item.rows for item in reversed([release.tables[0] for release in known])] == [3, 6, 10, 14]

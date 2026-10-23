@@ -51,7 +51,7 @@ def test_every_block_of_the_guide_runs_offline_and_leaves_the_tables_it_describe
     assert rows(work / "workflows", "SELECT count(*) AS n FROM raw.order_lines") == [{"n": 58}]
     assert rows(work / "workflows", "SELECT sum(total_amount) AS amount FROM raw.orders "
                                     "WHERE cast(order_ts AS date) = DATE '2026-08-02'") == [{"amount": 4100.0}]
-    assert rows(work / "config", "SELECT count(*) AS n FROM gold.revenue_by_restaurant_day") == [{"n": 15}]
+    assert rows(work / "config", "SELECT count(*) AS n FROM gold.gold_daily_sales") == [{"n": 15}]
     assert len(run.blocks) >= 25
 
 

@@ -29,6 +29,63 @@ models:
       - name: signed_up_at
         description: When the customer signed up.
 
+  - name: stg_menu_items
+    description: One row for each menu item, with clearer column names.
+    columns:
+      - name: menu_item_id
+        description: The menu item's key.
+        data_tests: [unique, not_null]
+      - name: restaurant_id
+        description: The restaurant that serves the item.
+        data_tests: [not_null]
+      - name: item_name
+        description: The name of the item.
+      - name: category
+        description: What kind of dish it is, such as a main, a starter, a dessert or a drink.
+      - name: price
+        description: What the item costs on the menu.
+
+  - name: stg_order_lines
+    description: >
+      Every line of every order loaded so far, with a key of its own. A line that was loaded twice appears twice, and the
+      unique test on its key fails then.
+    columns:
+      - name: order_line_id
+        description: The line's key, as order_id:line_no.
+        data_tests: [unique, not_null]
+      - name: order_id
+        description: The order that the line belongs to.
+        data_tests: [not_null]
+      - name: line_no
+        description: The number of the line in its order, from 1.
+      - name: menu_item_id
+        description: The item that was ordered.
+        data_tests: [not_null]
+      - name: quantity
+        description: How many of the item were ordered.
+      - name: unit_price
+        description: What one of the item cost when it was ordered.
+
+  - name: stg_reviews
+    description: One row for each review that a customer left.
+    columns:
+      - name: review_id
+        description: The review's key.
+        data_tests: [unique, not_null]
+      - name: order_id
+        description: The order that the review is about.
+      - name: customer_id
+        description: The customer who wrote it.
+      - name: restaurant_id
+        description: The restaurant that the review is about.
+        data_tests: [not_null]
+      - name: rating
+        description: The stars that the customer gave, from 1 to 5.
+      - name: comment
+        description: What the customer wrote.
+      - name: reviewed_at
+        description: When the review was left.
+
   - name: stg_orders
     description: Every version of every order loaded so far. An order that changed after it was loaded appears more than once.
     columns:
@@ -140,19 +197,84 @@ models:
         description: How many customers have an order in this month, which is 0 in a month with no order.
         data_tests: [not_null]
 
-  - name: revenue_by_restaurant_day
-    description: Orders and revenue for each restaurant on each day it had an order.
+  - name: gold_daily_sales
+    description: >
+      Orders, revenue and the average ticket for each restaurant on each day it had an order. The average ticket is the
+      revenue divided by the orders.
     columns:
       - name: restaurant_day_id
         description: The restaurant and the day, as restaurant_id:YYYY-MM-DD.
         data_tests: [unique, not_null]
+      - name: day
+        description: The day.
       - name: restaurant_id
         description: The restaurant.
       - name: restaurant_name
         description: The restaurant's name.
-      - name: day
-        description: The day.
+      - name: city
+        description: The city the restaurant is in.
+      - name: cuisine
+        description: The kind of food the restaurant serves.
       - name: orders
         description: How many orders the restaurant took that day.
       - name: revenue
         description: What those orders cost.
+      - name: avg_ticket
+        description: What one of those orders cost on average, which is the revenue divided by the orders.
+
+  - name: gold_menu_item_weekly
+    description: >
+      What each menu item sold in each week in which it was ordered. A week starts on Monday. A line counts when its order
+      is in fct_orders.
+    columns:
+      - name: menu_item_week_id
+        description: The menu item and the week, as menu_item_id:YYYY-MM-DD, with the Monday of the week.
+        data_tests: [unique, not_null]
+      - name: week
+        description: The Monday of the week.
+      - name: menu_item_id
+        description: The menu item.
+      - name: item_name
+        description: The name of the item.
+      - name: category
+        description: What kind of dish it is.
+      - name: restaurant_id
+        description: The restaurant that serves the item.
+      - name: restaurant_name
+        description: The restaurant's name.
+      - name: orders
+        description: In how many orders the item was ordered that week.
+      - name: quantity
+        description: How many of the item were ordered that week.
+      - name: revenue
+        description: What those items cost at the prices they were ordered at.
+
+  - name: gold_restaurant_scorecard
+    description: >
+      A scorecard for each restaurant. The orders and the revenue are those of the 30 days that end on the day of the
+      newest order, counting that day. The rating is the average of all the reviews of the restaurant, and the rank is the
+      rank of its revenue among the restaurants of its city.
+    columns:
+      - name: restaurant_id
+        description: The restaurant.
+        data_tests: [unique, not_null]
+      - name: restaurant_name
+        description: The restaurant's name.
+      - name: city
+        description: The city the restaurant is in.
+      - name: cuisine
+        description: The kind of food the restaurant serves.
+      - name: as_of
+        description: The day of the newest order, which is the last of the 30 days.
+      - name: orders_30d
+        description: How many orders the restaurant took in the 30 days that end on as_of.
+      - name: revenue_30d
+        description: What those orders cost.
+      - name: review_count
+        description: How many reviews the restaurant has.
+      - name: rating_sum
+        description: The stars of all its reviews added up, which with review_count gives the rating of a group of restaurants.
+      - name: avg_rating
+        description: The average of all its reviews, from 1 to 5, or no value when it has none.
+      - name: city_rank
+        description: The rank of its revenue among the restaurants of its city, where 1 is the best.

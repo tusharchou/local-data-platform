@@ -35,7 +35,8 @@ REST_DIR     ?= $(DEMO_DIR)/rest
 REST_CONFIG  ?= $(REST_DIR)/rides_rest.json
 
 .PHONY: help all install lint test demo build smoke docs serve-docs generate-docs clean \
-	demo-robotics demo-agent demo-warehouse demo-orchestration demo-spark demo-rest demo-all spark-test rest-test dbt-test \
+	demo-robotics demo-agent demo-warehouse demo-orchestration demo-gold demo-spark demo-rest demo-all spark-test rest-test \
+	dbt-test \
 	check-scala-cli
 
 help:
@@ -53,12 +54,15 @@ help:
 	@echo "  demo-orchestration Run the restaurant example's orchestration layer into ./$(WAREHOUSE_DIR): a nightly"
 	@echo "                 workflow, a backfill that stops at a bad row and resumes, and a scheduler tick (the dbt"
 	@echo "                 step runs when the dbt extra is installed)"
+	@echo "  demo-gold      Run the restaurant example's gold layer into ./$(WAREHOUSE_DIR): a faulty batch that the gate stops,"
+	@echo "                 the dbt models, a release of the gold tables, a metric, an Excel file, a DuckDB file and a"
+	@echo "                 catalog page (needs the dbt and excel extras)"
 	@echo "  demo-spark     Run the Scala Spark job on the demo table, then read its output back with pyiceberg"
 	@echo "                 (needs scala-cli)"
 	@echo "  demo-rest      Start the Iceberg REST catalog fixture ($(REST_FIXTURE)) on port $(REST_PORT), run a"
 	@echo "                 REST-backed demo config against it, then stop it (needs scala-cli)"
-	@echo "  demo-all       demo, demo-robotics, demo-agent and demo-orchestration, plus demo-warehouse when dbt and the"
-	@echo "                 Excel reader are installed, and demo-spark and demo-rest when scala-cli is found"
+	@echo "  demo-all       demo, demo-robotics, demo-agent and demo-orchestration, plus demo-warehouse and demo-gold when"
+	@echo "                 dbt and the Excel reader are installed, and demo-spark and demo-rest when scala-cli is found"
 	@echo "  spark-test     Run the opt-in Spark integration tests (LDP_RUN_SPARK=1 pytest -m spark)"
 	@echo "  rest-test      Run the opt-in REST catalog integration tests (LDP_RUN_REST=1 pytest -m rest)"
 	@echo "  dbt-test       Run the tests that need the dbt extra (pytest -m dbt; offline, install .[dev,dbt] first)"
@@ -125,6 +129,10 @@ demo-warehouse: $(DEMO_CONFIG)
 # The orchestration layer needs no extra. It runs its models task when dbt is installed, and prints a skip line when not.
 demo-orchestration: $(DEMO_CONFIG)
 	$(PY) examples/restaurant/run.py --workdir $(WAREHOUSE_DIR) --layer orchestration
+
+# The gold layer needs the dbt and excel extras too, and prints the same install command without them.
+demo-gold: $(DEMO_CONFIG)
+	$(PY) examples/restaurant/run.py --workdir $(WAREHOUSE_DIR) --layer gold
 
 # The Scala job reads demo.rides from the demo's SQLite catalog, prints revenue by city per day and the
 # snapshot history, and writes demo.rides_by_city_day, which pyiceberg then reads back.
@@ -198,9 +206,9 @@ demo-all:
 	$(MAKE) demo
 	$(MAKE) demo-robotics demo-agent
 	@if $(PY) -c "import dbt.cli.main, dbt.adapters.duckdb, openpyxl" 2>/dev/null; then \
-		$(MAKE) demo-warehouse; \
+		$(MAKE) demo-warehouse demo-gold; \
 	else \
-		echo '--> Skipping demo-warehouse: the dbt and excel extras are not installed. Install them: $(WAREHOUSE_HINT)'; \
+		echo '--> Skipping demo-warehouse and demo-gold: the dbt and excel extras are not installed. Install them: $(WAREHOUSE_HINT)'; \
 	fi
 	$(MAKE) demo-orchestration
 	@if command -v "$(SCALA_CLI)" >/dev/null 2>&1; then \

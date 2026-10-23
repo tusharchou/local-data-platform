@@ -2,9 +2,38 @@
   "apiVersion": "ldp/v1",
   "kind": "Metrics",
   "identifier": "restaurant_metrics",
-  "who": "customer insights",
-  "what": "how many customers the restaurants keep, month by month",
+  "who": "restaurant operations",
+  "what": "how the restaurants sell, how their guests rate them and how many guests they keep",
   "semantic_models": [
+    {
+      "name": "daily_sales",
+      "table": "gold.gold_daily_sales",
+      "description": "One row for each restaurant on each day it had an order.",
+      "time_dimension": {"column": "day", "grains": ["day", "week", "month", "quarter", "year"]},
+      "dimensions": [
+        {"name": "restaurant", "column": "restaurant_name", "description": "The restaurant."},
+        {"name": "city", "description": "The city the restaurant is in."},
+        {"name": "cuisine", "description": "The kind of food the restaurant serves."}
+      ],
+      "measures": [
+        {"name": "revenue_sum", "agg": "sum", "expr": "revenue", "description": "What the orders cost."},
+        {"name": "order_sum", "agg": "sum", "expr": "orders", "description": "How many orders there were."}
+      ]
+    },
+    {
+      "name": "restaurant_scorecard",
+      "table": "gold.gold_restaurant_scorecard",
+      "description": "One row for each restaurant, as of the day of the newest order.",
+      "dimensions": [
+        {"name": "restaurant", "column": "restaurant_name", "description": "The restaurant."},
+        {"name": "city", "description": "The city the restaurant is in."},
+        {"name": "cuisine", "description": "The kind of food the restaurant serves."}
+      ],
+      "measures": [
+        {"name": "rating_total", "agg": "sum", "expr": "rating_sum", "description": "The stars of all the reviews."},
+        {"name": "review_total", "agg": "sum", "expr": "review_count", "description": "How many reviews there are."}
+      ]
+    },
     {
       "name": "customer_churn",
       "table": "gold.churn_by_month",
@@ -22,11 +51,42 @@
   ],
   "metrics": [
     {
+      "name": "revenue",
+      "type": "simple",
+      "measure": "revenue_sum",
+      "format": "currency",
+      "description": "What the orders cost, added up over the restaurants and the days that are asked for."
+    },
+    {
+      "name": "orders",
+      "type": "simple",
+      "measure": "order_sum",
+      "format": "number",
+      "description": "How many orders the restaurants took."
+    },
+    {
+      "name": "avg_ticket",
+      "type": "ratio",
+      "numerator": "revenue_sum",
+      "denominator": "order_sum",
+      "format": "currency",
+      "description": "What one order costs on average, which is the revenue over the orders, and not the average of the daily averages."
+    },
+    {
+      "name": "avg_rating",
+      "type": "ratio",
+      "numerator": "rating_total",
+      "denominator": "review_total",
+      "format": "number",
+      "description": "The stars that the customers gave on average, from 1 to 5, over all the reviews of the restaurants that are asked for."
+    },
+    {
       "name": "churn_rate",
       "type": "ratio",
       "numerator": "churned_sum",
       "denominator": "start_sum",
       "format": "percent",
+      "owner": "customer insights",
       "description": "The share of the customers who ordered last month that did not order this month. A month that starts with no customers has no churn rate."
     },
     {
@@ -34,6 +94,7 @@
       "type": "simple",
       "measure": "active_sum",
       "format": "number",
+      "owner": "customer insights",
       "description": "How many customers ordered in the month."
     }
   ]

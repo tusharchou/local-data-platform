@@ -29,6 +29,9 @@
       "checks": [
         {"check": "row_count", "min": 1},
         {"check": "not_null", "columns": ["order_id", "restaurant_id", "customer_id", "order_ts", "updated_at"]},
+        {"check": "accepted_values", "column": "restaurant_id",
+         "values": ["R01", "R02", "R03", "R04", "R05", "R06"]},
+        {"check": "unique", "columns": ["order_id", "updated_at"]},
         {"check": "accepted_values", "column": "channel", "values": ["dine_in", "takeaway", "delivery"]},
         {"check": "range", "column": "total_amount", "min": 0},
         {"check": "schema", "columns": {
