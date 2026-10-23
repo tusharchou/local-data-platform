@@ -762,7 +762,9 @@ SQL can reach the tables upstream of them.
 
 Revenue, orders and average ticket should mean one thing in every report, export and answer of an agent. A
 `metrics.json` file next to the configs of the gold tables defines each number once, with what it means, who answers
-for it and how a person reads it. The robot example has one, `examples/robot_episodes/configs/metrics.json`.
+for it and how a person reads it. The robot example has one, `examples/robot_episodes/configs/metrics.json`, and so has the
+restaurant example, `examples/restaurant/config/metrics.json`, which defines `churn_rate` and `active_customers` on the
+churn model of the warehouse demo.
 
 ```json
 {
@@ -847,7 +849,10 @@ ORDER BY 1
   a join, which this version does not have.
 - **`grains` is where the numbers are right.** A number that counts customers at the start of a month is wrong at any
   other grain, so its model allows only `month`, and another grain is refused. A query with no grain adds the whole
-  period into one row, which is the same step as adding up years, so it needs `year` to be allowed.
+  period into one row, which is the same step as adding up years, so it needs `year` to be allowed. The churn of the
+  restaurant example is such a number. After `make demo-warehouse`,
+  `ldp metrics query ldp_demo/restaurant/config churn_rate,active_customers --grain month` prints it for every month,
+  and the [recipe](docs/recipes.md) for monthly churn from an orders table shows the definition in SQL.
 - **The format is for people.** `percent` shows `0.5` as `50.0%` and `currency` has two decimals, on a terminal. `--raw`
   shows what was computed, and `--out FILE`, `--json` and the Python function always give the values as computed.
   `--out` writes CSV, Parquet or JSONL by the ending of the name.

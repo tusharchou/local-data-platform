@@ -58,7 +58,7 @@ The other files are used by later milestones of the [roadmap](roadmap.md). From 
 
 ## Part 1. Load the raw tables
 
-A restaurant system drops its exports into a folder. Make that folder, which is called `landing`, and put the first files in it. The orders config reads `landing/orders.csv`, so batch 1 goes there under that name. Then copy the example's configs. There is one JSON config for each dataset.
+A restaurant system drops its exports into a folder. Make that folder, which is called `landing`, and put the first files in it. The orders config reads `landing/orders.csv`, so batch 1 goes there under that name. Then copy the example's configs. There is one JSON config for each dataset, and `metrics.json`, which defines numbers and not a dataset. Part 3 uses it.
 
 ```bash
 mkdir landing
@@ -72,6 +72,7 @@ ls config landing
 ```text
 config:
 customers.json
+metrics.json
 orders.json
 restaurants.json
 restaurants_to_csv.json
@@ -452,12 +453,12 @@ It has seven models.
 | `stg_restaurants`, `stg_customers`, `stg_orders` | Views that tidy the three raw tables. `stg_orders` keeps every version of an order, because the raw orders are append-only |
 | `fct_orders` | One row for each order, the latest version of it. It is incremental, and it is published to the namespace `silver` |
 | `customer_activity_monthly` | One row for each customer and each month in which they ordered |
-| `churn_by_month` | The share of customers who stop ordering in each month. It is published to `gold` |
+| `churn_by_month` | The share of customers who stop ordering in each month, and how many customers ordered. It is published to `gold` |
 | `revenue_by_restaurant_day` | Orders and revenue for each restaurant on each day. It is published to `gold` |
 
 The two gold models are gold tables, so each names its `owner` and `grain` in its `meta`, and `schema.yml` describes every column of them.
 
-Build it. dbt runs the seven models and 26 data tests, and LDP publishes the three models that carry the mark.
+Build it. dbt runs the seven models and 27 data tests, and LDP publishes the three models that carry the mark.
 
 ```bash
 ldp dbt build restaurant_dbt
@@ -466,9 +467,9 @@ ldp dbt build restaurant_dbt
 <!-- docs-runner: output -->
 ```text
 ...
-... Found 7 models, 26 data tests, 3 sources, ...
+... Found 7 models, 27 data tests, 3 sources, ...
 ...
-... Done. PASS=33 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=33
+... Done. PASS=34 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=34
 ldp: published silver.fct_orders: upsert, 0 -> 745 rows, snapshot ...
 ldp: published gold.churn_by_month: overwrite, 0 -> 5 rows, snapshot ...
 ldp: published gold.revenue_by_restaurant_day: overwrite, 0 -> 534 rows, snapshot ...
@@ -478,7 +479,7 @@ The three tables have configs in `config`, next to the ones for the raw tables, 
 
 ### Tests
 
-The 26 data tests are declared in `models/schema.yml`. A key must be unique and not null. An order must belong to a restaurant that exists, so its `restaurant_id` has to be in `stg_restaurants`. The channel must be one of three values.
+The 27 data tests are declared in `models/schema.yml`. A key must be unique and not null. An order must belong to a restaurant that exists, so its `restaurant_id` has to be in `stg_restaurants`. The channel must be one of three values.
 
 ```yaml
       - name: order_id
@@ -520,12 +521,12 @@ ldp dbt test restaurant_dbt
 <!-- docs-runner: output -->
 ```text
 ...
-... Done. PASS=26 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=26
+... Done. PASS=27 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=27
 ```
 
 ### Churn
 
-A customer churns in the month they stop ordering. For a month M, `customers_at_start` is the number of customers with an order in the month before, and `churned` is how many of them have no order in month M. The rate is the second divided by the first. The first month has no row, because there is no month before it. The definition is in the model and in its description, and later milestones reuse it.
+A customer churns in the month they stop ordering. For a month M, `customers_at_start` is the number of customers with an order in the month before, and `churned` is how many of them have no order in month M. The rate is the second divided by the first. The model has a fourth column, `active_customers`, which is the number of customers with an order in month M. The first month has no row, because there is no month before it. The definition is in the model and in its description, and later milestones reuse it.
 
 ```bash
 ldp query config "SELECT month, customers_at_start, churned, churn_rate FROM churn_by_month ORDER BY month"
@@ -544,6 +545,25 @@ month       customers_at_start  churned  churn_rate
 ```
 
 Of the 74 customers who ordered in May, 21 did not order in June. Keep that number in mind.
+
+The example also defines the churn as two metrics in `config/metrics.json`, so that a person, a report or an agent asks for the number by name and does not write the SQL again. `churn_rate` is `churned` over `customers_at_start`, and `active_customers` is the number of customers with an order in the month. Both are only by month, because a quarter would count a customer once for each month in it, and `ldp metrics query` refuses another grain.
+
+```bash
+ldp metrics query config churn_rate,active_customers --grain month
+```
+
+<!-- docs-runner: output -->
+```text
+month       churn_rate  active_customers
+----------  ----------  ----------------
+2026-02-01       23.5%                68
+2026-03-01       35.3%                71
+2026-04-01       33.8%                75
+2026-05-01       30.7%                74
+2026-06-01       28.4%                75
+(5 rows)
+read the tables as they are now, because no release has been cut yet
+```
 
 ### Documentation
 
@@ -588,7 +608,7 @@ ldp dbt build restaurant_dbt
 orders: read 108 rows, wrote 108 rows in ...s (quality: 5 of 5 checks passed)
   target raw.orders: append, 745 -> 853 rows, snapshot ...
 ...
-... Done. PASS=33 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=33
+... Done. PASS=34 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=34
 ldp: published silver.fct_orders: upsert, 745 -> 853 rows, snapshot ...
 ldp: published gold.churn_by_month: overwrite, 5 -> 6 rows, snapshot ...
 ldp: published gold.revenue_by_restaurant_day: overwrite, 534 -> 621 rows, snapshot ...

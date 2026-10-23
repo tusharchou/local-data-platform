@@ -15,8 +15,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from local_data_platform import Config
+from local_data_platform import Config, metrics
 from local_data_platform.cli import main
+from local_data_platform.exceptions import ConfigError
+from local_data_platform.mcp_server.tools import LakeTools
 from local_data_platform.pipeline.builders import iceberg_from_config
 from local_data_platform.pipeline.registry import create_pipeline
 from tests.support import load_example_module, without_log_warnings
@@ -66,10 +68,10 @@ def test_the_warehouse_layer_runs_offline_in_under_two_minutes(walkthrough):
     assert summary["layer"] == "warehouse" and summary["duration_s"] < 120
 
 
-def test_the_first_build_runs_seven_models_and_twenty_six_data_tests_and_every_one_passes(walkthrough):
+def test_the_first_build_runs_seven_models_and_twenty_seven_data_tests_and_every_one_passes(walkthrough):
     build = walkthrough[1]["warehouse"]["first_build"]
 
-    assert (build["models"], build["tests"], build["passed"]) == (7, 26, 33)
+    assert (build["models"], build["tests"], build["passed"]) == (7, 27, 34)
     assert [(item["table"], item["mode"], item["rows_before"], item["rows_after"]) for item in build["published"]] == [
         ("silver.fct_orders", "upsert", 0, 745), ("gold.churn_by_month", "overwrite", 0, 5),
         ("gold.revenue_by_restaurant_day", "overwrite", 0, 534)]
@@ -98,7 +100,7 @@ def test_batch_two_upserts_only_the_july_orders_and_the_late_june_orders(walkthr
     assert warehouse["orders_upserted"] == 108 == 103 + 5
     assert [(item["table"], item["rows_before"], item["rows_after"]) for item in second["published"]] == [
         ("silver.fct_orders", 745, 853), ("gold.churn_by_month", 5, 6), ("gold.revenue_by_restaurant_day", 534, 621)]
-    assert (second["models"], second["tests"], second["passed"]) == (7, 26, 33)
+    assert (second["models"], second["tests"], second["passed"]) == (7, 27, 34)
 
 
 def test_the_late_june_orders_lower_junes_churn_and_time_travel_shows_it(walkthrough):
@@ -110,6 +112,79 @@ def test_the_late_june_orders_lower_junes_churn_and_time_travel_shows_it(walkthr
     assert warehouse["june_before"]["churned"] - warehouse["june_after"]["churned"] == 5
     first = walkthrough[1]["warehouse"]["first_build"]["published"][1]
     assert warehouse["churn_snapshot_after_batch_1"] == first["snapshot_id"]
+
+
+def test_the_churn_metrics_match_the_model_for_every_month_the_example_has(walkthrough):
+    config = walkthrough[0] / "config"
+    in_the_model = run.lake_rows(config / "churn_by_month.json", "SELECT month, churn_rate, active_customers "
+                                                                 "FROM churn_by_month ORDER BY month")
+
+    answer = metrics.query(config, "churn_rate,active_customers", grain="month")
+
+    assert answer.column_names == ["month", "churn_rate", "active_customers"]
+    assert answer.to_pylist() == in_the_model
+    assert [row["month"] for row in in_the_model] == [dt.date(2026, month, 1) for month in range(2, 8)]
+    assert [row["active_customers"] for row in in_the_model] == [68, 71, 75, 74, 80, 64]
+    assert answer.to_pylist()[4]["churn_rate"] == pytest.approx(16 / 74)  # June, after the late orders
+
+
+def test_ldp_metrics_query_prints_what_the_readme_of_the_example_shows(walkthrough, capsys):
+    config = walkthrough[0] / "config"
+
+    assert main(["metrics", "validate", str(config)]) == 0
+    assert capsys.readouterr().out == (f"metrics.json: 1 semantic model and 2 metrics fit the gold tables of "
+                                       f"{config.resolve()}\n")
+    assert main(["metrics", "query", str(config), "churn_rate,active_customers", "--grain", "month"]) == 0
+
+    out = without_log_warnings(capsys.readouterr().out)
+    assert out.splitlines() == [
+        "month       churn_rate  active_customers", "----------  ----------  ----------------",
+        "2026-02-01       23.5%                68", "2026-03-01       35.3%                71",
+        "2026-04-01       33.8%                75", "2026-05-01       30.7%                74",
+        "2026-06-01       21.6%                80", "2026-07-01       40.0%                64", "(6 rows)",
+        "read the tables as they are now, because no release has been cut yet"]
+
+
+def test_the_catalog_shows_the_contract_of_the_churn_table_and_its_two_metrics(walkthrough, capsys):
+    config = walkthrough[0] / "config"
+
+    assert main(["gold", "show", str(config), "churn_by_month"]) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "gold.churn_by_month  (gold)"
+    assert "counted in the month a customer stops ordering" in lines[1]
+    assert "  Owner      customer insights" in lines and "  Grain      one row for each month" in lines
+    columns = lines[lines.index("Columns (5)") + 3:][:5]
+    assert [line.split()[:2] for line in columns] == [
+        ["month", "date"], ["customers_at_start", "long"], ["churned", "long"], ["churn_rate", "double"],
+        ["active_customers", "long"]]
+    metrics_at = lines.index("Metrics")
+    assert [line.split()[0] for line in lines[metrics_at + 3:metrics_at + 5]] == ["churn_rate", "active_customers"]
+
+
+def test_an_agent_asks_for_the_churn_metrics_and_gets_the_numbers_of_the_model(walkthrough, tmp_path):
+    config = walkthrough[0] / "config"
+    served = LakeTools.from_sources([config], audit_path=tmp_path / "audit.jsonl", iceberg_audit=False, native=False,
+                                    max_rows=50, timeout_s=30)
+    try:
+        listed = served.call("list_metrics", {})
+        asked = served.call("query_metric", {"metrics": ["churn_rate", "active_customers"], "grain": "month"})
+    finally:
+        served.close()
+
+    in_the_model = run.lake_rows(config / "churn_by_month.json",
+                                 "SELECT churn_rate, active_customers FROM churn_by_month ORDER BY month")
+    assert listed.ok and [item["name"] for item in listed.data["metrics"]] == ["churn_rate", "active_customers"]
+    assert asked.ok and [row[1:] for row in asked.data["rows"]] == [
+        [row["churn_rate"], row["active_customers"]] for row in in_the_model]
+
+
+def test_the_churn_metrics_are_only_by_month_and_say_why_when_asked_for_more(walkthrough):
+    config = walkthrough[0] / "config"
+
+    for options in ({"grain": "quarter"}, {"grain": "year"}, {}):
+        with pytest.raises(ConfigError, match=r"the grains \['month'\]"):
+            metrics.query(config, "churn_rate", **options)
 
 
 def test_every_published_table_has_a_snapshot_for_each_build_that_changed_it(walkthrough):
@@ -162,10 +237,11 @@ def test_the_narrative_tells_the_story_in_order(walkthrough):
 
     assert positions == sorted(positions)
     for text in ("ExcelToCSV: read 6 rows, wrote 6 to landing/restaurants.csv",
-                 "7 models and 26 data tests: 33 of 33 passed",
+                 "7 models and 27 data tests: 34 of 34 passed",
                  "published silver.fct_orders: upsert, 745 -> 853 rows",
                  "fct_orders upserted 108 rows, the new and the late ones, and no other row was written.",
-                 "--snapshot ", "June as it was published after batch 1:", "ldp dbt docs ", "ldp mcp --config "):
+                 "--snapshot ", "June as it was published after batch 1:", "ldp dbt docs ", "ldp mcp --config ",
+                 "ldp metrics query ", " churn_rate,active_customers --grain month"):
         assert text in narrative, text
 
 
@@ -173,7 +249,7 @@ def test_the_published_models_have_configs_beside_the_ingest_configs(walkthrough
     workdir = walkthrough[0]
 
     assert sorted(path.stem for path in (workdir / "config").glob("*.json")) == [
-        "churn_by_month", "customers", "fct_orders", "orders", "restaurants", "restaurants_to_csv",
+        "churn_by_month", "customers", "fct_orders", "metrics", "orders", "restaurants", "restaurants_to_csv",
         "revenue_by_restaurant_day"]
     assert table_of(workdir, "fct_orders").identifier == "silver.fct_orders"
     assert table_of(workdir, "churn_by_month").identifier == "gold.churn_by_month"
@@ -192,6 +268,8 @@ def test_the_commands_the_example_suggests_work_on_the_work_folder(walkthrough, 
     assert "published" in capsys.readouterr().out
     assert main(["runs", str(config / "orders.json")]) == 0
     assert capsys.readouterr().out.count("published") >= 2  # the two batches
+    assert main(["metrics", "query", str(config), "churn_rate,active_customers", "--grain", "month"]) == 0
+    assert "(6 rows)" in capsys.readouterr().out
 
 
 def test_a_build_with_nothing_new_adds_no_snapshot_to_the_upserted_table(walkthrough):
@@ -316,7 +394,7 @@ def test_fct_orders_keeps_the_newest_version_of_an_order_and_takes_a_late_order_
 
     first = run.dbt_build(workdir)
 
-    assert (first["models"], first["tests"], first["passed"]) == (7, 26, 33)
+    assert (first["models"], first["tests"], first["passed"]) == (7, 27, 34)
     assert [(item["mode"], item["rows_before"], item["rows_after"]) for item in first["published"][:1]] == [
         ("upsert", 0, 2)]
     assert fct_orders_rows(workdir) == [("O1", 300.0), ("O2", 100.0)]  # the later of the two versions of O1
@@ -336,9 +414,10 @@ def test_fct_orders_keeps_the_newest_version_of_an_order_and_takes_a_late_order_
 # --------------------------------------------------------------------------- the churn example of issue #47
 
 
-def test_churn_counts_a_customer_in_the_month_they_stop_ordering(tmp_path):
-    """The first month has no row, three customers who stop after January make February 3 of 3, and so on."""
-    workdir = small_workdir(tmp_path)
+@pytest.fixture(scope="module")
+def issue_47(tmp_path_factory):
+    """The orders of issue #47 loaded and built once: the work folder, and what the build did."""
+    workdir = small_workdir(tmp_path_factory.mktemp("restaurant_47"))
     # (customer, order time): January C1 C2 C3, February C4, March C4 and C1, April C1, June C1.
     placed = [("C1", dt.datetime(2023, 1, 5, 12, 0)), ("C2", dt.datetime(2023, 1, 12, 13, 0)),
               ("C3", dt.datetime(2023, 1, 20, 19, 0)), ("C4", dt.datetime(2023, 2, 3, 12, 0)),
@@ -347,10 +426,14 @@ def test_churn_counts_a_customer_in_the_month_they_stop_ordering(tmp_path):
     write_orders(workdir, [order(f"O{n}", customer, when, 250) for n, (customer, when) in enumerate(placed, start=1)])
     for name in ("restaurants", "customers", "orders"):
         ingest(workdir, name)
+    return workdir, run.dbt_build(workdir)
 
-    build = run.dbt_build(workdir)
 
-    assert (build["models"], build["tests"], build["passed"]) == (7, 26, 33)
+def test_churn_counts_a_customer_in_the_month_they_stop_ordering(issue_47):
+    """The first month has no row, three customers who stop after January make February 3 of 3, and so on."""
+    workdir, build = issue_47
+
+    assert (build["models"], build["tests"], build["passed"]) == (7, 27, 34)
     rows = run.lake_rows(workdir / "config" / "churn_by_month.json",
                          "SELECT month, customers_at_start, churned, churn_rate FROM churn_by_month ORDER BY month")
     assert rows == [
@@ -360,3 +443,42 @@ def test_churn_counts_a_customer_in_the_month_they_stop_ordering(tmp_path):
         churn("2023-05-01", 1, 1, 1.0),   # C1 ordered in April and not in May, a month with no order at all
         churn("2023-06-01", 0, 0, None),  # nobody ordered in May, so there is no rate
     ]  # and January, the first month, has no row
+
+
+def test_the_active_customers_are_the_customers_with_an_order_in_the_month_and_0_when_there_is_none(issue_47):
+    workdir = issue_47[0]
+
+    rows = run.lake_rows(workdir / "config" / "churn_by_month.json",
+                         "SELECT month, active_customers FROM churn_by_month ORDER BY month")
+
+    assert [(row["month"].isoformat(), row["active_customers"]) for row in rows] == [
+        ("2023-02-01", 1),  # C4
+        ("2023-03-01", 2),  # C4 and C1
+        ("2023-04-01", 1),  # C1
+        ("2023-05-01", 0),  # nobody, and the month has a row all the same
+        ("2023-06-01", 1),  # C1
+    ]
+
+
+def test_the_example_of_issue_47_runs_through_ldp_metrics_query_and_february_is_100_percent(issue_47, capsys):
+    config = issue_47[0] / "config"
+
+    assert main(["metrics", "query", str(config), "churn_rate", "--grain", "month"]) == 0
+
+    lines = without_log_warnings(capsys.readouterr().out).splitlines()
+    assert lines[:2] == ["month       churn_rate", "----------  ----------"]
+    assert [line.split() for line in lines[2:7]] == [
+        ["2023-02-01", "100.0%"], ["2023-03-01", "0.0%"], ["2023-04-01", "50.0%"], ["2023-05-01", "100.0%"],
+        ["2023-06-01", "NULL"]]  # June has no churn rate, because nobody ordered in May
+    assert not any(line.startswith("2023-01") for line in lines), "January has no row, so it has no value"
+    assert lines[7] == "(5 rows)"
+
+
+def test_the_metrics_of_issue_47_are_the_values_of_the_model_with_no_value_where_the_model_has_none(issue_47):
+    config = issue_47[0] / "config"
+    answer = metrics.query(config, "churn_rate,active_customers", grain="month").to_pylist()
+
+    assert [(row["month"].isoformat(), row["churn_rate"], row["active_customers"]) for row in answer] == [
+        ("2023-02-01", 1.0, 1), ("2023-03-01", 0.0, 2), ("2023-04-01", 0.5, 1), ("2023-05-01", 1.0, 0),
+        ("2023-06-01", None, 1)]
+    assert "2023-01-01" not in [row["month"].isoformat() for row in answer]

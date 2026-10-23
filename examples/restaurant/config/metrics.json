@@ -1,0 +1,40 @@
+{
+  "apiVersion": "ldp/v1",
+  "kind": "Metrics",
+  "identifier": "restaurant_metrics",
+  "who": "customer insights",
+  "what": "how many customers the restaurants keep, month by month",
+  "semantic_models": [
+    {
+      "name": "customer_churn",
+      "table": "gold.churn_by_month",
+      "description": "One row for each month after the first month with an order, up to the last month with an order, counted in the month a customer stops ordering.",
+      "time_dimension": {"column": "month", "grains": ["month"]},
+      "measures": [
+        {"name": "churned_sum", "agg": "sum", "expr": "churned",
+         "description": "Customers with an order in the month before and none in this month."},
+        {"name": "start_sum", "agg": "sum", "expr": "customers_at_start",
+         "description": "Customers with an order in the month before."},
+        {"name": "active_sum", "agg": "sum", "expr": "active_customers",
+         "description": "Customers with an order in the month."}
+      ]
+    }
+  ],
+  "metrics": [
+    {
+      "name": "churn_rate",
+      "type": "ratio",
+      "numerator": "churned_sum",
+      "denominator": "start_sum",
+      "format": "percent",
+      "description": "The share of the customers who ordered last month that did not order this month. A month that starts with no customers has no churn rate."
+    },
+    {
+      "name": "active_customers",
+      "type": "simple",
+      "measure": "active_sum",
+      "format": "number",
+      "description": "How many customers ordered in the month."
+    }
+  ]
+}

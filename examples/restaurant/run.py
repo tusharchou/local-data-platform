@@ -649,6 +649,7 @@ def run_restaurant(workdir: str | Path = DEFAULT_WORKDIR, *, layer: str = "wareh
         out.table([{"table": name, **info} for name, info in summary["warehouse"]["tables"].items()])
         out.say(f"   finished in {summary['duration_s']}s. Try these next:")
         commands = (f"ldp snapshots {shown(config / 'churn_by_month.json')}",
+                    f"ldp metrics query {shown(config)} churn_rate,active_customers --grain month",
                     f"ldp dbt docs {shown(workdir / 'dbt')} --serve",
                     f"ldp mcp --config {shown(config)}")
     for command in commands:
