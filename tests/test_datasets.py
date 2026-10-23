@@ -6,6 +6,7 @@ import os
 import threading
 
 import pyarrow as pa
+import pyarrow.csv as pacsv
 import pyarrow.parquet as pq
 import pytest
 
@@ -15,11 +16,13 @@ from local_data_platform.datasets import (
     DatasetError,
     DatasetVersion,
     export,
+    export_format,
     get_version,
     list_datasets,
     list_versions,
     load,
     pin,
+    write_rows,
 )
 from local_data_platform.exceptions import ConfigError, TableNotFound
 from local_data_platform.format.iceberg import Iceberg
@@ -362,8 +365,80 @@ def test_export_jsonl_writes_null_for_nan(catalog_config, tmp_path):
 
 
 def test_export_rejects_unknown_formats(table, tmp_path):
-    with pytest.raises(ConfigError, match="unknown export format"):
-        export(pin(table, "train"), tmp_path / "x.csv", format="csv")
+    with pytest.raises(ConfigError, match=r"unknown export format 'xlsx'; expected one of \['parquet', 'jsonl', "
+                                          r"'csv'\]"):
+        export(pin(table, "train"), tmp_path / "x.xlsx", format="xlsx")
+    assert not (tmp_path / "x.xlsx").exists()
+
+
+def test_export_csv_has_a_header_and_a_line_for_each_row(table, tmp_path):
+    version = pin(table, "train", selected_fields=["episode_id", "robot_id"])
+
+    assert export(version, "train.csv", format="CSV", base_dir=tmp_path) == 30
+
+    lines = (tmp_path / "train.csv").read_text().splitlines()
+    assert lines[0] == '"episode_id","robot_id"' and len(lines) == 31
+    back = pacsv.read_csv(tmp_path / "train.csv")
+    assert back.column_names == ["episode_id", "robot_id"]
+    assert back.column("episode_id").to_pylist() == load(version).column("episode_id").to_pylist()
+
+
+def test_export_csv_writes_what_a_csv_cannot_hold_as_text_and_no_number_for_nan(catalog_config, tmp_path):
+    iceberg = Iceberg("mixed", catalog_config)
+    iceberg.put(pa.table({
+        "x": [1.0, float("nan"), float("inf")],
+        "v": pa.array([[1.5, 2.0], [], None], pa.list_(pa.float64())),
+        "s": pa.array([{"a": 1, "b": float("nan")}, {"a": 2, "b": 0.5}, None],
+                      pa.struct([("a", pa.int64()), ("b", pa.float64())])),
+        "raw": pa.array([b"\x00\xff", b"ab", None], pa.binary()),
+        "kind": pa.array(["a", "b", "a"]).dictionary_encode(),
+        "note": ['say "hi", ok', "two\nlines", None]}))
+
+    export(pin(iceberg, "mixed"), tmp_path / "mixed.csv", format="csv")
+
+    options = pacsv.ConvertOptions(strings_can_be_null=True)
+    back = pacsv.read_csv(tmp_path / "mixed.csv", convert_options=options).to_pylist()
+    assert back == [
+        {"x": 1.0, "v": "[1.5, 2.0]", "s": '{"a": 1, "b": null}', "raw": "00ff", "kind": "a", "note": 'say "hi", ok'},
+        {"x": None, "v": "[]", "s": '{"a": 2, "b": 0.5}', "raw": "6162", "kind": "b", "note": "two\nlines"},
+        {"x": None, "v": None, "s": None, "raw": None, "kind": "a", "note": None}]
+
+
+def test_write_rows_writes_rows_that_are_not_a_dataset_version_and_keeps_the_metadata_of_a_parquet_file(tmp_path):
+    rows = pa.table({"a": [1, 2]}).replace_schema_metadata({b"note": b"kept"})
+
+    assert write_rows(rows, tmp_path / "x" / "a.parquet") == 2
+    assert write_rows(rows, tmp_path / "x" / "a.csv", "csv") == 2
+    assert write_rows(rows, tmp_path / "x" / "a.jsonl", "jsonl") == 2
+
+    types = pa.table({"kind": pa.array(["x", "y"]).dictionary_encode(),
+                      "wide": pa.array([b"\x01", b"\xff"], pa.large_binary()),
+                      "fixed": pa.array([b"ab", b"cd"], pa.binary(2))})
+    write_rows(types, tmp_path / "x" / "types.csv", "csv")
+    options = pacsv.ConvertOptions(column_types={"wide": pa.string(), "fixed": pa.string()})
+    assert pacsv.read_csv(tmp_path / "x" / "types.csv", convert_options=options).to_pylist() == [
+        {"kind": "x", "wide": "01", "fixed": "6162"}, {"kind": "y", "wide": "ff", "fixed": "6364"}]
+    assert pq.read_schema(tmp_path / "x" / "a.parquet").metadata[b"note"] == b"kept"
+    assert (tmp_path / "x" / "a.csv").read_text() == '"a"\n1\n2\n'
+    assert (tmp_path / "x" / "a.jsonl").read_text() == '{"a": 1}\n{"a": 2}\n'
+    assert sorted(item.name for item in (tmp_path / "x").iterdir()) == ["a.csv", "a.jsonl", "a.parquet", "types.csv"]
+    with pytest.raises(ConfigError, match="unknown export format 'xml'"):
+        write_rows(rows, tmp_path / "x" / "a.xml", "xml")
+    assert export_format(" CSV ") == "csv" and datasets.EXPORT_FORMATS == ("parquet", "jsonl", "csv")
+
+
+def test_a_failed_write_of_rows_leaves_the_file_that_was_there(tmp_path, monkeypatch):
+    target = tmp_path / "a.csv"
+    write_rows(pa.table({"a": [1]}), target, "csv")
+
+    def broken(rows, sink):
+        raise OSError("the disk is full")
+
+    monkeypatch.setattr(pacsv, "write_csv", broken)
+    with pytest.raises(OSError, match="disk is full"):
+        write_rows(pa.table({"a": [1, 2]}), target, "csv")
+
+    assert target.read_text() == '"a"\n1\n' and sorted(item.name for item in tmp_path.iterdir()) == ["a.csv"]
 
 
 # --------------------------------------------------------------------------- CLI
@@ -408,6 +483,12 @@ def test_cli_pin_list_export(cli_config, tmp_path, capsys, warehouse):
     assert run_cli(["datasets", "export", "train@v1", str(dest), "--format", "jsonl", "--warehouse", warehouse]) == 0
     assert "Exported train@v1 (15 rows" in capsys.readouterr().out
     assert len(dest.read_text().splitlines()) == 15
+
+    csv_dest = tmp_path / "train.csv"
+    assert run_cli(["datasets", "export", "train@v1", str(csv_dest), "--format", "csv", "--warehouse", warehouse]) == 0
+    assert "Exported train@v1 (15 rows" in capsys.readouterr().out and csv_dest.read_text().startswith(
+        '"episode_id","robot_id"\n')
+    assert len(csv_dest.read_text().splitlines()) == 16
 
 
 def test_cli_errors(cli_config, tmp_path, warehouse):

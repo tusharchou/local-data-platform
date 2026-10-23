@@ -61,8 +61,8 @@ MANIFEST_FORMAT = 1
 WAREHOUSE_ENV = "LDP_WAREHOUSE"
 """Environment variable naming the warehouse when a function is not given one."""
 
-EXPORT_FORMATS = ("parquet", "jsonl")
-"""The formats :func:`export` writes."""
+EXPORT_FORMATS = ("parquet", "jsonl", "csv")
+"""The formats :func:`export` and :func:`write_rows` write."""
 
 TAG_PREFIX = "ldp_ds_"
 """Prefix of the Iceberg tags :func:`pin` creates."""
@@ -664,15 +664,56 @@ def _jsonl_line(row: dict[str, Any]) -> str:
         return json.dumps(_finite(row), default=_json_default, allow_nan=False, ensure_ascii=False)
 
 
+def _csv_ready(rows: pa.Table) -> pa.Table:
+    """The rows with what a CSV file cannot hold written as text.
+
+    A list, a struct or a map becomes JSON, bytes become hexadecimal, and a number that is not finite, which JSON has no
+    word for either, becomes no value.
+    """
+    import pyarrow.compute as pc
+
+    columns = []
+    for column in rows.columns:
+        kind = column.type
+        if pa.types.is_nested(kind):
+            values = [None if item is None else json.dumps(_finite(item), default=_json_default, allow_nan=False,
+                                                           ensure_ascii=False) for item in column.to_pylist()]
+            column = pa.chunked_array([pa.array(values, pa.string())])
+        elif pa.types.is_binary(kind) or pa.types.is_large_binary(kind) or pa.types.is_fixed_size_binary(kind):
+            column = pa.chunked_array([pa.array([None if item is None else bytes(item).hex()
+                                                 for item in column.to_pylist()], pa.string())])
+        elif pa.types.is_floating(kind):
+            column = pc.if_else(pc.is_finite(column), column, pa.scalar(None, kind))
+        columns.append(column)
+    return pa.table(columns, names=rows.schema.names)
+
+
 def _write(rows: pa.Table, sink: Any, fmt: str) -> None:
     if fmt == "parquet":
         import pyarrow.parquet as pq
 
         pq.write_table(rows, sink)
         return
+    if fmt == "csv":
+        import pyarrow.csv as pacsv
+
+        pacsv.write_csv(_csv_ready(rows), sink)
+        return
     for batch in rows.to_batches(max_chunksize=_JSONL_BATCH_ROWS):
         lines = "".join(_jsonl_line(row) + "\n" for row in batch.to_pylist())
         sink.write(lines.encode("utf-8"))
+
+
+def export_format(format: str) -> str:
+    """The name of an export format, lower case.
+
+    Raises:
+        ConfigError: If it is not one of :data:`EXPORT_FORMATS`.
+    """
+    fmt = str(format).strip().lower()
+    if fmt not in EXPORT_FORMATS:
+        raise ConfigError(f"unknown export format {format!r}; expected one of {list(EXPORT_FORMATS)}")
+    return fmt
 
 
 def export(version: DatasetVersion, uri: str | os.PathLike, format: str = "parquet", *,
@@ -681,13 +722,14 @@ def export(version: DatasetVersion, uri: str | os.PathLike, format: str = "parqu
 
     Parquet files carry the manifest in their schema metadata under ``ldp.dataset``, so an
     exported file says which table, snapshot and filter it came from. JSONL writes one JSON
-    object per row; timestamps become ISO-8601 strings and NaN becomes ``null``.
+    object per row; timestamps become ISO-8601 strings and NaN becomes ``null``. CSV writes a
+    header and one line per row, a list, a struct or a map as JSON text, and NaN as no value.
 
     Args:
         version: The version to export.
         uri: A local path (relative paths resolve against ``base_dir``, else the cwd), or an
             ``s3://`` / ``gs://`` URI, written through :mod:`local_data_platform.fs`.
-        format: ``"parquet"`` (the default) or ``"jsonl"``.
+        format: ``"parquet"`` (the default), ``"jsonl"`` or ``"csv"``.
         catalog: Passed to :func:`load`.
         base_dir: The folder a relative ``uri`` resolves against.
 
@@ -698,14 +740,37 @@ def export(version: DatasetVersion, uri: str | os.PathLike, format: str = "parqu
         ConfigError: If the format is unknown.
         DatasetError: If the version can't be loaded (see :func:`load`).
     """
-    fmt = str(format).strip().lower()
-    if fmt not in EXPORT_FORMATS:
-        raise ConfigError(f"unknown export format {format!r}; expected one of {list(EXPORT_FORMATS)}")
+    fmt = export_format(format)
     rows = load(version, catalog=catalog)
     if fmt == "parquet":
         metadata = dict(rows.schema.metadata or {})
         metadata[b"ldp.dataset"] = json.dumps(version.to_dict(), sort_keys=True).encode()
         rows = rows.replace_schema_metadata(metadata)
+    write_rows(rows, uri, fmt, base_dir=base_dir)
+    logger.info("Exported dataset %s (%d rows) to %s as %s", version.ref, rows.num_rows, os.fspath(uri), fmt)
+    return rows.num_rows
+
+
+def write_rows(rows: pa.Table, uri: str | os.PathLike, format: str = "parquet", *,
+               base_dir: str | os.PathLike | None = None) -> int:
+    """Write rows to a file as Parquet, JSONL or CSV.
+
+    This is what :func:`export` writes with, for rows that are not a dataset version. A Parquet file carries the
+    metadata that the schema of ``rows`` has.
+
+    Args:
+        rows: The rows.
+        uri: A local path (relative paths resolve against ``base_dir``, else the cwd), or an ``s3://`` / ``gs://`` URI.
+        format: ``"parquet"`` (the default), ``"jsonl"`` or ``"csv"``.
+        base_dir: The folder a relative ``uri`` resolves against.
+
+    Returns:
+        The number of rows written. The file is replaced atomically.
+
+    Raises:
+        ConfigError: If the format is unknown.
+    """
+    fmt = export_format(format)
     text = os.fspath(uri)
     if "://" in text and not text.startswith("file://"):
         try:
@@ -725,7 +790,6 @@ def export(version: DatasetVersion, uri: str | os.PathLike, format: str = "parqu
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
-    logger.info("Exported dataset %s (%d rows) to %s as %s", version.ref, rows.num_rows, text, fmt)
     return rows.num_rows
 
 
@@ -889,10 +953,12 @@ __all__ = [
     "add_cli",
     "datasets_dir",
     "export",
+    "export_format",
     "get_version",
     "list_datasets",
     "list_versions",
     "load",
     "pin",
     "schema_fingerprint",
+    "write_rows",
 ]

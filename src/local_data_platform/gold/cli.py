@@ -1,11 +1,13 @@
 """The ``ldp gold`` commands.
 
 ``ldp gold sync CONFIG [--dbt-manifest FILE] [--dry-run] [--json]`` writes the contract of a config into its existing
-table, ``ldp gold build DIR [--no-release] [--json]`` builds the gold tables of a folder in order and cuts a release,
-``ldp gold releases DIR [--show RELEASE] [--json]`` lists the releases, ``ldp gold list DIR [--all-layers] [--json]
-[--strict]`` lists the tables with what they mean and how they are doing, ``ldp gold show DIR TABLE [--json]
-[--no-samples]`` describes one, and ``ldp gold docs DIR --out FILE [--format html|md]`` writes the catalog as a page.
-``cli.py`` wires this in with :func:`add_cli`. Heavy imports happen inside the command.
+table, ``ldp gold build DIR [--no-release] [--duckdb FILE] [--json]`` builds the gold tables of a folder in order and
+cuts a release, ``ldp gold releases DIR [--show RELEASE] [--json]`` lists the releases, ``ldp gold list DIR
+[--all-layers] [--json] [--strict]`` lists the tables with what they mean and how they are doing, ``ldp gold show DIR
+TABLE [--json] [--no-samples]`` describes one, and ``ldp gold docs DIR --out FILE [--format html|md]`` writes the
+catalog as a page. ``ldp gold export DIR TABLE DEST [--format csv|parquet|jsonl|xlsx] [--release RN | --live] [--json]``
+writes one table as a file, and ``ldp gold duckdb DIR --out FILE [--release RN | --live] [--json]`` writes the whole
+gold layer as one DuckDB file. ``cli.py`` wires this in with :func:`add_cli`. Heavy imports happen inside the command.
 """
 
 import argparse
@@ -125,15 +127,70 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
                     "the snapshot of each gold table, so that a reader sees tables that agree. A build that a gate "
                     "blocks cuts none, and the last release stays current. When DIR has a metrics file, its names and "
                     "expressions are checked against the tables, as ldp metrics validate does, and a release is cut "
-                    "only if they fit.",
+                    "only if they fit. With --duckdb FILE, the DuckDB file of the gold layer is written after a "
+                    "release is cut, as ldp gold duckdb writes it, and a build that does not succeed leaves the "
+                    "file that is there.",
         epilog="Exit status is 0 when every table was built or checked, 3 when a gate held a table back, and 1 on any "
-               "other failure, a release that could not be cut and metrics that do not fit their tables included. "
-               "Example: ldp gold build ldp_demo/robots")
+               "other failure, a release that could not be cut, metrics that do not fit their tables and a DuckDB "
+               "file that could not be written included. "
+               "Example: ldp gold build ldp_demo/robotics --duckdb gold.duckdb")
     build.add_argument("folder", metavar="DIR", help="a folder of dataset configs")
     build.add_argument("--no-release", action="store_true", dest="no_release",
                        help="build the tables without cutting a release")
+    build.add_argument("--duckdb", metavar="FILE",
+                       help="write the DuckDB file of the gold layer to FILE after the release is cut, or when the "
+                            "file is missing or holds another release. {release} in the name is replaced by the "
+                            "release, so that every release is a new file, which Windows needs while a program has "
+                            "the old one open")
     build.add_argument("--json", action="store_true", help="print the result as JSON when the build is over")
     build.set_defaults(handler=_cmd_build)
+
+    export = actions.add_parser(
+        "export", parents=parents, help="write one gold table as a CSV, Parquet, JSONL or Excel file",
+        description="Write the current release of a gold table as a file that opens without Python or Iceberg. The "
+                    "format comes from the end of DEST, or from --format. An Excel file has a second sheet, about, "
+                    "with the description, owner, release, snapshot id and column descriptions of the table, and it "
+                    "needs the excel extra. A table of more than 1,048,575 rows does not fit a sheet, so export CSV. "
+                    "The table is read as release RELEASE names it, and by default as the current release does, so "
+                    "that the file agrees with every other reader of the release. With --live it is the table as it "
+                    "is now. Nothing but DEST is written.",
+        epilog="Example: ldp gold export ldp_demo/robotics gold_robot_daily daily.xlsx")
+    export.add_argument("folder", metavar="DIR", help="a folder of dataset configs")
+    export.add_argument("table", metavar="TABLE",
+                        help="a table such as gold.daily_sales, or its bare name when only one table has it")
+    export.add_argument("dest", metavar="DEST", help="the file to write. Parquet, JSONL and CSV may be an s3:// or "
+                                                     "gs:// URI")
+    export.add_argument("--format", choices=("csv", "parquet", "jsonl", "xlsx"),
+                        help="the format, when the end of DEST does not say it")
+    when = export.add_mutually_exclusive_group()
+    when.add_argument("--release", metavar="RELEASE",
+                      help="read the table as release RELEASE of ldp gold build names it, such as r2. The default is "
+                           "the current release")
+    when.add_argument("--live", action="store_true", help="read the table as it is now, and no release")
+    export.add_argument("--json", action="store_true", help="print the result as JSON")
+    export.set_defaults(handler=_cmd_export)
+
+    duckdb = actions.add_parser(
+        "duckdb", parents=parents, help="write the whole gold layer as one DuckDB file for BI tools",
+        description="Write a DuckDB file with a copy of every gold table of the current release, a comment on each "
+                    "table and column from its contract, a _catalog table with what each table is, who owns it, "
+                    "its release and snapshot and when it was built, and a _metrics table with the metric "
+                    "definitions. The tables are in the main schema under their own names. The file opens in the "
+                    "DuckDB command line, in the DuckDB UI with duckdb -ui FILE and in the BI tools that read DuckDB, "
+                    "and needs no extension. It is written to a temporary path and renamed, so a reader never sees "
+                    "half a file. A gold table that the release does not hold is left out. {release} in the name "
+                    "is replaced by the release.",
+        epilog="The DuckDB UI fetches its web pages from ui.duckdb.org. Example: ldp gold duckdb ldp_demo/robotics "
+               "--out gold.duckdb")
+    duckdb.add_argument("folder", metavar="DIR", help="a folder of dataset configs")
+    duckdb.add_argument("--out", required=True, metavar="FILE", help="the DuckDB file to write")
+    when = duckdb.add_mutually_exclusive_group()
+    when.add_argument("--release", metavar="RELEASE",
+                      help="copy the tables as release RELEASE of ldp gold build names them, such as r2. The default "
+                           "is the current release")
+    when.add_argument("--live", action="store_true", help="copy the tables as they are now, and no release")
+    duckdb.add_argument("--json", action="store_true", help="print the result as JSON")
+    duckdb.set_defaults(handler=_cmd_duckdb)
 
     releases = actions.add_parser(
         "releases", parents=parents, help="list the releases of the gold tables of a folder, newest first",
@@ -211,6 +268,23 @@ def _cmd_docs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_export(args: argparse.Namespace) -> int:
+    from local_data_platform.gold import serve
+
+    done = serve.export_table(args.folder, args.table, args.dest, format=args.format, release=args.release,
+                              live=args.live)
+    print(json.dumps(done.to_dict(), indent=2) if args.json else done.summary())
+    return 0
+
+
+def _cmd_duckdb(args: argparse.Namespace) -> int:
+    from local_data_platform.gold import serve
+
+    done = serve.write_duckdb_file(args.folder, args.out, release=args.release, live=args.live)
+    print(json.dumps(done.to_dict(), indent=2) if args.json else done.summary())
+    return 0
+
+
 def _cmd_sync(args: argparse.Namespace) -> int:
     from local_data_platform.gold.sync import sync_config
 
@@ -249,9 +323,13 @@ def _describe_release(result: Any) -> str:
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
+    from local_data_platform.exceptions import ConfigError
+    from local_data_platform.gold import serve
     from local_data_platform.gold.build import build_gold, find_gold, order_gold
     from local_data_platform.gold.release import ReleaseError
 
+    if args.duckdb and args.no_release:
+        raise ConfigError("--duckdb writes the file for a release, so it cannot be used with --no-release")
     width = max((len(item.config.identifier) for item in order_gold(find_gold(args.folder))), default=0)
 
     def show(outcome: Any) -> None:
@@ -264,8 +342,12 @@ def _cmd_build(args: argparse.Namespace) -> int:
         result = build_gold(args.folder, on_table=None if args.json else show, release=not args.no_release)
     except ReleaseError as error:
         raise ReleaseError(f"{error}. Build with --no-release to build without a release") from None
+    written = serve.refresh_after_build(args.folder, args.duckdb, result) if args.duckdb else None
     if args.json:
-        print(json.dumps(result.to_dict(), indent=2))
+        payload = result.to_dict()
+        if written is not None:
+            payload["duckdb"] = written.to_dict()
+        print(json.dumps(payload, indent=2))
     else:
         counts = result.counts()
         print(f"gold build {result.folder}: {counts['built']} built, {counts['checked']} checked, "
@@ -277,6 +359,8 @@ def _cmd_build(args: argparse.Namespace) -> int:
                   f"{_plural(len(definitions.metrics), 'metric')} fit the gold tables")
         if result.release is not None:
             print(_describe_release(result))
+        if written is not None:
+            print(f"duckdb: {written.summary()}")
     stopped = result.stopped_by
     if stopped is not None and not args.json:
         print(f"ldp: {stopped.gold.config.identifier} {stopped.status}", file=sys.stderr)
@@ -291,7 +375,11 @@ def _cmd_build(args: argparse.Namespace) -> int:
         print("ldp: the release was not cut", file=sys.stderr)
         for line in result.release.error.splitlines():
             print(f"  {line}", file=sys.stderr)
-    return result.exit_code
+    if written is not None and written.status == "failed" and not args.json:
+        print(f"ldp: the DuckDB file was not written, and {written.path} is as it was", file=sys.stderr)
+        for line in (written.error or "").splitlines():
+            print(f"  {line}", file=sys.stderr)
+    return result.exit_code or (1 if written is not None and written.status == "failed" else 0)
 
 
 def _utc(moment: Any) -> str:
