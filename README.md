@@ -233,14 +233,16 @@ call:
 | `ldp plan CONFIG [--window WINDOW] [--json]` | Validate a config (or a folder of files, each as its kind) and print its spec hash, route, target, sinks, schedule, and the source path and idempotency key of a window | `spec.validate_spec(data)`, `spec.plan(config, window=...)` |
 | `ldp runs CONFIG [--run RUN_ID] [--events] [--attempts]` | List the runs a config's sinks recorded, the last attempt of a run that was retried, or every attempt with `--attempts` | `events.summarize_runs(events.read_jsonl(path))` or `read_iceberg_events(catalog)` |
 | `ldp commits CONFIG [--key KEY] [--branches]` | List the staged publishes on a table, newest first | `format.iceberg.commit.commit_log(iceberg.table())` and `staged_branches(...)` |
-| `ldp datasets pin\|list\|export` | Pin, list and export dataset versions | `datasets.pin`, `list_versions`, `export` |
+| `ldp datasets pin\|list\|export` | Pin, list and export dataset versions, as Parquet, JSONL or CSV | `datasets.pin`, `list_versions`, `export` |
 | `ldp maintain CONFIG [--expire DAYS] [--orphans] [--apply]` | Expire snapshots and find orphan files; a dry run unless `--apply` | `maintenance.expire_snapshots`, `find_orphans`, `remove_orphans` |
 | `ldp mcp --config CONFIG ...` | Serve tables to an agent over MCP (stdio) | `python -m local_data_platform.mcp_server ...`, same options |
 | `ldp dbt init\|build\|test\|docs\|exec PROJECT_DIR` | Run a dbt project over your Iceberg tables; `build` writes the models marked `ldp_publish` back to Iceberg (needs the `dbt` extra) | `dbt_layer.register_sources(...)`, `dbt_layer.publish.plan_publish(...)` and `publish(...)` |
 | `ldp gold sync CONFIG [--dbt-manifest FILE] [--dry-run] [--json]` | Write the contract of a config (its `metadata.docs`) into its existing Iceberg table, with no new data. `--dbt-manifest` reads it from a dbt manifest, for a table that dbt built, and `--dry-run` only says what would change. See [Table contracts](#table-contracts) | `gold.sync.sync_config(path)`, `contracts.apply_contract(table, docs)` |
-| `ldp gold build DIR [--no-release] [--json]` | Build the gold tables of a folder in the order that their `inputs` say, and check the ones that are built elsewhere. One line for each table, and a gate that blocks a table stops the build with exit status 3. When every table passed, and the metrics of the folder fit them, it cuts a release, unless `--no-release` says not to. See [Build the gold tables](#build-the-gold-tables) | `gold.build.build_gold(folder, release=True)` |
+| `ldp gold build DIR [--no-release] [--duckdb FILE] [--json]` | Build the gold tables of a folder in the order that their `inputs` say, and check the ones that are built elsewhere. One line for each table, and a gate that blocks a table stops the build with exit status 3. When every table passed, and the metrics of the folder fit them, it cuts a release, unless `--no-release` says not to. `--duckdb FILE` then writes the DuckDB file of the gold layer. See [Build the gold tables](#build-the-gold-tables) | `gold.build.build_gold(folder, release=True)`, `gold.serve.refresh_after_build(folder, out, result)` |
 | `ldp gold releases DIR [--show RELEASE] [--json]` | List the releases of the gold tables of a folder, newest first, or the tables of one release. See [Release the gold tables](#release-the-gold-tables) | `gold.release.list_releases(folder)`, `current_release(folder)`, `snapshot_for(table, release)` |
 | `ldp gold list DIR [--all-layers] [--json] [--strict]` | One row for each gold table of a folder, with what it means, who owns it, what one row is, its rows, when its data last changed, the status of its last run, the verdict of its last quality check and the release it is in. A table with no contract shows `no description`. `--all-layers` adds the other tables, and `--strict` exits with 1 when a gold table lacks part of its contract, for CI. See [Browse the gold tables](#browse-the-gold-tables) | `gold.catalog.collect(folder)` |
+| `ldp gold export DIR TABLE DEST [--format csv\|parquet\|jsonl\|xlsx] [--release RN\|--live] [--json]` | Write one gold table, as the current release holds it, as a CSV, Parquet, JSONL or Excel file, which opens with no Python and no Iceberg. An Excel file has a second sheet, `about`, with the contract of the table, and needs the `excel` extra. See [Open the gold tables in a spreadsheet or a BI tool](#open-the-gold-tables-in-a-spreadsheet-or-a-bi-tool) | `gold.serve.export_table(folder, table, dest)` |
+| `ldp gold duckdb DIR --out FILE [--release RN\|--live] [--json]` | Write the whole gold layer as one DuckDB file, with a copy of each table of the current release, a comment on each table and column, a `_catalog` table and a `_metrics` table. It opens in the DuckDB command line, the DuckDB UI and the BI tools that read DuckDB. See [Open the gold tables in a spreadsheet or a BI tool](#open-the-gold-tables-in-a-spreadsheet-or-a-bi-tool) | `gold.serve.write_duckdb_file(folder, out)` |
 | `ldp gold show DIR TABLE [--runs N] [--no-samples] [--json]` | Describe one table: its contract, every column with its type and description, its last runs, the releases that include it, a few sample rows and an `ldp query` line that reads it | `gold.catalog.collect(folder, only=table, detail=True)` |
 | `ldp gold docs DIR --out FILE [--format html\|md] [--all-layers] [--no-samples]` | Write the catalog as one self-contained page with a search box, or as Markdown for a MkDocs site | `gold.render.html_page(catalog)`, `gold.render.markdown_page(catalog)` |
 | `ldp metrics list DIR [--json]` | One row for each metric of the `metrics.json` files of a folder, with its description, owner, format, table, dimensions and grains. See [Define metrics](#define-metrics) | `metrics.load_metrics(folder)` |
@@ -864,6 +866,88 @@ ORDER BY 1
 [MCP server for agents](#mcp-server-for-agents). The gold catalog shows the metrics of each table, in `ldp gold show`,
 on the page of `ldp gold docs`, and in its search.
 
+### Open the gold tables in a spreadsheet or a BI tool
+
+A person who works in a spreadsheet or a desktop SQL tool should be able to use a gold table without Python, Iceberg or an
+engineer. `ldp gold export` writes one table as a file, and `ldp gold duckdb` writes the whole gold layer as one DuckDB file.
+Both read the gold layer as every reader does, so by default it is the current release, `--release r1` reads an older one
+and `--live` reads the tables as they are now.
+
+```bash
+ldp gold export examples/robot_episodes/data gold_robot_daily daily.csv
+ldp gold export examples/robot_episodes/data gold_robot_daily daily.xlsx
+```
+
+```text
+wrote daily.csv, 16 rows of robots.gold_robot_daily, read from release r1, cut 2026-10-23 11:26:36 UTC, snapshot 1317331787740633770
+wrote daily.xlsx, 16 rows of robots.gold_robot_daily, read from release r1, cut 2026-10-23 11:26:36 UTC, snapshot 1317331787740633770
+```
+
+The format comes from the end of the name, or from `--format`.
+
+- **CSV, Parquet and JSONL.** The three are written by `datasets.write_rows`, the same function as `ldp datasets export`,
+  which has `--format csv` too. A CSV has a header and a line for each row. A list, a struct or a map is written as JSON text,
+  bytes as hexadecimal and a number that is not finite as no value. A Parquet file has the table, release and snapshot in its
+  metadata, under `ldp.gold`. A name that starts with `s3://` or `gs://` is written there.
+- **Excel.** The file needs the `excel` extra, `pip install "local-data-platform[excel]"`, and says which if it is missing.
+  The first sheet has the rows, with a bold header that stays in view and a filter. The second sheet is called `about` and
+  has the description, owner, grain and key of the table, its release, snapshot id and build time, its rows, and every
+  column with a word for its type and its description. A text is always a text and never a formula, even when it starts
+  with `=`. A time with a zone is written in UTC, because a sheet has no zones. An integer beyond 2^53 is written as text,
+  because a sheet would round it. A table with more than 1,048,575 rows does not fit a sheet, with its header row, and is
+  refused before it is read, with a hint to use CSV. A table with more than 16,384 columns and a value of more than 32,767
+  characters are refused too, with the same hint, when the file is written, and no file is left.
+- **A CSV and a formula.** Excel runs a CSV value that starts with `=`, `+`, `-` or `@` as a formula when a person opens
+  the file. LDP writes the values as they are, so use Excel for text that people typed and that you do not trust.
+- **A table that the release does not hold.** When the current release was cut before the table existed, the table is read
+  as it is, and the line says why. `--release r1` for a table that r1 does not hold is refused.
+
+```bash
+ldp gold duckdb examples/robot_episodes/data --out gold.duckdb
+```
+
+```text
+wrote gold.duckdb, 2 tables and 5 metrics, from release r1, cut 2026-10-23 11:26:36 UTC, 1292.0 KB
+```
+
+The file has a copy of every gold table of the release, in the `main` schema under its own name, so `SELECT * FROM
+gold_robot_daily` works. It has no schema called `gold`, because DuckDB names a file's database after the file, and
+`gold.daily_sales` in a file called `gold.duckdb` would be ambiguous. Three more things are in it.
+
+- **Comments.** `COMMENT ON TABLE` has the description of each table and `COMMENT ON COLUMN` the description of each column,
+  from the contract, so a tool that shows comments shows what the data means.
+- **`_catalog`.** One row for each table with `table_name`, `description`, `owner`, `grain`, `release`, `snapshot_id` and
+  `built_at`, which is when that snapshot was written, in UTC.
+- **`_metrics`.** One row for each metric of `metrics.json` with its `metric`, `description`, `owner`, `type`, `format`,
+  `table_name`, `definition`, `dimensions`, `time_column` and `grains`. The `definition` is the SQL that computes it from
+  its table, such as `sum(dropped_frames) / NULLIF(sum(frames), 0)`. The table is empty when the folder has no metrics file.
+
+Open it in the DuckDB command line, with `duckdb gold.duckdb`, or in the DuckDB UI, with `duckdb -ui gold.duckdb`. The UI
+fetches its web pages from ui.duckdb.org, so it needs the network.
+
+```sql
+SELECT table_name, owner, grain, release FROM _catalog;
+SELECT metric, definition FROM _metrics;
+SELECT robot_id, round(avg(success_rate), 2) AS success_rate FROM gold_robot_daily GROUP BY 1 ORDER BY 1;
+```
+
+- **It needs no extension.** The file has plain tables, so a DuckDB with no extension reads it, and no `iceberg_scan` is in
+  it. It is written in the storage version of DuckDB 1.0, so a DuckDB 1.x opens it as well as a DuckDB 2.0. DuckDB 2.0
+  writes a newer version by default, which a DuckDB 1.x cannot open.
+- **A reader never sees half a file.** It is written to a temporary path next to the file and renamed. A failure leaves the
+  file that was there, and no temporary file.
+- **It holds one release.** A gold table that the release does not hold is left out, and the output names it, so that the
+  file is as consistent as the release is. With `--live` it holds every table as it is now and `_catalog.release` has no
+  value.
+- **`ldp gold build DIR --duckdb gold.duckdb`** writes the file after the build cuts a release. When the build cuts none,
+  because the tables are at the snapshots of the current release, the file is written only if it is missing or holds
+  another release. A build that a gate blocks or that fails leaves the file alone, so the file that readers have is the
+  one of the last good release. A file that cannot be written after the release was cut is an error with exit status 1,
+  and the release stays cut. `--duckdb` cannot be used with `--no-release`.
+- **Windows.** Replacing a file that a program has open fails on Windows. `{release}` in the name is replaced by the release,
+  so `--out "gold_{release}.duckdb"` writes a new file for each release and never replaces one.
+- **Memory.** A table is read whole before it is written, as `ldp datasets export` does, so a gold table has to fit in memory.
+
 ## Catalogs and object storage
 
 The catalog block's `type` picks the catalog. It defaults to `local`, so a catalog block without
@@ -1154,7 +1238,7 @@ episodes = Iceberg("gold_episode_stats", {"identifier": "robots", "warehouse_pat
 train = datasets.pin(episodes, "humanoid_train", row_filter="success = true",
                      selected_fields=["episode_id", "robot_id", "task", "frame_count"])
 rows = datasets.load(train)                                    # the same rows at any later time
-datasets.export(train, "exports/humanoid_train_v1.parquet")    # or format="jsonl"
+datasets.export(train, "exports/humanoid_train_v1.parquet")    # or format="jsonl" or "csv"
 ```
 
 Each pin also tags the snapshot (`ldp_ds_<name>_v<N>`), so snapshot expiry keeps it.
