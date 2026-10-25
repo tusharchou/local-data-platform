@@ -1188,6 +1188,18 @@ make demo-orchestration     # the restaurant's nightly drops, a bad row, a backf
 - `make demo-orchestration` runs `examples/restaurant/run.py --layer orchestration`. It drops three nights of orders into a folder, with a bad row in the third. `ldp backfill` publishes two days and a data gate holds the third back, with exit status 3. After the fix, the same command runs only the third, and a third run skips every day. `ldp schedule tick` then loads the fourth night, and `ldp runs`, `ldp commits`, `ldp schedule list` and `ldp schedule install` show what happened. It needs no extra, runs the `models` and `gold` tasks when the `dbt` extra is installed, and prints a skip line when it is not.
 - The pieces are described above, under [Windows](#windows), [Workflow files](#workflow-files), [Backfill a range of windows](#backfill-a-range-of-windows), [Run on a schedule](#run-on-a-schedule) and [Run from Airflow](#run-from-airflow), and the exit statuses are in the [table](#use-it-from-the-command-line) of the command line section.
 
+## Gold layer
+
+A gold table is a table that people read. It says who owns it, what it means, what one row is and what each column holds, it is checked before it is written, and all the gold tables are published together as one release, so every reader sees the same build. A metric such as the average ticket is defined once. People who do not write code get the tables as a catalog page, an Excel file and one DuckDB file, and an AI agent can be limited to the gold tables.
+
+```bash
+make demo-gold     # the restaurant's data mart, a faulty batch that the gate stops, a release, a metric and files for people
+```
+
+- The [gold layer guide](docs/gold.md) walks through it on the restaurant example, command by command, from the three layers and a gate that stops a bad batch to the contract of a gold table, a release that a gate can hold back, the catalog, metrics, files for people and `ldp mcp --layer gold`. It has a section for people who are not engineers, and every command in it runs in the tests.
+- `make demo-gold` runs `examples/restaurant/run.py --layer gold`. It loads the raw tables, stops a faulty week of orders at the gate with each failed check named, loads the week without the faults, builds the gold tables with dbt, cuts a release with `ldp gold build`, asks for a metric with `ldp metrics query`, and writes an Excel file, a DuckDB file and a catalog page. It needs the `dbt` and `excel` extras, and takes about 10 seconds.
+- The commands are described above, under [Table contracts](#table-contracts), [Build the gold tables](#build-the-gold-tables), [Release the gold tables](#release-the-gold-tables), [Browse the gold tables](#browse-the-gold-tables), [Define metrics](#define-metrics) and [Open the gold tables in a spreadsheet or a BI tool](#open-the-gold-tables-in-a-spreadsheet-or-a-bi-tool).
+
 ## MCP server for agents
 
 `local_data_platform.mcp_server` serves your tables to an AI agent over the Model Context Protocol,

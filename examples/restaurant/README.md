@@ -16,7 +16,7 @@ This is the `warehouse` layer. It is the first layer of an example that the late
 `--layer` runs one layer, and the layers that it needs first. Without the `dbt` or the `excel`
 extra, `run.py` says which one to install and exits with 1. The design is in [PRD.md](PRD.md), and the
 [warehousing guide](../../docs/warehousing.md) does the same steps by hand with the `ldp` commands. The second layer,
-`orchestration`, is [below](#the-orchestration-layer), and the third, `gold`, is [below that](#the-gold-layer).
+`orchestration`, is [below](#the-orchestration-layer), and the third, `gold`, is [below that](#the-gold-layer). The [gold layer guide](../../docs/gold.md) does the steps of the third layer by hand.
 
 ## What happens
 
@@ -253,7 +253,7 @@ python examples/restaurant/run.py --workdir ldp_demo/restaurant --layer gold   #
 
 The third layer is the data mart that people who are not engineers can use, which is the restaurant group's revenue, its
 best sellers, its ratings and its churn, as tables with an owner, a meaning and a gate. It needs the `dbt` and `excel`
-extras, loads the raw tables itself, and takes about 5 seconds.
+extras, loads the raw tables itself, and takes about 10 seconds.
 
 | Step | What the platform does | Where |
 |---|---|---|
@@ -349,6 +349,8 @@ builds the daily sales model with dbt, runs the `gold` task, which checks the go
 orders table. A day that a gate holds back cuts no release, so the readers of the gold layer see the last good one. The
 [orchestration layer](#the-orchestration-layer) above shows it, and the work folder of that layer has the releases `r1` to
 `r4`, one for each night that passed.
+
+The [gold layer guide](../../docs/gold.md) does the same steps by hand with the `ldp` commands. It adds the contract of a gold table, a gate that holds a release back, the catalog, the metrics file, the files for people and an agent that reads only the gold tables.
 
 ## Files
 
