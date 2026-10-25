@@ -1,6 +1,6 @@
 """Deterministic synthetic data for a small restaurant chain: the dataset every layer of the restaurant example uses.
 
-Six restaurants in six cities, a menu, 150 customers, their orders from January to early August 2026, the order
+Six restaurants in five cities, a menu, 150 customers, their orders from January to early August 2026, the order
 lines, and some reviews. The same ``seed`` always gives the same files, and nothing here needs a network or a
 random-number library beyond :mod:`random`.
 
@@ -13,6 +13,8 @@ The orders arrive the way a restaurant system exports them, in dated batches:
 |  | synced in July, so their ``updated_at`` is in July |
 | ``2026-08-01`` to ``2026-08-07`` | one drop a day, an orders file and an order lines file, for the milestones that |
 |  | schedule a load for each day. A line carries the ``order_ts`` of its order, so a window can pick a day's lines |
+| the first week of August | the same 30 orders as one file, which the gold layer loads, and a faulty version of that |
+|  | file, with a negative amount, a restaurant that does not exist and an order that is there twice |
 
 Each order has an ``updated_at``, the time the restaurant system last changed it, which tells the versions of an
 order apart. A model can load only what is new by taking an order it has no row for, or one that is newer than the
@@ -41,12 +43,14 @@ BATCH2_END = dt.date(2026, 7, 31)
 DROP_DAYS = tuple(dt.date(2026, 8, day) for day in range(1, 8))
 CHANNELS = (("dine_in", 0.5), ("takeaway", 0.25), ("delivery", 0.25))
 STATIC_FILES = ("restaurants.xlsx", "menu_items.csv", "customers.csv", "reviews.csv")
+UNKNOWN_RESTAURANT = "R99"
+"""The restaurant of the order in the faulty batch that belongs to no restaurant."""
 
 RESTAURANTS = (
     ("R01", "Dosa Corner", "Bengaluru", "South Indian", dt.datetime(2023, 6, 1, 9, 0)),
     ("R02", "Spice Route", "Mumbai", "North Indian", dt.datetime(2022, 11, 15, 9, 0)),
     ("R03", "Chaat Junction", "Delhi", "Street food", dt.datetime(2024, 2, 10, 9, 0)),
-    ("R04", "Brew & Bun", "Pune", "Cafe", dt.datetime(2024, 9, 1, 9, 0)),
+    ("R04", "Brew & Bun", "Mumbai", "Cafe", dt.datetime(2024, 9, 1, 9, 0)),
     ("R05", "Kolkata Kitchen", "Kolkata", "Bengali", dt.datetime(2023, 1, 20, 9, 0)),
     ("R06", "Biryani Bazaar", "Hyderabad", "Biryani", dt.datetime(2025, 3, 5, 9, 0)),
 )
@@ -70,6 +74,15 @@ FIRST_NAMES = ("Aarav", "Diya", "Kabir", "Meera", "Rohan", "Isha", "Vikram", "An
 LAST_NAMES = ("Rao", "Shah", "Iyer", "Gupta", "Das", "Nair", "Mehta", "Bose", "Reddy", "Khan")
 COMMENTS = ("Great food", "Loved it", "Quick service", "Too salty", "Will come again", "A bit slow",
             "Good value", "Fresh and hot")
+
+
+@dataclass(frozen=True)
+class Fault:
+    """One thing that is wrong in the faulty batch: its ``kind``, the order it is in and what it looks like."""
+
+    kind: str
+    order_id: str
+    detail: str
 
 
 @dataclass
@@ -96,6 +109,38 @@ class Dataset:
     def batch_order_lines(self, batch: str) -> list[dict]:
         ids = {order["order_id"] for order in self.orders if order["batch"] == batch}
         return [line for line in self.order_lines if line["order_id"] in ids]
+
+    def week_orders(self) -> list[dict]:
+        """The orders of 1 to 7 August as one batch, oldest first by ``updated_at``."""
+        days = {day.isoformat() for day in DROP_DAYS}
+        return sorted((order for order in self.orders if order["batch"] in days),
+                      key=lambda order: (order["updated_at"], order["order_id"]))
+
+    def week_order_lines(self) -> list[dict]:
+        """The lines of the orders of :meth:`week_orders`."""
+        ids = {order["order_id"] for order in self.week_orders()}
+        return [line for line in self.order_lines if line["order_id"] in ids]
+
+    def faulty_week(self) -> tuple[list[dict], list["Fault"]]:
+        """The orders of :meth:`week_orders` as a restaurant system sends them on a bad day, and what is wrong.
+
+        Three of the orders are damaged. The second has a negative total, as if its sign had been flipped. The fifth
+        belongs to the restaurant ``R99``, which does not exist. The eighth is in the file twice, with the same
+        ``updated_at``, so that nothing says which copy is the later one. Each fault is in an order of its own, and a
+        check that looks at one file can see all three.
+
+        Returns:
+            The rows of the faulty file, and a :class:`Fault` for each damage.
+        """
+        orders = [dict(order) for order in self.week_orders()]
+        negative, unknown, repeated = orders[1], orders[4], orders[7]
+        negative["total_amount"] = -negative["total_amount"]
+        unknown["restaurant_id"] = UNKNOWN_RESTAURANT
+        faults = [Fault("negative_amount", negative["order_id"], f"total_amount is {negative['total_amount']:.2f}"),
+                  Fault("unknown_restaurant", unknown["order_id"], f"restaurant_id is {UNKNOWN_RESTAURANT}"),
+                  Fault("duplicated_order", repeated["order_id"], "the order is in the file twice")]
+        orders.insert(8, dict(repeated))
+        return orders, faults
 
 
 def _pick(rng: random.Random, items: tuple | list):
@@ -288,17 +333,30 @@ def _write_customers(folder: Path, dataset: Dataset) -> Path:
                       {"signed_up_at": _stamp})
 
 
-def write_dimensions(folder: str | Path, dataset: Dataset) -> list[Path]:
-    """Write the two tables that the daily models join to, ``restaurants.csv`` and ``customers.csv``.
+def _write_menu_items(folder: Path, dataset: Dataset) -> Path:
+    return _write_csv(folder / "menu_items.csv", ("menu_item_id", "restaurant_id", "name", "category", "price"),
+                      dataset.menu_items, {"price": _money})
 
-    The restaurants are a CSV file here, where :func:`write_static` writes them as an Excel workbook, so this needs no
-    Excel reader.
+
+def _write_reviews(folder: Path, dataset: Dataset) -> Path:
+    return _write_csv(folder / "reviews.csv",
+                      ("review_id", "order_id", "customer_id", "restaurant_id", "rating", "comment", "reviewed_at"),
+                      dataset.reviews, {"reviewed_at": _stamp})
+
+
+def write_dimensions(folder: str | Path, dataset: Dataset) -> list[Path]:
+    """Write the four small tables that the models of the dbt project read besides the orders and their lines.
+
+    These are ``restaurants.csv``, ``customers.csv``, ``menu_items.csv`` and ``reviews.csv``. The restaurants are a CSV
+    file here, where :func:`write_static` writes them as an Excel workbook, so this needs no Excel reader.
     """
     folder = Path(folder)
     return [
         _write_csv(folder / "restaurants.csv", ("restaurant_id", "name", "location", "cuisine", "created_at"),
                    dataset.restaurants, {"created_at": _stamp}),
         _write_customers(folder, dataset),
+        _write_menu_items(folder, dataset),
+        _write_reviews(folder, dataset),
     ]
 
 
@@ -307,12 +365,9 @@ def write_static(folder: str | Path, dataset: Dataset) -> list[Path]:
     folder = Path(folder)
     return [
         write_restaurants_xlsx(folder / "restaurants.xlsx", dataset),
-        _write_csv(folder / "menu_items.csv", ("menu_item_id", "restaurant_id", "name", "category", "price"),
-                   dataset.menu_items, {"price": _money}),
+        _write_menu_items(folder, dataset),
         _write_customers(folder, dataset),
-        _write_csv(folder / "reviews.csv",
-                   ("review_id", "order_id", "customer_id", "restaurant_id", "rating", "comment", "reviewed_at"),
-                   dataset.reviews, {"reviewed_at": _stamp}),
+        _write_reviews(folder, dataset),
     ]
 
 
@@ -367,6 +422,30 @@ def write_drop(folder: str | Path, dataset: Dataset, day: str | dt.date) -> tupl
         _write_csv(folder / f"order_lines_{batch}.csv", DROP_LINE_COLUMNS, lines,
                    {"unit_price": _money, "order_ts": _stamp}),
     )
+
+
+def write_week(folder: str | Path, dataset: Dataset, orders_name: str = "orders.csv",
+               lines_name: str = "order_lines.csv") -> tuple[Path, Path]:
+    """Write the orders of 1 to 7 August as one file, with their order lines, as a batch is written."""
+    folder = Path(folder)
+    return (
+        _write_csv(folder / orders_name, ORDER_COLUMNS, dataset.week_orders(),
+                   {"order_ts": _stamp, "updated_at": _stamp, "total_amount": _money}),
+        _write_csv(folder / lines_name, LINE_COLUMNS, dataset.week_order_lines(), {"unit_price": _money}),
+    )
+
+
+def write_faulty_week(folder: str | Path, dataset: Dataset,
+                      orders_name: str = "orders.csv") -> tuple[Path, list[Fault]]:
+    """Write the faulty version of the orders of 1 to 7 August, which :meth:`Dataset.faulty_week` describes.
+
+    Returns:
+        The path of the orders file, and the faults that are in it.
+    """
+    orders, faults = dataset.faulty_week()
+    path = _write_csv(Path(folder) / orders_name, ORDER_COLUMNS, orders,
+                      {"order_ts": _stamp, "updated_at": _stamp, "total_amount": _money})
+    return path, faults
 
 
 def write_all(folder: str | Path, dataset: Dataset) -> list[Path]:

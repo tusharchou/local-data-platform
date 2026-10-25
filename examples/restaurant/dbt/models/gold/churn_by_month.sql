@@ -1,9 +1,21 @@
-{{ config(meta={
-    'ldp_publish': true,
-    'ldp_namespace': 'gold',
-    'owner': 'customer insights',
-    'grain': 'one row for each month'
-}) }}
+{{ config(
+    tags=['customers'],
+    meta={
+        'ldp_publish': true,
+        'ldp_namespace': 'gold',
+        'owner': 'customer insights',
+        'grain': 'one row for each month',
+        'ldp_quality': {
+            'on_failure': 'fail',
+            'checks': [
+                {'check': 'row_count', 'min': 1},
+                {'check': 'not_null', 'columns': ['month', 'customers_at_start', 'churned', 'active_customers']},
+                {'check': 'unique', 'columns': ['month']},
+                {'check': 'range', 'column': 'churn_rate', 'min': 0, 'max': 1}
+            ]
+        }
+    }
+) }}
 
 -- Churn is counted in the month a customer stops ordering. For month M:
 --   customers_at_start  customers with an order in month M minus 1

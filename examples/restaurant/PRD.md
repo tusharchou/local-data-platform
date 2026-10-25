@@ -72,16 +72,37 @@ Orders arrive in dated batches that every milestone reuses. Batch 1 covers Janua
 one drop file a day, from 1 to 7 August 2026. `updated_at` is when the restaurant system last changed an order, and
 the models use it to tell the versions of an order apart.
 
+**The data mart.** Four gold tables sit on these six. `gold_daily_sales` has the orders, the revenue and the average ticket
+of each restaurant on each day it had an order. `gold_menu_item_weekly` has what each menu item sold in each week.
+`gold_restaurant_scorecard` has, for each restaurant, the orders and the revenue of the last 30 days, the rating from all
+its reviews and its rank in its city. `churn_by_month` has the churn and the active customers of each month. Each has an
+owner, a grain, a description of every column and a gate of checks that run before it is written.
+
 **Churn.** A customer churns in the month they stop ordering. For month M, `customers_at_start` is the number of
 customers with an order in month M minus 1, `churned` is the number of those customers with no order in month M, and
 `churn_rate` is `churned` divided by `customers_at_start`, or null when `customers_at_start` is 0. The first month has
 no row. The gold layer and the insights of later milestones use this definition.
 
-### 3. Iceberg Configuration
+### 3. What each milestone delivers
+
+The example grows by one layer for each milestone of the [roadmap](../../docs/roadmap.md), and `run.py --layer NAME` runs
+one layer. This table says which feature of the requirements above each milestone delivers.
+
+| Milestone | Layer | What it delivers | Requirements it covers |
+|---|---|---|---|
+| 0.1.2 Warehousing | `warehouse` | The exports load into raw Iceberg tables, dbt models are tested and published as versioned tables, and churn is counted by month, with late orders and time travel | Data collection, data storage |
+| 0.1.3 Orchestration | `orchestration` | The nightly drops run as a workflow, with windows, a backfill that stops at a bad row and resumes, retries and a scheduler | Scheduling |
+| 0.1.4 Self Serving Gold Layer | `gold` | The data mart (#97). The gold tables have an owner, a meaning and a gate, they publish together as a release, and the metrics are defined once. A faulty batch is stopped before it is written, and the tables reach people as an Excel file, a DuckDB file and a catalog page. The scheduled refresh is the `gold` task of `workflows/daily_orders.json` | Validation, metadata management, key metrics |
+| 0.1.5 Monitoring | | Alerts when a table is late, short or changed in shape, and when sales drop without a reason | Anomaly alerts, pipeline health |
+| 0.1.6 Business Intelligence Reporting Dashboarding | | Daily and weekly reports to Slack, and dashboards over the gold tables | Slack reports, dashboards |
+
+The anomaly alerts and the Slack reports are issues of their own, in 0.1.5 and 0.1.6, and they link #97.
+
+### 4. Iceberg Configuration
 - Enable time travel and schema evolution.
 - Optimize for large-scale queries.
 
-### 3. Slack Integration
+### 5. Slack Integration
 - Use Slack Webhooks for notifications.
 - Configure channels for different types of reports.
 

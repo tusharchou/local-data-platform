@@ -69,10 +69,11 @@ More demos, each one a `make` target (see [Development](#development)):
 | `make demo-robotics` | Humanoid-robot episodes and sensor frames in bronze, silver and gold Iceberg tables, temporal quality checks, a pinned training split and DuckDB research queries |
 | `make demo-agent` | The read-only MCP server on the demo table, driven by a scripted agent client |
 | `make demo-warehouse` | A restaurant chain from Excel and CSV exports to dbt-tested Iceberg tables with monthly customer churn, a late batch and time travel (needs the `dbt` and `excel` extras) |
-| `make demo-orchestration` | The restaurant's nightly drops run as a workflow: a backfill that stops at a bad row and resumes after the fix, a third run that skips every day, and a scheduler tick (runs its dbt models task when the `dbt` extra is installed) |
+| `make demo-orchestration` | The restaurant's nightly drops run as a workflow: a backfill that stops at a bad row and resumes after the fix, a third run that skips every day, and a scheduler tick (runs its dbt models task and its gold task, which cuts a release for each night, when the `dbt` extra is installed) |
+| `make demo-gold` | The restaurant data mart: a faulty batch that the gate stops with each failed check named, dbt models whose gold tables have an owner, a meaning and a gate, a release of the gold tables, a metric, an Excel file, a DuckDB file and a catalog page (needs the `dbt` and `excel` extras) |
 | `make demo-spark` | The Scala Spark job reading the demo table and writing an aggregate that pyiceberg reads back (needs scala-cli) |
 | `make demo-rest` | The demo config against an Iceberg REST catalog started locally on scala-cli's JVM: `ldp catalog test`, two runs, the snapshots and a query (needs scala-cli) |
-| `make demo-all` | All of them; `demo-warehouse` is skipped when dbt or the Excel reader isn't installed and the two JVM demos when scala-cli isn't |
+| `make demo-all` | All of them; `demo-warehouse` and `demo-gold` are skipped when dbt or the Excel reader isn't installed and the two JVM demos when scala-cli isn't |
 
 ### Extras
 
@@ -1184,7 +1185,7 @@ make demo-orchestration     # the restaurant's nightly drops, a bad row, a backf
 ```
 
 - The [orchestration guide](docs/orchestration.md) walks through it on the restaurant example, command by command, from a window and its key to a workflow file, a backfill that stops at a bad row, a replaced day, a retried task, launchd and cron, and Airflow, Dagster and Prefect.
-- `make demo-orchestration` runs `examples/restaurant/run.py --layer orchestration`. It drops three nights of orders into a folder, with a bad row in the third. `ldp backfill` publishes two days and a data gate holds the third back, with exit status 3. After the fix, the same command runs only the third, and a third run skips every day. `ldp schedule tick` then loads the fourth night, and `ldp runs`, `ldp commits`, `ldp schedule list` and `ldp schedule install` show what happened. It needs no extra, runs the `models` task when the `dbt` extra is installed, and prints a skip line when it is not.
+- `make demo-orchestration` runs `examples/restaurant/run.py --layer orchestration`. It drops three nights of orders into a folder, with a bad row in the third. `ldp backfill` publishes two days and a data gate holds the third back, with exit status 3. After the fix, the same command runs only the third, and a third run skips every day. `ldp schedule tick` then loads the fourth night, and `ldp runs`, `ldp commits`, `ldp schedule list` and `ldp schedule install` show what happened. It needs no extra, runs the `models` and `gold` tasks when the `dbt` extra is installed, and prints a skip line when it is not.
 - The pieces are described above, under [Windows](#windows), [Workflow files](#workflow-files), [Backfill a range of windows](#backfill-a-range-of-windows), [Run on a schedule](#run-on-a-schedule) and [Run from Airflow](#run-from-airflow), and the exit statuses are in the [table](#use-it-from-the-command-line) of the command line section.
 
 ## MCP server for agents
@@ -1364,8 +1365,9 @@ make install      # create .venv and install the package with the dev and docs e
 make lint         # flake8
 make test         # pytest, offline: the Spark and REST integration tests skip
 make demo         # run the demo into ./ldp_demo
-make demo-all     # every demo; demo-warehouse needs the dbt and excel extras, demo-spark and demo-rest need scala-cli
+make demo-all     # every demo; demo-warehouse and demo-gold need the dbt and excel extras, demo-spark and demo-rest need scala-cli
 make demo-orchestration   # the restaurant's nightly workflow, a backfill and a scheduler tick
+make demo-gold    # the restaurant data mart: a blocked batch, gold tables, a release, a metric and files for people
 make spark-test   # opt-in Spark integration tests (LDP_RUN_SPARK=1, scala-cli)
 make rest-test    # opt-in REST catalog integration tests (LDP_RUN_REST=1, scala-cli)
 make dbt-test     # the tests that need the dbt extra (pip install -e ".[dev,dbt]" first)
@@ -1411,8 +1413,8 @@ in each release, and the [contributing guide](docs/contributing.md) to get invol
   with no rows, leaves the models before it published. A model published with an upsert that gains or loses
   a column needs one `ldp run CONFIG --mode overwrite`.
 - **The restaurant example is in the repo, not in the package.** `pip install` does not include
-  `examples/`, so the warehousing and orchestration guides and `make demo-warehouse` and `make demo-orchestration`
-  need a clone.
+  `examples/`, so the warehousing and orchestration guides and `make demo-warehouse`, `make demo-orchestration` and
+  `make demo-gold` need a clone.
 - **Tasks run one at a time.** A workflow runs its tasks in order and a backfill its windows in order, which also
   respects DuckDB's single writer. There are no parallel tasks.
 - **The scheduler is a tick, not a daemon.** `ldp schedule tick` has to be called by cron or launchd, and there is no

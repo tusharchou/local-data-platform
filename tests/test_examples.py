@@ -47,7 +47,10 @@ EXPECTED_PIPELINES = {
     "restaurant/config/restaurants_to_csv.json": "ExcelToCSV",
     "restaurant/config/restaurants.json": "ExcelToIceberg",
     "restaurant/config/customers.json": "CSVToIceberg",
+    "restaurant/config/menu_items.json": "CSVToIceberg",
+    "restaurant/config/reviews.json": "CSVToIceberg",
     "restaurant/config/orders.json": "CSVToIceberg",
+    "restaurant/config/order_lines.json": "CSVToIceberg",
 }
 
 # Inputs in these formats are committed next to the example; Parquet is a documented download.

@@ -5,5 +5,5 @@
     "catalog": {"identifier": "gold", "warehouse_path": "../warehouse"},
     "config_dir": "../config"
   },
-  "observability": {"sinks": ["jsonl"]}
+  "observability": {"sinks": ["jsonl", "iceberg"]}
 }

@@ -2927,11 +2927,20 @@ ISSUE_47 = [
 ``test_restaurant_warehouse.py`` builds with dbt. January, the first month, has no row."""
 
 
+def churn_part(spec: dict) -> dict:
+    """What the file of the restaurant example says about the churn: its semantic model and its two metrics."""
+    return {**spec, "semantic_models": [item for item in spec["semantic_models"] if item["name"] == "customer_churn"],
+            "metrics": [item for item in spec["metrics"] if item["name"] in ("churn_rate", "active_customers")]}
+
+
 @pytest.fixture
 def churn_lake(tmp_path):
-    """A folder with the table of issue #47 and the ``metrics.json`` that the restaurant example ships."""
+    """A folder with the table of issue #47 and the churn part of the ``metrics.json`` that the example ships.
+
+    The other semantic models of the file read tables that this folder does not have, so they are left out.
+    """
     sales(tmp_path, ISSUE_47, CHURN_SCHEMA, name="churn_by_month")
-    metrics_file(tmp_path, json.loads(CHURN_FILE.read_text()))
+    metrics_file(tmp_path, churn_part(json.loads(CHURN_FILE.read_text())))
     return tmp_path
 
 

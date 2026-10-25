@@ -13,11 +13,16 @@
     {
       "id": "models",
       "depends_on": ["orders", "order_lines"],
-      "dbt": {"project": "../dbt", "select": ["+revenue_by_restaurant_day", "stg_customers"]}
+      "dbt": {"project": "../dbt", "select": ["+gold_daily_sales", "stg_customers"]}
+    },
+    {
+      "id": "gold",
+      "depends_on": ["models"],
+      "gold": {"dir": "../config"}
     },
     {
       "id": "tidy",
-      "depends_on": ["models"],
+      "depends_on": ["gold"],
       "maintain": {"config": "orders.json", "expire": 7, "apply": true}
     }
   ]

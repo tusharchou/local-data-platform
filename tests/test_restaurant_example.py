@@ -30,7 +30,7 @@ EXAMPLE = REPO_ROOT / "examples" / "restaurant"
 run = load_example_module("restaurant_run", EXAMPLE / "run.py")
 generate = run.generate
 
-INGEST_CONFIGS = ("restaurants_to_csv", "restaurants", "customers", "orders")
+INGEST_CONFIGS = ("restaurants_to_csv", "restaurants", "customers", "menu_items", "reviews", "orders", "order_lines")
 
 
 @pytest.fixture(scope="module")
@@ -207,15 +207,61 @@ def test_the_seven_drops_hold_the_30_orders_of_august_and_each_line_has_its_orde
     assert list(batch[0]) == list(generate.LINE_COLUMNS), "the batches keep the columns they had"
 
 
+def test_two_restaurants_share_a_city_so_that_a_rank_in_a_city_means_something(dataset):
+    cities = [row["location"] for row in dataset.restaurants]
+
+    assert sorted(set(cities)) == ["Bengaluru", "Delhi", "Hyderabad", "Kolkata", "Mumbai"]
+    assert [row["restaurant_id"] for row in dataset.restaurants if row["location"] == "Mumbai"] == ["R02", "R04"]
+
+
+def test_the_first_week_of_august_is_the_seven_drops_as_one_batch(tmp_path, dataset):
+    orders, lines = generate.write_week(tmp_path, dataset)
+
+    assert (orders.name, lines.name) == ("orders.csv", "order_lines.csv")
+    rows = read_csv(orders)
+    assert len(rows) == 30 and list(rows[0]) == list(generate.ORDER_COLUMNS)
+    assert [row["order_id"] for row in rows] == [order["order_id"] for order in dataset.week_orders()]
+    assert {row["order_ts"][:10] for row in rows} == {f"2026-08-0{day}" for day in range(1, 8)}
+    assert len(read_csv(lines)) == 82 and list(read_csv(lines)[0]) == list(generate.LINE_COLUMNS)
+    assert {row["order_id"] for row in read_csv(lines)} == {row["order_id"] for row in rows}
+
+
+def test_the_faulty_week_has_three_faults_each_in_an_order_of_its_own(tmp_path, dataset):
+    path, faults = generate.write_faulty_week(tmp_path, dataset)
+
+    rows = read_csv(path)
+    assert path.name == "orders.csv" and len(rows) == 31, "the 30 orders of the week and one that is there twice"
+    assert [(fault.kind, fault.order_id) for fault in faults] == [
+        ("negative_amount", "O000855"), ("unknown_restaurant", "O000858"), ("duplicated_order", "O000861")]
+    by_id = {fault.order_id: fault for fault in faults}
+    assert len(by_id) == 3
+    assert [float(row["total_amount"]) for row in rows if row["order_id"] == "O000855"] == [-40.0]
+    assert [row["restaurant_id"] for row in rows if row["order_id"] == "O000858"] == [generate.UNKNOWN_RESTAURANT]
+    twice = [row for row in rows if row["order_id"] == "O000861"]
+    assert len(twice) == 2 and twice[0] == twice[1], "the same order_id with the same updated_at"
+    clean = {order["order_id"] for order in dataset.week_orders()}
+    assert {row["order_id"] for row in rows} == clean
+    assert generate.UNKNOWN_RESTAURANT not in {row["restaurant_id"] for row in dataset.restaurants}
+
+
+def test_the_faulty_week_does_not_change_the_dataset(dataset):
+    before = [dict(order) for order in dataset.week_orders()]
+
+    dataset.faulty_week()
+
+    assert dataset.week_orders() == before
+
+
 def test_the_dimensions_are_written_as_csv_and_need_no_excel_reader(tmp_path, dataset, monkeypatch):
     monkeypatch.setitem(sys.modules, "openpyxl", None)  # an import of it fails, as if the excel extra were missing
 
     written = generate.write_dimensions(tmp_path, dataset)
 
-    assert [path.name for path in written] == ["restaurants.csv", "customers.csv"]
+    assert [path.name for path in written] == ["restaurants.csv", "customers.csv", "menu_items.csv", "reviews.csv"]
     restaurants = read_csv(tmp_path / "restaurants.csv")
     assert list(restaurants[0]) == ["restaurant_id", "name", "location", "cuisine", "created_at"]
     assert len(restaurants) == 6 and len(read_csv(tmp_path / "customers.csv")) == 150
+    assert len(read_csv(tmp_path / "menu_items.csv")) == 36 and len(read_csv(tmp_path / "reviews.csv")) == 94
     assert restaurants[0]["created_at"] == dataset.restaurants[0]["created_at"].strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -250,7 +296,8 @@ def test_every_ingest_config_is_valid_and_takes_the_route_the_example_names(work
 
     assert {name: (result["valid"], result["pipeline"]) for name, result in routes.items()} == {
         "restaurants_to_csv": (True, "ExcelToCSV"), "restaurants": (True, "ExcelToIceberg"),
-        "customers": (True, "CSVToIceberg"), "orders": (True, "CSVToIceberg")}
+        "customers": (True, "CSVToIceberg"), "menu_items": (True, "CSVToIceberg"), "reviews": (True, "CSVToIceberg"),
+        "orders": (True, "CSVToIceberg"), "order_lines": (True, "CSVToIceberg")}
 
 
 def test_the_raw_tables_are_loaded_without_dbt_and_every_check_passes(workdir, dataset):
@@ -260,7 +307,8 @@ def test_the_raw_tables_are_loaded_without_dbt_and_every_check_passes(workdir, d
 
     assert (workdir / "landing" / "restaurants.csv").is_file()
     assert {name: result.rows_written for name, result in results.items()} == {
-        "restaurants_to_csv": 6, "restaurants": 6, "customers": 150, "orders": 745}
+        "restaurants_to_csv": 6, "restaurants": 6, "customers": 150, "menu_items": 36, "reviews": 94, "orders": 745,
+        "order_lines": 1829}
     assert all(result.quality.passed for result in results.values())
     orders = table_of(workdir, "orders")
     assert [field.transform.__class__.__name__ for field in orders.table().spec().fields] == [
@@ -293,6 +341,66 @@ def test_a_batch_with_an_unknown_channel_is_stopped_by_the_ingest_checks(workdir
     assert table_of(workdir, "orders").row_count() == 745  # nothing of the bad batch was written
 
 
+def test_the_faulty_week_is_stopped_by_the_checks_of_the_orders_config_and_each_failed_check_is_named(workdir, dataset):
+    land_batch_one(workdir, dataset)
+    ingest(workdir, "orders")
+    generate.write_faulty_week(workdir / "landing", dataset)
+
+    with pytest.raises(DataQualityError) as error:
+        ingest(workdir, "orders")
+
+    message = str(error.value)
+    assert message.startswith("3 of 7 data quality checks failed:")
+    assert "accepted_values(restaurant_id): 1 of 31 rows have a restaurant_id outside" in message and "R99" in message
+    assert "unique(order_id, updated_at): 1 duplicated key(s)" in message and "O000861" in message
+    assert "range(total_amount): 1 of 31 rows violate total_amount >= 0: 1 below min" in message
+    assert table_of(workdir, "orders").row_count() == 745  # nothing of the faulty file was written
+
+
+def test_each_fault_of_the_faulty_week_is_stopped_by_a_check_of_its_own(workdir, dataset):
+    land_batch_one(workdir, dataset)
+    ingest(workdir, "orders")
+    rows = {kind: [dict(order) for order in dataset.week_orders()] for kind in ("amount", "restaurant", "twice")}
+    rows["amount"][3]["total_amount"] = -1
+    rows["restaurant"][3]["restaurant_id"] = "R99"
+    rows["twice"].append(dict(rows["twice"][3]))
+    expected = {"amount": "range(total_amount)", "restaurant": "accepted_values(restaurant_id)",
+                "twice": "unique(order_id, updated_at)"}
+
+    for kind, orders in rows.items():
+        generate._write_csv(workdir / "landing" / "orders.csv", generate.ORDER_COLUMNS, orders,
+                            {"order_ts": generate._stamp, "updated_at": generate._stamp,
+                             "total_amount": generate._money})
+        with pytest.raises(DataQualityError) as error:
+            ingest(workdir, "orders")
+
+        assert str(error.value).startswith("1 of 7 data quality checks failed:") and expected[kind] in str(error.value)
+
+
+def test_the_clean_week_loads_after_the_faulty_one_was_stopped(workdir, dataset):
+    land_batch_one(workdir, dataset)
+    ingest(workdir, "orders")
+    ingest(workdir, "order_lines")
+    generate.write_faulty_week(workdir / "landing", dataset)
+    with pytest.raises(DataQualityError):
+        ingest(workdir, "orders")
+
+    generate.write_week(workdir / "landing", dataset)
+    orders, lines = ingest(workdir, "orders"), ingest(workdir, "order_lines")
+
+    assert (orders.rows_written, lines.rows_written) == (30, 82)
+    assert table_of(workdir, "orders").row_count() == 775 and table_of(workdir, "order_lines").row_count() == 1911
+
+
+def test_the_daily_workflow_and_the_batch_load_hold_the_orders_to_the_same_seven_checks():
+    batch = json.loads((EXAMPLE / "config" / "orders.json").read_text())["metadata"]["quality"]
+    daily = json.loads((EXAMPLE / "workflows" / "orders.json").read_text())["metadata"]["quality"]
+
+    assert batch == daily and [item["check"] for item in batch["checks"]] == [
+        "row_count", "not_null", "accepted_values", "unique", "accepted_values", "range", "schema"]
+    assert batch["checks"][2]["values"] == [row[0] for row in generate.RESTAURANTS]
+
+
 # --------------------------------------------------------------------------- the work folder and the command line
 
 
@@ -302,6 +410,13 @@ def test_the_work_folder_gets_the_configs_the_dbt_project_and_the_workflow_files
     assert (workdir / "dbt" / "ldp_dbt.json").is_file() and (workdir / "dbt" / "models" / "schema.yml").is_file()
     assert not (workdir / "dbt" / "target").exists()
     assert (workdir / "workflows" / "daily_orders.json").is_file()
+
+
+def test_a_work_folder_can_leave_out_the_metrics_file(tmp_path):
+    work = run.prepare_workdir(tmp_path / "work", keep_metrics=False)
+
+    assert sorted(path.stem for path in (work / "config").glob("*.json")) == sorted(INGEST_CONFIGS)
+    assert (run.CONFIG_DIR / "metrics.json").is_file(), "the example itself keeps it"
 
 
 def test_running_again_clears_what_the_example_made_and_nothing_else(tmp_path):
@@ -359,13 +474,15 @@ def test_a_failing_ldp_step_ends_the_example_with_a_message_and_exit_1(tmp_path,
 
 
 def test_an_unknown_layer_is_refused(tmp_path):
-    with pytest.raises(ValueError, match=r"unknown layer 'gold'; the layers are \['warehouse', 'orchestration'\]"):
-        run.run_restaurant(tmp_path / "work", layer="gold", quiet=True)
+    with pytest.raises(ValueError, match=r"unknown layer 'bronze'; the layers are "
+                                         r"\['warehouse', 'orchestration', 'gold'\]"):
+        run.run_restaurant(tmp_path / "work", layer="bronze", quiet=True)
     with pytest.raises(SystemExit):
-        run.main(["--layer", "gold"])
+        run.main(["--layer", "bronze"])
 
 
-def test_without_dbt_the_example_says_which_extra_to_install_and_exits_with_1(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("layer", ["warehouse", "gold"])
+def test_without_dbt_the_example_says_which_extra_to_install_and_exits_with_1(tmp_path, monkeypatch, capsys, layer):
     from local_data_platform.dbt_layer import project
 
     def missing(*args, **kwargs):
@@ -373,7 +490,7 @@ def test_without_dbt_the_example_says_which_extra_to_install_and_exits_with_1(tm
 
     monkeypatch.setattr(project, "find_dbt", missing)
 
-    assert run.main(["--workdir", str(tmp_path / "work")]) == 1
+    assert run.main(["--workdir", str(tmp_path / "work"), "--layer", layer]) == 1
 
     assert capsys.readouterr().err == ('error: The restaurant example needs the dbt extra. Install with: '
                                        'pip install "local-data-platform[dbt,excel]"\n')
@@ -406,28 +523,42 @@ def test_the_dbt_project_is_a_valid_ldp_project_that_publishes_next_to_the_inges
     assert project.source_configs == ((DBT.parent / "config").resolve(),)
     assert project.config_dir == (DBT.parent / "config").resolve()
     assert project.publish_catalog == {"identifier": "gold", "warehouse_path": "../warehouse"}
-    assert project.observability == {"sinks": ["jsonl"]}
+    assert project.observability == {"sinks": ["jsonl", "iceberg"]}, "the catalog reads the runs and the gates from it"
+
+
+GOLD_MODELS = ["churn_by_month", "gold_daily_sales", "gold_menu_item_weekly", "gold_restaurant_scorecard"]
 
 
 def test_the_models_are_the_ones_the_roadmap_names():
-    assert sorted(path.stem for path in DBT.glob("models/**/*.sql")) == [
-        "churn_by_month", "customer_activity_monthly", "fct_orders", "revenue_by_restaurant_day", "stg_customers",
-        "stg_orders", "stg_restaurants"]
+    assert sorted(path.stem for path in DBT.glob("models/**/*.sql")) == sorted([
+        *GOLD_MODELS, "customer_activity_monthly", "fct_orders", "stg_customers", "stg_menu_items", "stg_order_lines",
+        "stg_orders", "stg_restaurants", "stg_reviews"])
+    assert not list(DBT.glob("models/**/revenue_by_restaurant_day.sql")), "gold_daily_sales replaces it"
 
 
-@pytest.mark.parametrize("model, namespace", [("fct_orders", "silver"), ("churn_by_month", "gold"),
-                                              ("revenue_by_restaurant_day", "gold")])
+@pytest.mark.parametrize("model, namespace", [("fct_orders", "silver"), *((model, "gold") for model in GOLD_MODELS)])
 def test_the_marked_models_publish_to_their_namespace(model, namespace):
     sql = model_sql(model)
 
     assert "'ldp_publish': true" in sql and f"'ldp_namespace': '{namespace}'" in sql
 
 
-@pytest.mark.parametrize("model", ["churn_by_month", "revenue_by_restaurant_day"])
+@pytest.mark.parametrize("model", GOLD_MODELS)
 def test_the_gold_models_name_their_owner_and_their_grain(model):
     sql = model_sql(model)
 
     assert "'owner':" in sql and "'grain':" in sql
+
+
+@pytest.mark.parametrize("model", GOLD_MODELS)
+def test_every_gold_model_carries_a_gate_of_checks_that_run_before_it_is_written(model):
+    """The gate is the ``ldp_quality`` of the model, which ``ldp gold build`` runs again on the table it made."""
+    sql = model_sql(model)
+    gate = re.search(r"'ldp_quality': \{(.*?)\n        \}", sql, flags=re.DOTALL)
+
+    assert gate and "'on_failure': 'fail'" in gate.group(1)
+    kinds = re.findall(r"'check': '(\w+)'", gate.group(1))
+    assert kinds[0] == "row_count" and "not_null" in kinds and "unique" in kinds and "range" in kinds
 
 
 @pytest.mark.parametrize("model", ["stg_restaurants", "stg_customers", "stg_orders", "customer_activity_monthly"])
@@ -461,23 +592,83 @@ def test_the_churn_model_and_its_description_say_what_churn_is():
     assert "month a customer stops ordering" in sql and "when customers_at_start = 0 then null" in sql
 
 
-def test_the_churn_metrics_are_defined_over_the_churn_table_and_only_by_month():
-    spec = json.loads((EXAMPLE / "config" / "metrics.json").read_text())
+def metrics_spec() -> dict:
+    return json.loads((EXAMPLE / "config" / "metrics.json").read_text())
+
+
+def semantic_models(spec: dict) -> dict[str, dict]:
+    return {item["name"]: item for item in spec["semantic_models"]}
+
+
+def test_the_metrics_file_defines_the_six_metrics_over_the_three_gold_tables_that_they_read():
+    spec = metrics_spec()
 
     assert [str(error) for error in validate_spec(spec)] == []
-    [semantic] = spec["semantic_models"]
-    assert semantic["table"] == "gold.churn_by_month"
-    assert semantic["time_dimension"] == {"column": "month", "grains": ["month"]}, "a sum over months is not a churn"
-    measures = {item["name"]: (item["agg"], item["expr"]) for item in semantic["measures"]}
+    assert {name: item["table"] for name, item in semantic_models(spec).items()} == {
+        "daily_sales": "gold.gold_daily_sales", "restaurant_scorecard": "gold.gold_restaurant_scorecard",
+        "customer_churn": "gold.churn_by_month"}
+    assert [(item["name"], item["format"]) for item in spec["metrics"]] == [
+        ("revenue", "currency"), ("orders", "number"), ("avg_ticket", "currency"), ("avg_rating", "number"),
+        ("churn_rate", "percent"), ("active_customers", "number")]
+    assert all(item["description"] for item in spec["metrics"])
+
+
+def test_the_sales_metrics_add_up_with_sums_and_the_average_ticket_is_revenue_over_orders():
+    spec = metrics_spec()
+    daily = semantic_models(spec)["daily_sales"]
+    measures = {item["name"]: (item["agg"], item["expr"]) for item in daily["measures"]}
     metrics = {item["name"]: item for item in spec["metrics"]}
-    assert list(metrics) == ["churn_rate", "active_customers"]
+
+    assert daily["time_dimension"] == {"column": "day", "grains": ["day", "week", "month", "quarter", "year"]}
+    assert [item["column"] if isinstance(item, dict) and "column" in item else item["name"]
+            for item in daily["dimensions"]] == ["restaurant_name", "city", "cuisine"]
+    assert measures == {"revenue_sum": ("sum", "revenue"), "order_sum": ("sum", "orders")}
+    assert (metrics["revenue"]["measure"], metrics["orders"]["measure"]) == ("revenue_sum", "order_sum")
+    ticket = metrics["avg_ticket"]
+    assert (ticket["type"], ticket["numerator"], ticket["denominator"]) == ("ratio", "revenue_sum", "order_sum")
+
+
+def test_the_rating_is_the_stars_of_all_the_reviews_over_their_number_and_not_the_average_of_averages():
+    spec = metrics_spec()
+    scorecard = semantic_models(spec)["restaurant_scorecard"]
+    measures = {item["name"]: (item["agg"], item["expr"]) for item in scorecard["measures"]}
+    rating = next(item for item in spec["metrics"] if item["name"] == "avg_rating")
+
+    assert "time_dimension" not in scorecard, "the scorecard is as of one day, so it has no grain"
+    assert (measures[rating["numerator"]], measures[rating["denominator"]]) == (("sum", "rating_sum"),
+                                                                                ("sum", "review_count"))
+
+
+def test_every_column_that_the_metrics_read_is_a_column_of_the_model_that_makes_the_table():
+    """A column that a model drops or renames is found here in every job, and not only in the dbt job."""
+    yaml = pytest.importorskip("yaml")
+    columns = {model["name"]: {column["name"] for column in model["columns"]}
+               for model in yaml.safe_load((DBT / "models" / "schema.yml").read_text())["models"]}
+
+    for semantic in metrics_spec()["semantic_models"]:
+        read = {semantic["time_dimension"]["column"]} if "time_dimension" in semantic else set()
+        read |= {item.get("column", item["name"]) if isinstance(item, dict) else item
+                 for item in semantic.get("dimensions", [])}
+        read |= {measure["expr"] for measure in semantic["measures"]}
+        model = semantic["table"].split(".", 1)[1]
+
+        assert read <= columns[model], (semantic["name"], sorted(read - columns[model]))
+
+
+def test_the_churn_metrics_are_defined_over_the_churn_table_and_only_by_month():
+    spec = metrics_spec()
+    churn = semantic_models(spec)["customer_churn"]
+
+    assert churn["table"] == "gold.churn_by_month"
+    assert churn["time_dimension"] == {"column": "month", "grains": ["month"]}, "a sum over months is not a churn"
+    measures = {item["name"]: (item["agg"], item["expr"]) for item in churn["measures"]}
+    metrics = {item["name"]: item for item in spec["metrics"]}
     rate = metrics["churn_rate"]
     assert (rate["type"], rate["format"]) == ("ratio", "percent")
     assert (measures[rate["numerator"]], measures[rate["denominator"]]) == (("sum", "churned"),
                                                                             ("sum", "customers_at_start"))
     active = metrics["active_customers"]
     assert (active["type"], measures[active["measure"]]) == ("simple", ("sum", "active_customers"))
-    assert all(item["description"] for item in (rate, active))
 
 
 def test_the_schema_tests_cover_every_key_the_relationships_and_the_channels():
@@ -489,8 +680,11 @@ def test_the_schema_tests_cover_every_key_the_relationships_and_the_channels():
         return [next(iter(test)) if isinstance(test, dict) else test for test in entry.get("data_tests", [])]
 
     for model, key in (("stg_restaurants", "restaurant_id"), ("stg_customers", "customer_id"),
-                       ("fct_orders", "order_id"), ("customer_activity_monthly", "customer_month_id"),
-                       ("churn_by_month", "month"), ("revenue_by_restaurant_day", "restaurant_day_id")):
+                       ("stg_menu_items", "menu_item_id"), ("stg_order_lines", "order_line_id"),
+                       ("stg_reviews", "review_id"), ("fct_orders", "order_id"),
+                       ("customer_activity_monthly", "customer_month_id"), ("churn_by_month", "month"),
+                       ("gold_daily_sales", "restaurant_day_id"), ("gold_menu_item_weekly", "menu_item_week_id"),
+                       ("gold_restaurant_scorecard", "restaurant_id")):
         assert {"unique", "not_null"} <= set(tests(model, key)), (model, key)
     for model in ("stg_orders", "fct_orders"):
         assert "relationships" in tests(model, "customer_id") and "relationships" in tests(model, "restaurant_id")
@@ -515,6 +709,17 @@ def test_the_makefile_has_the_warehouse_demo_and_demo_all_runs_it_only_when_it_c
     assert "WAREHOUSE_DIR ?= $(DEMO_DIR)/restaurant" in makefile
     assert "demo-warehouse Run the restaurant example's warehouse layer" in makefile
     assert 'import dbt.cli.main, dbt.adapters.duckdb, openpyxl' in makefile and "Skipping demo-warehouse" in makefile
+
+
+def test_the_makefile_has_the_gold_demo_and_demo_all_runs_it_only_when_it_can():
+    makefile = (REPO_ROOT / "Makefile").read_text()
+    demo_all = makefile.split("\ndemo-all:", 1)[1].split("\ncheck-scala-cli:", 1)[0]
+
+    assert "demo-gold: $(DEMO_CONFIG)" in makefile
+    assert "examples/restaurant/run.py --workdir $(WAREHOUSE_DIR) --layer gold" in makefile
+    assert "demo-gold      Run the restaurant example's gold layer" in makefile
+    assert "demo-gold" in makefile.split(".PHONY:", 1)[1].split("\n\n", 1)[0]
+    assert "$(MAKE) demo-warehouse demo-gold;" in demo_all and "Skipping demo-warehouse and demo-gold" in demo_all
 
 
 def test_the_makefile_has_the_orchestration_demo_and_demo_all_runs_it_with_or_without_dbt():

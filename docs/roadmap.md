@@ -89,7 +89,7 @@ make demo-warehouse
 .venv/bin/ldp mcp --config ldp_demo/restaurant/config
 ```
 
-- `make demo-warehouse` runs `examples/restaurant/run.py --workdir ldp_demo/restaurant --layer warehouse` offline. It turns `restaurants.xlsx` into a CSV and an Iceberg table, loads customers and the first batch of orders, and runs `ldp dbt build`, which passes every data test and publishes `silver.fct_orders`, `gold.churn_by_month` and `gold.revenue_by_restaurant_day`.
+- `make demo-warehouse` runs `examples/restaurant/run.py --workdir ldp_demo/restaurant --layer warehouse` offline. It turns `restaurants.xlsx` into a CSV and an Iceberg table, loads customers and the first batch of orders, and runs `ldp dbt build`, which passes every data test and publishes `silver.fct_orders`, `gold.churn_by_month` and the daily sales table, which 0.1.4 renamed from `revenue_by_restaurant_day` to `gold_daily_sales`.
 - It prints churn for February to June 2026, loads the second batch and rebuilds. `fct_orders` upserts only the July rows and the late June rows.
 - The `--snapshot` query shows June's churn before the late orders arrived, and the folder query joins two published tables.
 - `make test` includes the 8-process append race for #88, and `pytest -m dbt` runs the dbt layer and the example offline.
