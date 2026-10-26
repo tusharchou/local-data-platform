@@ -147,11 +147,12 @@ def test_the_page_is_in_the_nav_the_readme_the_index_and_the_example_readme():
     assert "demo-gold:" in (REPO_ROOT / "Makefile").read_text() and "make demo-gold" in GUIDE.read_text()
 
 
-def test_the_changelog_lists_the_milestone_under_unreleased():
+def test_the_changelog_lists_the_milestone():
     changelog = (REPO_ROOT / "CHANGELOG.md").read_text()
-    section = changelog.split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
+    # under Unreleased until the release pull request, and under its own version after it
+    section = changelog.split("Milestone 0.1.4 Self Serving Gold Layer", 1)[1].split("\n## [", 1)[0]
 
-    for number in (142, 143, 145, 148, 149, 151, 152, 153, 154, 155):  # the pull requests of the milestone so far
+    for number in (142, 143, 145, 148, 149, 151, 152, 153, 154, 155, 156):  # the pull requests of the milestone
         assert f"#{number}" in section, number
     for command in gold_commands():
         assert f"ldp gold {command}" in section or f"`{command}`" in section, command

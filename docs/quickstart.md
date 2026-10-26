@@ -8,7 +8,7 @@ own data. You need Python 3.12 or newer and nothing else: no server, no cloud ac
 Install `local-data-platform` from PyPI, preferably in a virtual environment:
 
 ```bash
-pip install "local-data-platform[duckdb]>=0.1.3"
+pip install "local-data-platform[duckdb]>=0.1.4"
 ldp --version
 ```
 

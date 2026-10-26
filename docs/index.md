@@ -18,7 +18,16 @@ A modern, modular, and developer-friendly platform for local data engineering, a
 - [Orchestration](orchestration.md) runs the restaurant's nightly drops by window, with workflow files, backfills, retries, a laptop scheduler and Airflow.
 - [Gold layer](gold.md) publishes the restaurant's gold tables with an owner, a meaning and a gate, cuts releases, defines metrics and hands the tables to people as a page, an Excel file and a DuckDB file.
 - [v0.1.1 hardening contract](design/v0_1_1.md): what each module does.
-- [Roadmap](roadmap.md): the milestones from 0.1.4 to 0.2.0 and what each one adds.
+- [Roadmap](roadmap.md) lists the milestones from 0.1.5 to 0.2.0 and what each one adds.
+
+## New in 0.1.4
+
+0.1.4 adds a self serving gold layer. A gold table says who owns it, what it means, what one row is and what each
+column holds. `ldp gold build` checks the gold tables and cuts a release that names the snapshot of each, so every
+reader sees one build, and `ldp gold list`, `show` and `docs` are the catalog. A `metrics.json` defines a number once
+for `ldp metrics` and `ldp mcp`, `ldp gold export` and `ldp gold duckdb` hand a table to people as a file, and
+`ldp mcp --layer gold` limits an agent to the gold tables. The [gold layer guide](gold.md) walks through all of it on
+the restaurant data mart, and every command in it runs in the tests.
 
 ## New in 0.1.3
 
