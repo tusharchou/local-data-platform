@@ -652,3 +652,4 @@ Every `ldp` command follows one table, and `ldp backfill`, `ldp workflow run` an
 - The [contract](design/v0_1_1.md#workflow-files-013) has the rules of workflow files, backfills and schedules, down to the time zone and clock change cases.
 - [`examples/restaurant`](https://github.com/tusharchou/local-data-platform/tree/main/examples/restaurant) has the generator, the configs, the workflow files and the `run.py` walkthrough that this chapter did by hand. `make demo-orchestration` runs it in about 20 seconds with dbt, and in about a second without.
 - [Warehousing with Excel, CSV and dbt](warehousing.md) is the chapter before this one, and has the dbt project that the workflow builds.
+- [A gold layer with contracts, releases, metrics and files](gold.md) is the chapter after this one. It explains the release that the `gold` task of this workflow cuts for each night, and how people read it.

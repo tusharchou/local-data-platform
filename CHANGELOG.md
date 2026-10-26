@@ -6,7 +6,73 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
-Work towards 0.1.4 Self Serving Gold Layer, see `docs/roadmap.md`.
+Milestone 0.1.4 Self Serving Gold Layer, see `docs/roadmap.md`. The gold layer is for people who are not engineers.
+Every gold table says who owns it, what it means, what one row is and what each column holds, all the gold tables are
+published together as one release, and a number such as the average ticket is defined once. People get the tables as a
+catalog page, an Excel file and one DuckDB file, and an agent can be limited to the gold tables. The guide is
+`docs/gold.md`, and `make demo-gold` runs the example.
+
+### Added
+
+- Gold table contracts (#142). A config can carry the contract of its table in `metadata.docs`, with a layer, a
+  description, an owner, a grain, a primary key, a description of each column, tags and a refresh. Each run writes it
+  into the Iceberg table in one metadata-only commit that adds no snapshot. A gold table that has a column with no
+  description, or a description of a column that it does not have, is stopped before anything is written, with exit
+  status 3. A model that `ldp dbt build` publishes to the `gold` namespace is a gold table and needs a description, an
+  `owner` and a `grain`, and `ldp dbt init` writes one. `ldp gold sync` writes the contract of a config into an
+  existing table.
+- SQL gold models and `ldp gold build` (#143). The `DUCKDB` source takes `inputs`, a list of dataset configs whose
+  Iceberg tables it registers in memory, and `query_file`, so that a gold table can be one SQL file over other tables. A
+  query that reads a table that is not listed fails, so `inputs` is the whole lineage, and the run events and the
+  OpenLineage event list every input. `ldp gold build DIR` builds the gold tables of a folder in the order of their
+  inputs, refuses a cycle, stops at the first blocked gate with exit status 3, and checks the tables that something
+  else builds.
+- Gold releases (#145). `ldp gold build` cuts a release of the gold tables when every one of them passed its gate. A
+  release names the snapshot of each table, is written whole, and keeps its snapshots from expiry, so readers that read
+  a release see tables from one build. `ldp gold releases` lists them, `ldp query --release` reads one, and a `gold`
+  task runs the build and cuts the release as part of a workflow.
+- A gold catalog (#148). `ldp gold list`, `show` and `docs` give a catalog of the gold tables, with what each one
+  means, who owns it, what one row is, how fresh and healthy it is and which release it is in, as text, as one
+  self-contained page that needs no network, or as Markdown. `ldp mcp` returns the layer, description, owner and grain
+  of each table and the contract of a table, and takes `--layer gold` to serve only the gold tables.
+- Metrics defined once (#149). A `metrics.json` defines semantic models over gold tables and the metrics made of their
+  measures. `ldp metrics list`, `validate` and `query` read it, `ldp gold build` checks it before it cuts a release, and
+  `ldp mcp` has the tools `list_metrics` and `query_metric`. A ratio is a sum over a sum, and a value that a person
+  gives is bound as a parameter and never becomes SQL.
+- Files for people (#153). `ldp gold export` writes a gold table as a CSV, Parquet, JSONL or Excel file, with the
+  contract of the table on a second sheet of the Excel file. `ldp gold duckdb` writes the gold layer as one DuckDB file
+  with a comment on every table and column, a `_catalog` table and a `_metrics` table, and `ldp gold build --duckdb`
+  keeps it current. All read the current release by default. `ldp datasets export` writes CSV too.
+- The restaurant data mart and `make demo-gold` (#154, #155). The gold tables are `gold_daily_sales`,
+  `gold_menu_item_weekly`, `gold_restaurant_scorecard` and `churn_by_month`, each with an owner and a gate, and
+  `config/metrics.json` defines `revenue`, `orders`, `avg_ticket`, `avg_rating`, `churn_rate` and `active_customers`.
+  The demo stops a faulty week of orders at the gate, with each failed check named and exit status 3, loads the week
+  without the faults, builds with dbt, cuts a release, asks for a metric, and writes an Excel file, a DuckDB file and a
+  catalog page. The daily workflow of the example has a `gold` task, so a night that passes its gates cuts a release.
+- The recipe Monthly churn from an orders table, in `docs/recipes.md` (#154).
+- The gold layer guide, `docs/gold.md`, whose commands run in the test suite through the shared block runner in
+  `tests/docs_runner.py`, with a section for people who are not engineers, and a Gold layer section in the README.
+
+### Changed
+
+- The restaurant example's `revenue_by_restaurant_day` model is now `gold_daily_sales`, with the average ticket, the city
+  and the cuisine added (#155), and `churn_by_month` has the new column `active_customers` (#154).
+- The checks of the orders configs of the restaurant example gained `accepted_values` on `restaurant_id` and `unique` on
+  `order_id` with `updated_at`, so a file with a restaurant that does not exist or an order that is in it twice is
+  stopped before anything is written (#155).
+
+### Fixed
+
+- `ldp mcp` and the code under the metrics, the engine and the dbt sources work with DuckDB 2.0 (#152). DuckDB 2.0 refuses
+  other work on a connection while the result of `execute()` is not read to its end, and the five places that read one
+  row with `fetchone()` now read the whole result.
+- The guard of `ldp mcp` let a write inside a CTE through on DuckDB 2.0, which parses `WITH x AS (DELETE ...) SELECT ...`
+  as a `SELECT` and runs it, as it does for `INSERT`, `UPDATE` and `COPY` inside a CTE (#152). The guard now has DuckDB
+  serialize a text that has the keyword insert, update, delete, merge or copy, and rejects it unless every query node in
+  it is a select, a set operation or a CTE.
+- `describe_table` of `ldp mcp` no longer calls the latest run of a released table running, because the `release.cut`
+  event of the release was the last event of the table (#148).
+- `python -m local_data_platform.mcp_server` leaves the logging of the process as it found it when it returns (#151).
 
 ## [0.1.3] - 2026-10-16
 

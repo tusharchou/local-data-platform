@@ -808,5 +808,6 @@ Running `ldp dbt build` on a schedule, so that a new batch is loaded and built w
 - [Warehousing with dbt](design/warehousing.md) is the design behind `ldp dbt`. It has the contract for sources, the publish step, the meta keys and the schema rules.
 - [`examples/restaurant`](https://github.com/tusharchou/local-data-platform/tree/main/examples/restaurant) has the generator, the configs, the dbt project and the `run.py` walkthrough that this chapter did by hand. `make demo-warehouse` runs it in about 25 seconds.
 - [Orchestrating with workflows, backfills and a scheduler](orchestration.md) runs the loads and the dbt build of this chapter every night, backfills a range of days and retries what failed.
+- [A gold layer with contracts, releases, metrics and files](gold.md) takes the four gold tables of this project, and shows their contract, how a release holds them together, and how people who are not engineers read them.
 - [MCP server for agents](agents.md) shows how to give an AI agent read-only access to the tables you published, with `ldp mcp --config config`.
 - [Recipes](recipes.md) has more small tasks, such as copying an Excel sheet into a Google Drive folder.
