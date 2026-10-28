@@ -161,16 +161,24 @@ class Volume:
                   "lookback_runs": self.lookback_runs}
         return {key: value for key, value in values.items() if value is not None}
 
-    def summary(self) -> str:
-        """The section in a few words, such as ``min 1 row``."""
+    def rows_summary(self) -> str:
+        """The limits on the rows of the latest run in a few words, such as ``min 1 row``, or nothing without any."""
         rules = []
         if self.min_rows is not None:
             rules.append(f"min {_count(self.min_rows, 'row')}")
         if self.max_rows is not None:
             rules.append(f"max {_count(self.max_rows, 'row')}")
-        if self.max_change_pct is not None:
-            rules.append(f"change over {self.max_change_pct:g} percent of the last {_count(self.lookback_runs, 'run')}")
         return " and ".join(rules)
+
+    def change_summary(self) -> str:
+        """The limit on the change from the earlier runs in a few words, or nothing when there is none."""
+        if self.max_change_pct is None:
+            return ""
+        return f"change over {self.max_change_pct:g} percent of the last {_count(self.lookback_runs, 'run')}"
+
+    def summary(self) -> str:
+        """The section in a few words, such as ``min 1 row``."""
+        return " and ".join(rule for rule in (self.rows_summary(), self.change_summary()) if rule)
 
 
 @dataclass(frozen=True)

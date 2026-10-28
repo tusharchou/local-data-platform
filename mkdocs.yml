@@ -13,6 +13,7 @@ nav:
       - "Catalogs and object storage": catalogs.md
       - "Exactly-once writes": exactly_once.md
       - "Run events and the _ldp namespace": observability.md
+      - "Monitors that check an SLA": monitoring.md
       - "MCP server for agents": agents.md
       - "Robot-episode datasets": robotics.md
       - "Spark (experimental)": spark.md
