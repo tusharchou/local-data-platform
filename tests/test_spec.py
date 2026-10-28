@@ -346,3 +346,111 @@ def test_ldp_schema_prints_the_json_schema(capsys):
     schema = json.loads(capsys.readouterr().out)
     assert schema["properties"]["apiVersion"]["const"] == API_VERSION
     assert "unique" in schema["$defs"]["check"]["properties"]["check"]["enum"]
+
+
+# ---------------------------------------------------------------------- metadata.sla
+
+SLA = {
+    "freshness": {"warn_after": {"count": 6, "period": "hour"}, "error_after": {"count": 26, "period": "hour"},
+                  "column": "pickup_ts"},
+    "volume": {"min_rows": 1, "max_rows": 1000000, "max_change_pct": 50, "lookback_runs": 7},
+    "schema": {"on_change": "warn", "allow": ["added_column", "widened_type"]},
+}
+
+
+def test_validate_spec_accepts_an_sla_and_a_config_reads_it(tmp_path):
+    data = _spec(metadata__sla=SLA)
+    assert validate_spec(data) == []
+    config = Config.from_dict(data, base_dir=tmp_path)
+    assert validate_spec(config) == []
+    assert config.sla.to_dict() == SLA
+    assert Config.from_dict(SPEC, base_dir=tmp_path).sla is None
+
+
+def test_validate_spec_reports_a_bad_sla_with_its_json_path():
+    data = _spec(metadata__sla={"freshness": {"error_after": {"count": 26, "period": "week"}},
+                                "volume": {"min_rows": 5, "max_rows": 1}})
+    assert _messages(data) == [
+        "metadata.sla.freshness.error_after.period: must be one of ['minute', 'hour', 'day'], got 'week'",
+        "metadata.sla.volume.min_rows: must not be more than max_rows, got 5 and 1",
+    ]
+
+
+def test_validate_spec_rejects_unknown_keys_inside_sla():
+    messages = _messages(_spec(metadata__sla={"metrics": [], "volume": {"min_rows": 1, "min_row": 2}}))
+    assert messages == [
+        "metadata.sla: has unknown keys ['metrics']; allowed: ['freshness', 'volume', 'schema']",
+        "metadata.sla.volume: has unknown keys ['min_row']; allowed: ['min_rows', 'max_rows', 'max_change_pct', "
+        "'lookback_runs']",
+    ]
+
+
+def test_a_config_with_a_bad_sla_does_not_load(tmp_path):
+    with pytest.raises(ConfigError, match=r"^metadata\.sla\.freshness: has no threshold"):
+        Config.from_dict(_spec(metadata__sla={"freshness": {"column": "pickup_ts"}}), base_dir=tmp_path)
+
+
+def test_the_json_schema_describes_the_sla_and_agrees_with_validate_spec():
+    jsonschema = pytest.importorskip("jsonschema")
+    schema = json_schema()
+    assert schema["$defs"]["metadata"]["properties"]["sla"] == {"$ref": "#/$defs/sla"}
+    assert sorted(schema["$defs"]["sla"]["properties"]) == ["freshness", "schema", "volume"]
+    validator = jsonschema.Draft202012Validator(schema)
+    for good in (SLA, {"freshness": {"error_after": {"count": 1, "period": "day"}}},
+                 {"volume": {"max_change_pct": 12.5}}, {"schema": {}}):
+        validator.validate(_spec(metadata__sla=good))
+        assert _messages(_spec(metadata__sla=good)) == [], good
+    # Only what a JSON Schema can say: that warn_after is shorter than error_after, or that min_rows is not above
+    # max_rows, only validate_spec checks.
+    for bad in ({}, {"metrics": []}, {"freshness": {"column": "pickup_ts"}}, {"volume": {"lookback_runs": 5}},
+                {"freshness": {"error_after": {"count": 26, "period": "week"}}},
+                {"freshness": {"error_after": {"count": 0, "period": "hour"}}},
+                {"freshness": {"error_after": {"count": 1, "period": "day", "hours": 2}}},
+                {"volume": {"max_change_pct": 0}}, {"volume": {"min_rows": 0}},
+                {"schema": {"on_change": "fail"}}, {"schema": {"allow": ["dropped_column"]}},
+                {"schema": {"allow": ["added_column", "added_column"]}}):
+        assert list(validator.iter_errors(_spec(metadata__sla=bad))), bad
+        assert _messages(_spec(metadata__sla=bad)), bad
+
+
+def test_spec_hash_ignores_the_sla():
+    other = {"freshness": {"error_after": {"count": 1, "period": "day"}}, "schema": {"on_change": "error"}}
+    assert spec_hash(_spec(metadata__sla=SLA)) == spec_hash(_spec(metadata__sla=other)) == spec_hash(SPEC)
+    assert "sla" not in canonical_spec(_spec(metadata__sla=SLA))["metadata"]
+
+
+def test_plan_has_the_sla_and_none_without_one(tmp_path):
+    with_sla = plan(_write(tmp_path, "with.json", _spec(metadata__sla=SLA)))
+    assert with_sla["valid"] is True and with_sla["sla"] == SLA
+    without = plan(_write(tmp_path, "without.json", SPEC))
+    assert without["valid"] is True and without["sla"] is None
+    bad = plan(_write(tmp_path, "bad.json", _spec(metadata__sla={"volume": {}})))
+    assert bad["valid"] is False and bad["sla"] is None
+    assert bad["errors"] == ["metadata.sla.volume: has no rule, set min_rows, max_rows or max_change_pct"]
+
+
+def test_ldp_plan_prints_an_sla_line_and_ldp_plan_json_has_the_sla(tmp_path, capsys):
+    short = {"freshness": {"error_after": {"count": 26, "period": "hour"}}, "volume": {"min_rows": 1}, "schema": {}}
+    path = _write(tmp_path, "rides.json", _spec(metadata__sla=short))
+    assert _cli(["plan", str(path)]) == 0
+    line = next(line for line in capsys.readouterr().out.splitlines() if line.startswith("sla "))
+    assert line.split(None, 1)[1] == "freshness error after 26 hour, volume min 1 row, schema warn"
+
+    assert _cli(["plan", str(path), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["sla"] == {
+        "freshness": {"error_after": {"count": 26, "period": "hour"}},
+        "volume": {"min_rows": 1, "lookback_runs": 7}, "schema": {"on_change": "warn", "allow": []}}
+
+    plain = _write(tmp_path, "plain.json", SPEC)
+    assert _cli(["plan", str(plain)]) == 0
+    assert not [line for line in capsys.readouterr().out.splitlines() if line.startswith("sla ")]
+    assert _cli(["plan", str(plain), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["sla"] is None
+
+
+def test_ldp_schema_has_the_sla(capsys):
+    assert _cli(["schema"]) == 0
+    schema = json.loads(capsys.readouterr().out)
+    assert schema["$defs"]["metadata"]["properties"]["sla"] == {"$ref": "#/$defs/sla"}
+    assert schema["$defs"]["sla"]["properties"]["volume"]["properties"]["lookback_runs"]["default"] == 7
+    assert schema["$defs"]["sla"]["properties"]["schema"]["properties"]["on_change"]["default"] == "warn"

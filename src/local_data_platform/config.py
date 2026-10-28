@@ -1,7 +1,7 @@
 """Dataset configuration.
 
 A config describes one dataset with the 4W1H questions (who, what, where, when, how)
-plus a ``metadata`` block holding ``source``, ``target`` and optional ``quality`` and ``docs``
+plus a ``metadata`` block holding ``source``, ``target`` and optional ``quality``, ``docs`` and ``sla``
 sections. See ``docs/design/v0_1_1.md`` for the full schema.
 """
 
@@ -13,6 +13,7 @@ from typing import Any
 
 from . import contracts
 from .exceptions import ConfigError
+from .monitoring import sla as sla_settings
 from .orchestration import retries, windows
 from .paths import resolve_path
 from .spec import API_VERSION, DEFAULT_KIND, kind_of
@@ -103,6 +104,8 @@ class Config:
                 raise ConfigError(f"metadata.retries{path}: {message}")
         for path, message in contracts.docs_problems(self.metadata.get("docs"), who=self.who):
             raise ConfigError(f"metadata.docs{path}: {message}")
+        for path, message in sla_settings.sla_problems(self.metadata.get("sla")):
+            raise ConfigError(f"metadata.sla{path}: {message}")
 
     @property
     def source(self) -> dict[str, Any]:
@@ -138,6 +141,15 @@ class Config:
         names no refresh. See :mod:`local_data_platform.contracts`.
         """
         return contracts.parse_docs(self.metadata.get("docs"), who=self.who, when=self.when)
+
+    @property
+    def sla(self) -> sla_settings.Sla | None:
+        """How fresh, how big and how stable the table should be: its ``metadata.sla`` block, normalised.
+
+        The defaults are applied, so ``volume.lookback_runs`` is 7 and ``schema.on_change`` is ``warn`` when the block
+        sets none, and it is ``None`` when the config has no block. See :mod:`local_data_platform.monitoring.sla`.
+        """
+        return sla_settings.parse_sla(self.metadata.get("sla"))
 
     @property
     def quality(self) -> dict[str, Any]:

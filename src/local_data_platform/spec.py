@@ -18,7 +18,8 @@ which the later milestones do for metrics, reports and profiles::
 what it does, though ``window`` does, because its column picks the rows a run reads), ``retries`` (how often a failed
 run is tried again doesn't change what it does), ``docs`` (what a table is called and described doesn't change what a
 run writes), ``lineage`` (which tables a source was made from is for the run events, and doesn't change what a run
-does) and ``kind`` (a pipeline hashes the same with ``"kind": "Pipeline"`` as without it). Keys are
+does), ``sla`` (how a table is watched between runs doesn't change what a run writes) and ``kind`` (a pipeline hashes
+the same with ``"kind": "Pipeline"`` as without it). Keys are
 sorted, there is no whitespace, formats are upper-case, write modes lower-case, the
 quality block is normalised to ``{"on_failure", "checks"}``, and local paths are
 made relative to the config's folder. The descriptive ``who``, ``what`` and
@@ -44,6 +45,7 @@ from typing import Any
 
 from local_data_platform import contracts
 from local_data_platform.exceptions import ConfigError, PipelineNotFound
+from local_data_platform.monitoring import sla as sla_settings
 from local_data_platform.orchestration import retries, windows
 
 API_VERSION = "ldp/v1"
@@ -59,7 +61,7 @@ TOP_LEVEL_KEYS = ("apiVersion", "kind", "identifier", "who", "what", "where", "w
 FORMATS = ("CSV", "PARQUET", "JSON", "ICEBERG", "DUCKDB", "XLSX")
 WRITE_MODES = ("append", "overwrite", "upsert")
 ON_FAILURE = ("fail", "warn")
-HASH_EXCLUDED_METADATA = ("observability", "schedule", "retries", "docs", "lineage")
+HASH_EXCLUDED_METADATA = ("observability", "schedule", "retries", "docs", "lineage", "sla")
 """``metadata`` keys that don't change what a run does, so :func:`spec_hash` ignores them."""
 
 _BUILTIN_CATALOG_TYPES = ("local", "sql", "rest", "glue")
@@ -558,6 +560,7 @@ def json_schema() -> dict[str, Any]:
                     "retries": {"$ref": "#/$defs/retries"},
                     "docs": {"$ref": "#/$defs/docs"},
                     "lineage": {"$ref": "#/$defs/lineage"},
+                    "sla": {"$ref": "#/$defs/sla"},
                 },
             },
             "lineage": {
@@ -594,6 +597,7 @@ def json_schema() -> dict[str, Any]:
             "retries": {**retries.retries_schema(),
                         "description": "How the run is tried again after a failure, when a workflow runs it. Editing "
                                        "it does not change the spec hash."},
+            "sla": sla_settings.sla_schema(),
             "format": {"type": "string", "enum": formats},
             "block": {
                 "type": "object",
@@ -972,6 +976,12 @@ def _check_docs(problems: _Problems, metadata: Mapping[str, Any], who: Any) -> N
         problems.add(f"metadata.docs{path}", message)
 
 
+def _check_sla(problems: _Problems, metadata: Mapping[str, Any]) -> None:
+    """Check ``metadata.sla``, how fresh, how big and how stable the table should be."""
+    for path, message in sla_settings.sla_problems(metadata.get("sla")):
+        problems.add(f"metadata.sla{path}", message)
+
+
 def _check_placeholder_places(problems: _Problems, value: Any, where: str) -> None:
     """A window placeholder works only in ``metadata.source.path``, so flag one anywhere else."""
     if isinstance(value, Mapping):
@@ -1052,6 +1062,7 @@ def _validate_pipeline(spec: Mapping[str, Any]) -> list[ConfigError]:
         _check_quality(problems, metadata.get("quality"))
         _check_schedule_and_window(problems, metadata)
         _check_docs(problems, metadata, spec.get("who"))
+        _check_sla(problems, metadata)
         _check_lineage(problems, metadata.get("lineage"))
         if "retries" in metadata:
             for path, message in retries.retries_problems(metadata["retries"]):
@@ -1139,13 +1150,14 @@ def plan(config: Any, *, window: Any = None, base_dir: str | os.PathLike | None 
     Returns:
         ``{"config", "identifier", "kind", "valid", "errors", "notes", "api_version", "spec_hash",
         "route", "pipeline", "target", "write_mode", "catalog_type", "checks",
-        "on_failure", "sinks", "schedule", "schedule_from", "window_size", "window_column", "timezone",
+        "on_failure", "sinks", "sla", "schedule", "schedule_from", "window_size", "window_column", "timezone",
         "source_path", "source_path_template", "window", "idempotency_key"}``. ``errors`` lists
         messages and ``notes`` lists things worth knowing that are not errors, such as a ``when`` text that is
         no schedule. ``schedule`` is the config's ``metadata.schedule`` or the one its ``when`` means (and
         ``schedule_from`` says which); ``window_size``, ``window_column`` and ``timezone`` come from
         ``metadata.window``; ``source_path`` is the source path, filled in for ``window`` when it has window
-        placeholders, and ``source_path_template`` is the path as written when it has some. The other fields are
+        placeholders, and ``source_path_template`` is the path as written when it has some. ``sla`` is the
+        ``metadata.sla`` block with its defaults applied, and ``None`` when the config has none. The other fields are
         ``None`` when they can't be worked out. ``window`` may be one of the shortcuts ``yesterday``, ``last-week``
         and ``last-month``, counted in the config's time zone. A file of another kind than ``Pipeline`` has no
         route, target or hash, and the kind adds what it reports, such as the ``tasks`` of a ``Workflow``.
@@ -1165,7 +1177,7 @@ def plan(config: Any, *, window: Any = None, base_dir: str | os.PathLike | None 
         "config": label, "identifier": None, "kind": None, "valid": False, "errors": [], "notes": [],
         "api_version": API_VERSION,
         "spec_hash": None, "route": None, "pipeline": None, "target": None, "write_mode": None,
-        "catalog_type": None, "checks": 0, "on_failure": None, "sinks": [], "schedule": None,
+        "catalog_type": None, "checks": 0, "on_failure": None, "sinks": [], "sla": None, "schedule": None,
         "schedule_from": None, "window_size": None, "window_column": None, "timezone": None, "source_path": None,
         "source_path_template": None, "window": None, "idempotency_key": None,
     }
@@ -1234,6 +1246,8 @@ def _describe(result: dict[str, Any], spec: Mapping[str, Any], base: Path | None
     result["checks"] = len(quality["checks"])
     result["on_failure"] = quality["on_failure"]
     result["sinks"] = [item["type"] for item in sink_specs(metadata)]
+    sla = sla_settings.parse_sla(metadata.get("sla"))
+    result["sla"] = sla.to_dict() if sla is not None else None
     errors.extend(_describe_schedule(result, spec))
     if window_error is not None:
         errors.append(window_error)
@@ -1390,6 +1404,8 @@ def _print_plan(item: Mapping[str, Any]) -> None:
         lines.append(("catalog", item["catalog_type"]))
     lines.append(("quality", f"{item['checks']} checks, on_failure={item['on_failure']}"))
     lines.append(("sinks", ", ".join(item["sinks"]) or "none (events are dropped)"))
+    if item["sla"]:
+        lines.append(("sla", sla_settings.parse_sla(item["sla"]).summary()))
     if item["schedule"]:
         lines.append(("schedule", f"{item['schedule']} (from {item['schedule_from']})"))
     if item["window_size"]:
