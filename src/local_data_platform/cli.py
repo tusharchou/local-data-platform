@@ -25,6 +25,7 @@ Commands::
     ldp workflow plan|run FILE ...         (orchestration.cli)
     ldp backfill FILE --from START [--to END] [--dry-run] [--replace]   (orchestration.cli)
     ldp schedule list|tick|install DIR ... (orchestration.schedule_cli)
+    ldp monitor CONFIG_OR_FOLDER [--json] [--now ISO-8601]   (monitoring.cli)
 
 The commands in the second group are added by the ``add_cli`` function of the module named
 next to them (``docs/design/v0_1_1_platform.md`` C9).
@@ -33,7 +34,7 @@ Every command follows one exit-code table::
 
     0  success, including a run that published and a run that skipped a duplicate
     1  an error: a bad config, a usage error, a failed write
-    2  reserved for an SLA breach that ``ldp monitor`` reports (0.1.5)
+    2  an SLA breach, which ``ldp monitor`` reports when a monitor is in error
     3  a data gate held the run back, such as a quality check that blocked a write, or a gold table whose
        contract does not hold
 
@@ -67,7 +68,8 @@ PROG = "ldp"
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_SLA = 2
-"""Reserved for an SLA breach that ``ldp monitor`` reports in 0.1.5. No command returns it yet."""
+"""An SLA breach: ``ldp monitor`` has a monitor in error. Running it again finds the same table, so a person has to look
+at the table."""
 EXIT_GATE = 3
 """A data gate, such as a quality check, held the run back. A scheduler must not retry it."""
 DEFAULT_WORKDIR = "ldp_demo"
@@ -91,6 +93,7 @@ MODULE_COMMANDS = (
     ("local_data_platform.orchestration.schedule_cli", ("schedule",)),
     ("local_data_platform.gold.cli", ("gold",)),
     ("local_data_platform.metrics.cli", ("metrics",)),
+    ("local_data_platform.monitoring.cli", ("monitor",)),
 )
 """``(module, commands)``: each module's ``add_cli(subparsers, parents=...)`` registers its commands."""
 
@@ -361,7 +364,8 @@ def build_parser(*, module_commands: bool = True) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROG, parents=[common],
         description="local-data-platform: a local Iceberg lakehouse driven by JSON dataset configs.",
-        epilog="Exit status is 0 on success, 1 on error and 3 when a data gate held a run back (2 is reserved).",
+        epilog="Exit status is 0 on success, 1 on error, 2 when ldp monitor finds an SLA breach and 3 when a data gate "
+               "held a run back.",
     )
     parser.add_argument("--version", action="version", version=f"{PROG} {__version__}")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -478,8 +482,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         argv: The arguments, without the program name. Defaults to ``sys.argv[1:]``.
 
     Returns:
-        The exit status: 0 on success, 1 on error (including usage errors), and 3 when a data gate held
-        the run back. See the exit-code table at the top of this module.
+        The exit status: 0 on success, 1 on error (including usage errors), 2 for an SLA breach that ``ldp monitor``
+        reports, and 3 when a data gate held the run back. See the exit-code table at the top of this module.
     """
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser(module_commands=_needs_module_commands(argv))

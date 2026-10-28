@@ -202,15 +202,21 @@ print([event.type for event in read_jsonl(".ldp/events.jsonl")][-1])
 ## The `_ldp` namespace
 
 The `iceberg` sink appends to two tables in the pipeline's own catalog, so you can query your run
-history with any engine and keep it if you move:
+history with any engine and keep it if you move. `ldp monitor` adds `_ldp.monitor_results`, which holds what it found.
+This is what the tables hold.
 
 | Table | One row per | Columns |
 |---|---|---|
 | `_ldp.runs` | event | `event_id`, `type`, `schema_version`, `ts`, `run_id`, `attempt`, `seq`, `table_uuid`, `pipeline`, `table_identifier`, `status` (on `run.finished`), `idempotency_key`, `snapshot_id`, `payload` (JSON) |
 | `_ldp.quality_results` | check of a `quality.evaluated` event | `event_id`, `ts`, `run_id`, `attempt`, `pipeline`, `table_identifier`, `check_index`, `check_name`, `column_name`, `passed`, `failing_rows`, `on_failure`, `details`, `metrics` (JSON) |
+| `_ldp.monitor_results` | result of a monitor of `ldp monitor` | `event_id`, `ts` (the moment that the monitor measured at), `pipeline`, `table_identifier`, `table_uuid`, `monitor`, `kind`, `status` (`ok`, `warn`, `error` or `unknown`), `observed`, `expected`, `details`, `metrics` (JSON of numbers and names, never rows), `schema_version` |
 
-Both are partitioned by `day(ts)` and created on first use. Events are buffered and appended in
-one commit per table when the run ends, or earlier once `batch_size` events are waiting.
+All of them are partitioned by `day(ts)` and created on first use. Events are buffered and appended in
+one commit per table when the run ends, or earlier once `batch_size` events are waiting. `ldp monitor` is not a run, so
+its results never enter `_ldp.runs`, and `ldp runs` shows the same runs before and after it. It writes
+`_ldp.monitor_results` in one commit for each catalog and invocation, and only into a catalog that exists. A config with
+no `iceberg` sink, or whose catalog is not there yet, gets the same results as one JSON object for each line of
+`.ldp/monitor.jsonl` next to the config, which `monitoring.history.read_results` reads together with the table.
 
 ```python
 from local_data_platform.catalog.provider import create_catalog

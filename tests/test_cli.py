@@ -340,7 +340,7 @@ def test_the_exit_code_table_is_in_the_module_docstring_and_the_readme():
     assert (cli.EXIT_OK, cli.EXIT_ERROR, cli.EXIT_SLA, cli.EXIT_GATE) == (0, 1, 2, 3)
     for text in (cli.__doc__, readme):
         for words in ("success, including a run that published and a run that skipped a duplicate",
-                      "reserved for an SLA breach that `ldp monitor` reports",
+                      "an SLA breach, which `ldp monitor` reports when a monitor is in error",
                       "a data gate held the run back, such as a quality check that blocked a write",
                       "never retries one that exits with 3"):
             assert words.replace("`", "") in text.replace("`", ""), words
@@ -572,7 +572,7 @@ def test_python_dash_m_runs_the_cli():
 # ---------------------------------------------------------------------- module commands (platform contract C9)
 
 MODULE_COMMAND_NAMES = ("catalog", "schema", "plan", "runs", "commits", "datasets", "maintain", "spark", "mcp", "dbt",
-                        "workflow", "backfill", "schedule", "gold", "metrics")
+                        "workflow", "backfill", "schedule", "gold", "metrics", "monitor")
 
 
 def _command_names(parser) -> list[str]:

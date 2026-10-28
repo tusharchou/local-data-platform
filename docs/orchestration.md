@@ -630,7 +630,7 @@ Every `ldp` command follows one table, and `ldp backfill`, `ldp workflow run` an
 |---|---|---|
 | 0 | Success, including a window that published and a window that was skipped because it was done | Nothing |
 | 1 | An error, such as a bad config, a missing file or a failed write | Retries it, because the cause may pass |
-| 2 | Reserved for an SLA breach that `ldp monitor` reports in 0.1.5 | |
+| 2 | An SLA breach, which `ldp monitor` reports when a monitor is in error | Never retries it, because running the monitor again finds the same table, and tells a person |
 | 3 | A data gate held a run back, such as a quality check that blocked a write, a failing dbt data test, or a gold table whose contract does not hold | Never retries it, because the data has to change first, and tells a person |
 
 ## When something goes wrong
