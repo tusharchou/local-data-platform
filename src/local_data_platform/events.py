@@ -24,7 +24,8 @@ Sinks:
 * :class:`IcebergSink` appends batches of events to ``_ldp.runs`` and
   ``_ldp.quality_results``, two day-partitioned Iceberg tables in the pipeline's catalog.
   Its :meth:`~IcebergSink.emit_audit` also takes the MCP server's audit records, for
-  ``_ldp.audit``.
+  ``_ldp.audit``, and its :meth:`~IcebergSink.emit_monitor` the results of ``ldp monitor``, for
+  ``_ldp.monitor_results``.
 * :class:`MultiSink` fans out to several sinks.
 * :class:`TaggedSink` adds fixed fields to the payload of every event it passes on.
 
@@ -90,6 +91,9 @@ RUNS_TABLE = "runs"
 QUALITY_TABLE = "quality_results"
 AUDIT_TABLE = "audit"
 """``_ldp.audit``: one row per MCP tool call (``mcp_server.audit``), never the result data."""
+MONITOR_TABLE = "monitor_results"
+"""``_ldp.monitor_results``: one row per result of a monitor of ``ldp monitor`` (``monitoring.history``), never the rows
+of the table that it looked at."""
 
 DEFAULT_JSONL_PATH = ".ldp/events.jsonl"
 """Where the ``jsonl`` sink writes when a config gives no ``path`` (relative to the config's folder)."""
@@ -551,7 +555,8 @@ class MemorySink:
         return f"MemorySink({len(self.events)} events)"
 
 
-def _append_line(path: Path, line: str) -> None:
+def append_line(path: Path, line: str) -> None:
+    """Append ``line`` and a newline to the file at ``path`` in one write, creating the file and its folders."""
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (line + "\n").encode("utf-8")
     # One O_APPEND write per line, so concurrent writers on a local disk don't interleave lines.
@@ -583,7 +588,7 @@ class JsonlSink:
     def emit(self, event: RunEvent) -> None:
         """Append the event to the file."""
         with self._lock:
-            _append_line(self.path, event.to_json())
+            append_line(self.path, event.to_json())
 
     def flush(self) -> None:
         """Do nothing: every event is written when emitted."""
@@ -904,7 +909,7 @@ class OpenLineageSink:
         text = json.dumps(lineage, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         if self.path is not None:
             with self._lock:
-                _append_line(self.path, text)
+                append_line(self.path, text)
             return
         import requests
 
@@ -992,6 +997,46 @@ def _audit_arrow_schema():
     ])
 
 
+def _monitor_arrow_schema():
+    import pyarrow as pa
+
+    return pa.schema([
+        pa.field("event_id", pa.string()),
+        pa.field("ts", pa.timestamp("us", tz="UTC")),
+        pa.field("pipeline", pa.string()),
+        pa.field("table_identifier", pa.string()),
+        pa.field("table_uuid", pa.string()),
+        pa.field("monitor", pa.string()),
+        pa.field("kind", pa.string()),
+        pa.field("status", pa.string()),
+        pa.field("observed", pa.string()),
+        pa.field("expected", pa.string()),
+        pa.field("details", pa.string()),
+        pa.field("metrics", pa.string()),
+        pa.field("schema_version", pa.int32()),
+    ])
+
+
+def _monitor_row(record: Mapping[str, Any]) -> dict[str, Any]:
+    ts = record.get("evaluated_at", record.get("ts"))
+    details = record.get("details")
+    return {
+        "event_id": str(record.get("event_id") or uuid7()),
+        "ts": _parse_ts(ts) if ts is not None else dt.datetime.now(_UTC),
+        "pipeline": record.get("pipeline"),
+        "table_identifier": record.get("table_identifier"),
+        "table_uuid": record.get("table_uuid"),
+        "monitor": record.get("monitor"),
+        "kind": record.get("kind"),
+        "status": record.get("status"),
+        "observed": record.get("observed"),
+        "expected": record.get("expected"),
+        "details": None if details is None else redact_text(str(details)),
+        "metrics": _compact(record.get("metrics") or {}),
+        "schema_version": _int_or_none(record.get("schema_version")),
+    }
+
+
 def _audit_row(record: Mapping[str, Any]) -> dict[str, Any]:
     ts = record.get("ts")
     duration = record.get("duration_ms")
@@ -1067,7 +1112,8 @@ class IcebergSink:
     holds one row per event, with the payload as JSON and the useful fields promoted
     to columns. ``_ldp.quality_results`` holds one row per check of every
     ``quality.evaluated`` event. :meth:`emit_audit` takes the MCP server's audit
-    records for ``_ldp.audit``, the same way.
+    records for ``_ldp.audit``, and :meth:`emit_monitor` the results of ``ldp monitor`` for
+    ``_ldp.monitor_results``, the same way.
 
     Events are buffered and appended in one commit per table on :meth:`flush`, which
     a pipeline calls when each run ends (the MCP server when it stops), or earlier once
@@ -1102,6 +1148,7 @@ class IcebergSink:
         self._runs: list[RunEvent] = []
         self._quality: list[dict[str, Any]] = []
         self._audit: list[dict[str, Any]] = []
+        self._monitor: list[dict[str, Any]] = []
         self._lock = threading.RLock()
 
     def __repr__(self) -> str:
@@ -1123,6 +1170,11 @@ class IcebergSink:
     def audit_identifier(self) -> str:
         """``"_ldp.audit"``."""
         return f"{self.namespace}.{AUDIT_TABLE}"
+
+    @property
+    def monitor_identifier(self) -> str:
+        """``"_ldp.monitor_results"``."""
+        return f"{self.namespace}.{MONITOR_TABLE}"
 
     @property
     def catalog(self) -> Any:
@@ -1158,8 +1210,23 @@ class IcebergSink:
         if full:
             self.flush()
 
+    def emit_monitor(self, record: Mapping[str, Any]) -> None:
+        """Buffer one monitor result for ``_ldp.monitor_results``; flush once ``batch_size`` are waiting.
+
+        Args:
+            record: A ``MonitorResult.to_dict()`` mapping: ``monitor``, ``kind``, ``status``, ``observed``,
+                ``expected``, ``details``, ``metrics``, ``evaluated_at``, ``pipeline``, ``table_identifier``,
+                ``table_uuid`` and ``schema_version``. It never holds rows of the table.
+        """
+        row = _monitor_row(record)
+        with self._lock:
+            self._monitor.append(row)
+            full = len(self._monitor) >= self.batch_size
+        if full:
+            self.flush()
+
     def flush(self) -> None:
-        """Append the buffered events and audit records, one commit per table."""
+        """Append the buffered events, audit records and monitor results, one commit per table."""
         import pyarrow as pa
 
         with self._lock:
@@ -1175,6 +1242,10 @@ class IcebergSink:
                 self._append(self.audit_identifier,
                              pa.Table.from_pylist(self._audit, schema=_audit_arrow_schema()))
                 self._audit.clear()
+            if self._monitor:
+                self._append(self.monitor_identifier,
+                             pa.Table.from_pylist(self._monitor, schema=_monitor_arrow_schema()))
+                self._monitor.clear()
 
     def _append(self, identifier: str, rows: Any) -> None:
         from pyiceberg.exceptions import CommitFailedException
@@ -1696,6 +1767,7 @@ __all__ = [
     "EventSink",
     "IcebergSink",
     "JsonlSink",
+    "MONITOR_TABLE",
     "MemorySink",
     "MultiSink",
     "NullSink",
@@ -1712,6 +1784,7 @@ __all__ = [
     "TaggedSink",
     "WORKFLOW_STATUSES",
     "add_cli",
+    "append_line",
     "build_sink",
     "dataset_ref",
     "iceberg_block_ref",
