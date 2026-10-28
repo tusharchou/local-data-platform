@@ -1635,7 +1635,21 @@ def load_run_events(config_or_path: str | os.PathLike, *, jsonl: str | os.PathLi
 
     from local_data_platform.etl import load_config
 
-    config = load_config(path)
+    return run_events(load_config(path), run_id=run_id)
+
+
+def run_events(config: Any, *, run_id: str | None = None) -> tuple[list[RunEvent], str]:
+    """Load the events of the pipeline of a config, from where its sinks and its catalog keep them.
+
+    Args:
+        config: A :class:`~local_data_platform.Config`.
+        run_id: Only this run's events.
+
+    Returns:
+        ``(events, where)``, where ``where`` describes the source read. The events are from ``_ldp.runs`` when the
+        config lists an ``iceberg`` sink or its catalog already has the table, else from its ``jsonl`` sink's file.
+        Nothing is created while looking.
+    """
     specs = sink_specs(config.metadata)
     iceberg_specs = [spec for spec in specs if spec["type"] == "iceberg"]
     jsonl_specs = [spec for spec in specs if spec["type"] == "jsonl"]
@@ -1795,6 +1809,7 @@ __all__ = [
     "read_jsonl",
     "read_openlineage",
     "redact_text",
+    "run_events",
     "schema_payload",
     "sink_from_config",
     "sink_specs",

@@ -97,6 +97,19 @@ def test_the_summary_is_one_short_line():
     assert parse_sla({"schema": {"on_change": "error"}}).summary() == "schema error"
 
 
+def test_the_summary_of_the_volume_has_a_part_for_the_rows_and_a_part_for_the_change():
+    volume = parse_sla({"volume": {"min_rows": 1, "max_rows": 9, "max_change_pct": 50, "lookback_runs": 4}}).volume
+    assert volume.rows_summary() == "min 1 row and max 9 rows"
+    assert volume.change_summary() == "change over 50 percent of the last 4 runs"
+    assert volume.summary() == "min 1 row and max 9 rows and change over 50 percent of the last 4 runs"
+    rows_only = parse_sla({"volume": {"min_rows": 5}}).volume
+    assert (rows_only.rows_summary(), rows_only.change_summary(), rows_only.summary()) == (
+        "min 5 rows", "", "min 5 rows")
+    change_only = parse_sla({"volume": {"max_change_pct": 25}}).volume
+    assert (change_only.rows_summary(), change_only.change_summary()) == (
+        "", "change over 25 percent of the last 7 runs")
+
+
 # ---------------------------------------------------------------------- the problems
 
 

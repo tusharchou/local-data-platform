@@ -10,11 +10,12 @@ import pytest
 from local_data_platform import Config
 from local_data_platform.catalog.provider import create_catalog
 from local_data_platform.cli import main
-from local_data_platform.events import MONITOR_TABLE, IcebergSink
+from local_data_platform.events import MONITOR_TABLE, IcebergSink, RunEvent, load_run_events, run_events
 from local_data_platform.exceptions import ConfigError
 from local_data_platform.monitoring import STATUSES, MonitorResult, evaluate
 from local_data_platform.monitoring.history import JSONL_PATH, read_jsonl, read_results, record
 from local_data_platform.monitoring.results import worst
+from local_data_platform.spec import plan
 
 UTC = dt.timezone.utc
 NOW = dt.datetime(2026, 10, 28, 12, 0, 0, tzinfo=UTC)
@@ -577,3 +578,314 @@ def test_ldp_monitor_is_a_command_and_its_help_says_what_the_exit_statuses_mean(
     assert main(["--help"]) == 0
     top = " ".join(capsys.readouterr().out.split())
     assert "monitor" in top and "2 when ldp monitor finds an SLA breach" in top
+
+
+# ---------------------------------------------------------------------- volume
+
+VOLUME = {"min_rows": 50, "max_rows": 200, "max_change_pct": 50}
+
+
+def _append_target(mode: str = "append", **extra) -> dict:
+    return {"name": "orders", "format": "ICEBERG", "write_mode": mode, **extra,
+            "catalog": {"identifier": "shop", "warehouse_path": "../warehouse"}}
+
+
+def _event(number: int, kind: str, **payload) -> RunEvent:
+    ts = NOW + dt.timedelta(minutes=number)
+    return RunEvent(event_id=f"event-{number:03d}-{kind}", type=kind, schema_version=1, ts=ts,
+                    run_id=f"run-{number:03d}", attempt=1, seq=0 if kind != "run.finished" else 1,
+                    payload={"pipeline": "orders", "table": "shop.orders", **payload})
+
+
+def _history(tmp_path: Path, counts, *, statuses=None, start: int = 1) -> None:
+    """Write the events of runs that wrote ``counts`` rows, oldest first, into the file of the jsonl sink.
+
+    The runs are numbered from ``start``, and a status for a number says how that run ended.
+    """
+    lines = []
+    for number, rows in enumerate(counts, start=start):
+        status = (statuses or {}).get(number, "published")
+        lines.append(_event(number, f"run.{status}", rows_written=rows, snapshot_id=1000 + number))
+        lines.append(_event(number, "run.finished", status=status, rows_written=rows))
+    folder = tmp_path / "config" / ".ldp"
+    folder.mkdir(parents=True, exist_ok=True)
+    with open(folder / "events.jsonl", "a", encoding="utf-8") as handle:
+        handle.writelines(event.to_json() + "\n" for event in lines)
+
+
+def _volume(tmp_path: Path, counts, sla=None, **options) -> dict[str, MonitorResult]:
+    """The results of the volume monitor over a history that wrote ``counts`` rows, by the name of the monitor."""
+    path = _write(tmp_path, sla={"volume": sla or VOLUME}, sinks=["jsonl"], **options)
+    _history(tmp_path, counts)
+    return {result.monitor: result for result in evaluate(Config.from_json(path), NOW)}
+
+
+def test_a_normal_run_is_inside_the_limits_and_near_the_median_of_the_runs_before_it(tmp_path):
+    results = _volume(tmp_path, [100, 102, 98, 101, 99, 100, 103])
+    assert sorted(results) == ["volume.change", "volume.rows"]
+    rows, change = results["volume.rows"], results["volume.change"]
+    assert (rows.status, rows.kind, rows.observed, rows.expected) == ("ok", "volume", "103 rows",
+                                                                      "min 50 rows and max 200 rows")
+    assert rows.details == "the latest run wrote 103 rows, inside the limits"
+    assert (change.status, change.observed) == ("ok", "+3.0 percent")
+    assert change.expected == "change over 50 percent of the last 7 runs"
+    assert change.details == ("the latest run wrote 103 rows, 3.0 percent more than the median of 6 earlier runs, "
+                              "100 rows")
+    assert change.metrics == {"observed": 103, "baseline_median": 100, "change_pct": 3.0, "earlier_runs": 6,
+                              "lookback_runs": 7, "max_change_pct": 50, "source": "events", "run_id": "run-007",
+                              "snapshot_id": 1007}
+    assert rows.metrics == {"min_rows": 50, "max_rows": 200, "observed": 103, "source": "events",
+                            "run_id": "run-007", "snapshot_id": 1007}
+    assert (rows.pipeline, change.pipeline, rows.evaluated_at) == ("orders", "orders", NOW)
+
+
+@pytest.mark.parametrize("latest, status, observed", [
+    (150, "ok", "+50.0 percent"), (151, "error", "+51.0 percent"), (50, "ok", "-50.0 percent"),
+    (49, "error", "-51.0 percent"), (10, "error", "-90.0 percent"), (300, "error", "+200.0 percent"),
+    (100, "ok", "+0.0 percent"),
+])
+def test_a_run_is_off_when_it_is_further_from_the_median_than_the_limit(tmp_path, latest, status, observed):
+    change = _volume(tmp_path, [100] * 6 + [latest], {"max_change_pct": 50})["volume.change"]
+    assert (change.status, change.observed) == (status, observed)
+    assert change.metrics["baseline_median"] == 100 and change.metrics["change_pct"] == float(observed.split()[0])
+
+
+def test_a_drop_of_90_percent_is_an_error_that_says_how_far_it_fell(tmp_path):
+    results = _volume(tmp_path, [100, 102, 98, 101, 99, 100, 10])
+    assert results["volume.change"].status == "error"
+    assert results["volume.change"].details == (
+        "the latest run wrote 10 rows, 90.0 percent fewer than the median of 6 earlier runs, 100 rows")
+    assert results["volume.rows"].details == ("the latest run wrote 10 rows, fewer than the 50 rows that min_rows "
+                                              "asks for")
+    assert worst(results.values()) == "error"
+
+
+def test_a_spike_is_an_error_too(tmp_path):
+    results = _volume(tmp_path, [100, 102, 98, 101, 99, 100, 300])
+    assert results["volume.rows"].status == "error"
+    assert results["volume.rows"].details == ("the latest run wrote 300 rows, more than the 200 rows that max_rows "
+                                              "allows")
+    assert (results["volume.change"].status, results["volume.change"].observed) == ("error", "+200.0 percent")
+
+
+@pytest.mark.parametrize("latest, status", [(50, "ok"), (49, "error"), (200, "ok"), (201, "error")])
+def test_the_limits_on_the_rows_hold_at_the_edge(tmp_path, latest, status):
+    assert _volume(tmp_path, [100, latest], {"min_rows": 50, "max_rows": 200})["volume.rows"].status == status
+
+
+def test_a_section_with_one_rule_makes_one_result(tmp_path):
+    only_min = _volume(tmp_path, [3], {"min_rows": 5})
+    assert list(only_min) == ["volume.rows"] and only_min["volume.rows"].expected == "min 5 rows"
+    assert only_min["volume.rows"].details == ("the latest run wrote 3 rows, fewer than the 5 rows that min_rows "
+                                               "asks for")
+    assert only_min["volume.rows"].metrics == {"min_rows": 5, "observed": 3, "source": "events", "run_id": "run-001",
+                                               "snapshot_id": 1001}
+
+
+def test_with_fewer_than_3_earlier_runs_the_change_is_unknown_and_never_an_alert(tmp_path):
+    for counts, earlier in (([100], 0), ([100, 100], 1), ([100, 100, 100], 2)):
+        change = _volume(tmp_path, counts, {"max_change_pct": 1})["volume.change"]
+        assert (change.status, change.details, change.observed) == ("unknown", "not enough history", None)
+        assert change.metrics["earlier_runs"] == earlier and change.metrics["needed_runs"] == 3
+        (tmp_path / "config" / ".ldp" / "events.jsonl").unlink()
+    enough = _volume(tmp_path, [100, 100, 100, 100], {"max_change_pct": 1})["volume.change"]
+    assert (enough.status, enough.metrics["earlier_runs"]) == ("ok", 3)
+    assert _volume(tmp_path, [100, 100, 100, 100, 5], {"max_change_pct": 1})["volume.change"].status == "error"
+
+
+def test_the_median_is_taken_over_the_lookback_and_over_the_earlier_runs_only(tmp_path):
+    counts = [500, 500, 500, 100, 100, 100, 100]
+    short = _volume(tmp_path, counts, {"max_change_pct": 10, "lookback_runs": 4})["volume.change"]
+    assert (short.status, short.metrics["baseline_median"], short.metrics["earlier_runs"]) == ("ok", 100, 3)
+    (tmp_path / "config" / ".ldp" / "events.jsonl").unlink()
+    long = _volume(tmp_path, counts, {"max_change_pct": 10, "lookback_runs": 7})["volume.change"]
+    assert (long.status, long.metrics["baseline_median"], long.observed) == ("error", 300, "-66.7 percent")
+
+
+def test_runs_that_wrote_nothing_have_no_change_in_percent(tmp_path):
+    unknown = _volume(tmp_path, [0, 0, 0, 0, 5], {"max_change_pct": 50})["volume.change"]
+    assert unknown.status == "unknown"
+    assert unknown.details == "the earlier runs wrote no rows, so a change in percent has no meaning"
+    (tmp_path / "config" / ".ldp" / "events.jsonl").unlink()
+    same = _volume(tmp_path, [0, 0, 0, 0, 0], {"max_change_pct": 50})["volume.change"]
+    assert (same.status, same.observed) == ("ok", "+0.0 percent")
+    assert same.details == "the latest run wrote 0 rows, the same as the median of 4 earlier runs, 0 rows"
+
+
+def test_only_published_runs_count_and_a_run_counts_once_whatever_its_attempts_did(tmp_path):
+    path = _write(tmp_path, sla={"volume": {"max_change_pct": 50}}, sinks=["jsonl"])
+    ended = {5: "blocked_quality", 6: "failed", 7: "skipped_duplicate"}
+    _history(tmp_path, [100, 100, 100, 100, 0, 0, 0], statuses=ended)
+    # a run that failed on its first attempt and published on its second one
+    first, second = _event(8, "run.failed", message="x"), _event(8, "run.published", rows_written=100, snapshot_id=1008)
+    folder = tmp_path / "config" / ".ldp"
+    with open(folder / "events.jsonl", "a", encoding="utf-8") as handle:
+        handle.write(first.to_json() + "\n")
+        retried = RunEvent(event_id="retry", type="run.published", schema_version=1, ts=second.ts, run_id=second.run_id,
+                           attempt=2, seq=0, payload=second.payload)
+        handle.write(retried.to_json() + "\n")
+    # a run that published on its first attempt, and found its key published on the second one
+    published, duplicate = _event(9, "run.published", rows_written=100, snapshot_id=1009), _event(
+        9, "run.skipped_duplicate", rows_written=0)
+    again = RunEvent(event_id="again", type="run.skipped_duplicate", schema_version=1, ts=duplicate.ts,
+                     run_id=duplicate.run_id, attempt=2, seq=0, payload=duplicate.payload)
+    with open(folder / "events.jsonl", "a", encoding="utf-8") as handle:
+        handle.write(published.to_json() + "\n" + again.to_json() + "\n")
+    [change] = evaluate(Config.from_json(path), NOW)
+    assert change.metrics["earlier_runs"] == 5 and change.metrics["run_id"] == "run-009"
+    assert (change.status, change.metrics["observed"]) == ("ok", 100)
+
+
+def test_one_odd_run_among_the_earlier_ones_does_not_move_the_median(tmp_path):
+    change = _volume(tmp_path, [1000, 100, 100, 100, 100, 100, 100], {"max_change_pct": 10})["volume.change"]
+    assert (change.status, change.metrics["baseline_median"], change.observed) == ("ok", 100, "+0.0 percent")
+
+
+def test_a_published_run_with_no_count_is_not_a_run_with_a_count(tmp_path):
+    path = _write(tmp_path, sla={"volume": {"max_change_pct": 50}}, sinks=["jsonl"])
+    _history(tmp_path, [100] * 5)
+    events = [_event(6, "run.published", snapshot_id=1006), _event(6, "run.finished", status="published")]
+    with open(tmp_path / "config" / ".ldp" / "events.jsonl", "a", encoding="utf-8") as handle:
+        handle.writelines(event.to_json() + "\n" for event in events)
+    [change] = evaluate(Config.from_json(path), NOW)
+    assert (change.status, change.metrics["run_id"], change.metrics["earlier_runs"]) == ("ok", "run-005", 4)
+
+
+def test_a_table_with_no_run_and_no_history_has_nothing_to_measure(tmp_path):
+    path = _write(tmp_path, sla={"volume": VOLUME})
+    rows, change = evaluate(Config.from_json(path), NOW)
+    assert (rows.status, rows.details) == ("unknown", "no published run yet, so there is no row count to check")
+    assert (change.status, change.details) == ("unknown", "not enough history")
+    assert rows.metrics == {"min_rows": 50, "max_rows": 200, "source": "none"}
+    assert not (tmp_path / "warehouse").exists()
+
+
+def test_a_target_that_is_a_file_has_the_counts_of_its_history(tmp_path):
+    target = {"name": "out", "format": "CSV", "path": "../out.csv"}
+    results = _volume(tmp_path, [100, 100, 100, 100, 10], {"min_rows": 50, "max_change_pct": 50}, target=target)
+    assert (results["volume.rows"].status, results["volume.change"].status) == ("error", "error")
+    assert results["volume.rows"].table_uuid is None
+
+
+def _load_rows(tmp_path: Path, rows: int, *, key: str | None = None) -> int:
+    (tmp_path / "orders.csv").write_text("order_id,amount\n" + "".join(f"{i},{i}.5\n" for i in range(1, rows + 1)))
+    argv = ["run", str(tmp_path / "config" / "orders.json")]
+    return main(argv + (["--idempotency-key", key] if key else []))
+
+
+@pytest.mark.parametrize("sinks, source", [(["jsonl"], "events"), (["iceberg"], "events"), (None, "snapshots")])
+def test_real_runs_give_the_same_counts_from_their_history_and_from_the_snapshots(tmp_path, sinks, source):
+    path = _write(tmp_path, sla={"volume": {**VOLUME, "lookback_runs": 7}}, sinks=sinks, target=_append_target())
+    for rows in (100, 102, 98, 101, 99, 100, 10):
+        assert _load_rows(tmp_path, rows) == 0
+    rows, change = evaluate(Config.from_json(path), NOW)
+    assert (rows.status, rows.observed, rows.metrics["source"]) == ("error", "10 rows", source)
+    assert (change.status, change.observed) == ("error", "-90.0 percent")
+    assert (change.metrics["baseline_median"], change.metrics["earlier_runs"]) == (100, 6)
+    table = _catalog(tmp_path).load_table("shop.orders")
+    assert rows.metrics["snapshot_id"] == table.current_snapshot().snapshot_id
+    word = "run wrote" if source == "events" else "commit added"
+    assert rows.details == f"the latest {word} 10 rows, fewer than the 50 rows that min_rows asks for"
+
+
+def test_an_overwrite_counts_the_rows_of_the_new_batch(tmp_path):
+    for sinks in (["jsonl"], None):
+        folder = tmp_path / ("with" if sinks else "without")
+        folder.mkdir()
+        path = _write(folder, sla={"volume": {"min_rows": 1}}, sinks=sinks, target=_append_target("overwrite"))
+        for rows in (5, 7):
+            assert _load_rows(folder, rows) == 0
+        [result] = evaluate(Config.from_json(path), NOW)
+        assert (result.status, result.metrics["observed"]) == ("ok", 7)
+
+
+def test_a_commit_that_rewrites_files_is_not_a_batch_and_the_lookback_limits_the_commits(tmp_path):
+    path = _write(tmp_path, sla={"volume": {"min_rows": 1}}, target=_append_target())
+    for rows in (100, 100):
+        assert _load_rows(tmp_path, rows) == 0
+    table = _catalog(tmp_path).load_table("shop.orders")
+    table.delete("order_id = 1")  # it rewrites both files, and the rewrite adds 198 rows that are not new
+    summary = _catalog(tmp_path).load_table("shop.orders").current_snapshot().summary
+    assert (summary.operation.value, summary.additional_properties["added-records"]) == ("overwrite", "198")
+    [result] = evaluate(Config.from_json(path), NOW)
+    assert (result.status, result.metrics["observed"], result.metrics["source"]) == ("ok", 100, "snapshots")
+
+    other = tmp_path / "other"
+    other.mkdir()
+    path = _write(other, sla={"volume": {"max_change_pct": 10, "lookback_runs": 4}}, target=_append_target())
+    for rows in (500, 500, 500, 100, 100, 100, 100):
+        assert _load_rows(other, rows) == 0
+    [change] = evaluate(Config.from_json(path), NOW)
+    assert (change.status, change.metrics["baseline_median"], change.metrics["earlier_runs"]) == ("ok", 100, 3)
+
+
+def test_an_upsert_counts_the_rows_that_it_changed_and_not_the_rows_of_the_table(tmp_path):
+    target = _append_target("upsert", join_cols=["order_id"])
+    path = _write(tmp_path, sla={"volume": {"min_rows": 1}}, sinks=["jsonl"], target=target)
+    assert _load_rows(tmp_path, 5) == 0
+    [first] = evaluate(Config.from_json(path), NOW)
+    assert (first.status, first.metrics["observed"]) == ("ok", 5)
+    assert _load_rows(tmp_path, 5) == 0  # the same batch again changes nothing
+    [again] = evaluate(Config.from_json(path), NOW)
+    assert (again.status, again.metrics["observed"]) == ("error", 0)
+    assert again.details == "the latest run wrote 0 rows, fewer than the 1 row that min_rows asks for"
+    assert _catalog(tmp_path).load_table("shop.orders").scan().to_arrow().num_rows == 5
+
+
+def test_a_run_that_found_its_key_published_or_was_blocked_is_not_the_latest_run(tmp_path):
+    checks = [{"check": "row_count", "min": 3}]
+    path = _write(tmp_path, sla={"volume": {"min_rows": 1}}, sinks=["jsonl"], target=_append_target())
+    assert _load_rows(tmp_path, 8, key="k1") == 0
+    assert _load_rows(tmp_path, 8, key="k1") == 0  # the key is published already, so nothing is written
+    data = json.loads(path.read_text())
+    data["metadata"]["quality"] = checks
+    path.write_text(json.dumps(data))
+    assert _load_rows(tmp_path, 2) == 3  # a quality check holds the run back
+    [result] = evaluate(Config.from_json(path), NOW)
+    assert (result.status, result.metrics["observed"]) == ("ok", 8)
+    events, where = run_events(Config.from_json(path))
+    assert where.endswith("events.jsonl") and (events, where) == load_run_events(path)
+
+
+def test_ldp_monitor_prints_a_line_for_each_volume_rule_and_exits_with_2_for_a_drop(tmp_path, capsys):
+    path = _write(tmp_path, sla={"volume": VOLUME}, sinks=["jsonl"])
+    _history(tmp_path, [100, 102, 98, 101, 99, 100, 10])
+    code, out, err = _ldp(["monitor", str(path), "--now", NOW.isoformat()], capsys)
+    assert (code, err) == (2, "")
+    names = [line.split()[2] for line in out.splitlines() if line.startswith("orders ")]
+    assert names == ["volume.rows", "volume.change"]
+    assert "2 error" in out
+    _history(tmp_path, [100] * 7, start=8)  # seven normal runs after it
+    code, out, _ = _ldp(["monitor", str(path), "--now", NOW.isoformat(), "--json"], capsys)
+    assert code == 0 and [result["status"] for result in json.loads(out)] == ["ok", "ok"]
+
+
+def test_the_history_of_a_volume_monitor_is_read_back_by_name(tmp_path):
+    path = _write(tmp_path, sla={"volume": VOLUME}, sinks=["jsonl"])
+    _history(tmp_path, [100, 100, 100, 100, 100])
+    config = Config.from_json(path)
+    record([(config, evaluate(config, NOW))])
+    assert [result.monitor for result in read_results(config)] == ["volume.change", "volume.rows"]
+    assert [result.status for result in read_results(config, monitor="volume.change")] == ["ok"]
+
+
+def test_ldp_plan_warns_when_a_volume_sla_has_no_history_to_read(tmp_path):
+    def notes(**options):
+        return plan(_write(tmp_path, sla={"volume": VOLUME, **options.pop("sla", {})}, **options))["notes"]
+
+    unwatched = notes()
+    assert unwatched == [
+        "the SLA has a volume section, but the config has no iceberg or jsonl sink, so ldp monitor can only read the "
+        "rows of earlier runs from the snapshots of the table, and expiring snapshots removes them"]
+    assert notes(sinks=["jsonl"]) == [] and notes(sinks=["iceberg"]) == []
+    assert notes(sinks=["null"]) == unwatched
+    assert plan(_write(tmp_path, sla={"freshness": FRESHNESS}))["notes"] == []
+
+
+def test_ldp_plan_warns_when_the_lookback_leaves_too_few_earlier_runs(tmp_path):
+    sla = {"volume": {"max_change_pct": 20, "lookback_runs": 3}}
+    [note] = plan(_write(tmp_path, sla=sla, sinks=["jsonl"]))["notes"]
+    assert note == "volume.lookback_runs is 3, which leaves fewer than 3 earlier runs, so the change rule never reports"
+    ok = {"volume": {"max_change_pct": 20, "lookback_runs": 4}}
+    assert plan(_write(tmp_path, sla=ok, sinks=["jsonl"]))["notes"] == []
+    assert plan(_write(tmp_path, sla={"volume": {"min_rows": 1, "lookback_runs": 2}}, sinks=["jsonl"]))["notes"] == []
