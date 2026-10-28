@@ -31,14 +31,14 @@ def evaluate(config: Any, now: dt.datetime | str | None = None) -> list[MonitorR
             current time by default.
 
     Returns:
-        The :class:`~local_data_platform.monitoring.results.MonitorResult` of each monitor, freshness first and then
-        the two of the volume, and empty when the config has no SLA, or an SLA with no section that a monitor runs for.
+        The :class:`~local_data_platform.monitoring.results.MonitorResult` of each monitor, freshness first, then the
+        two of the volume and then the schema, and empty when the config has no SLA.
 
     Raises:
         ConfigError: If ``now`` is not a time.
     """
     sla = config.sla
-    if sla is None or (sla.freshness is None and sla.volume is None):
+    if sla is None:
         return []
     from local_data_platform.monitoring.target import load_target
 
@@ -53,6 +53,10 @@ def evaluate(config: Any, now: dt.datetime | str | None = None) -> list[MonitorR
         from local_data_platform.monitoring.volume import evaluate_volume
 
         results.extend(evaluate_volume(sla.volume, config, target, moment))
+    if sla.schema is not None:
+        from local_data_platform.monitoring.schema import evaluate_schema
+
+        results.append(evaluate_schema(sla.schema, config, target, moment))
     return results
 
 

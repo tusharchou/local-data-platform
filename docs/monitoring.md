@@ -8,7 +8,8 @@ later parts of the same milestone.
 ```json
 "sla": {
   "freshness": {"warn_after": {"count": 6, "period": "hour"}, "error_after": {"count": 26, "period": "hour"}},
-  "volume": {"min_rows": 50, "max_rows": 200000, "max_change_pct": 50, "lookback_runs": 7}
+  "volume": {"min_rows": 50, "max_rows": 200000, "max_change_pct": 50, "lookback_runs": 7},
+  "schema": {"on_change": "warn", "allow": ["added_column"]}
 }
 ```
 
@@ -86,6 +87,36 @@ removes the commits. `ldp plan` says so when a config has a `volume` section and
 The metrics of a result hold the numbers behind it. They are `observed`, the count of the latest run, and for the change also
 `baseline_median`, `change_pct` and `earlier_runs`.
 
+## Schema
+
+The schema monitor says whether the columns of the table, or of its source, changed since the last look. It compares two
+things.
+
+The columns of the table now are compared with the columns that the previous evaluation of the monitor kept in its result,
+so the history is the baseline and there is no file to keep. The first evaluation has nothing to compare with, so it is
+`ok` and records the baseline, which is a name and a type for each column and a fingerprint of the whole schema, in its
+metrics. A change is reported once, by the evaluation that first sees it, and the next evaluation compares with the new
+columns.
+
+The columns that the source gave in the latest run are compared with those of the run before it, from the `run.extracted`
+events of the history. That reports a source that changed in a way that made the run fail, though the table did not change.
+It needs a history, and a report of the source stays until a later run has the columns of the run before it.
+
+| Change | What it is |
+|---|---|
+| `added_column` | a column that was not there before |
+| `removed_column` | a column that is not there any more |
+| `widened_type` | a type that holds every value of the old one, such as `int` to `long`, `float` to `double`, or a `decimal` with more digits |
+| `changed_type` | any other type, such as a column that was dropped and added again as another type |
+| `other` | something that the fingerprint sees and the columns do not, such as the nullability or the order of the columns |
+
+`allow` lists the kinds of change that stay `ok`, and it can hold `added_column` and `widened_type`. A removed column and
+another type are never allowed. A change that is not allowed has the status that `on_change` says, `warn` by default, or
+`error`, or `ok` when it is `ignore`. A table that does not exist yet has no schema, so the result is `unknown`.
+
+The metrics of a result hold the `fingerprint` and the `columns` of the table, which are the next baseline, and each change
+with where it happened, `table` or `source`, the column, the types before and after and whether it was allowed.
+
 ## The history
 
 Every invocation records its results. A config with an `iceberg` sink in `metadata.observability` gets them in
@@ -105,5 +136,5 @@ record([(config, results)])
 print([(result.monitor, result.status) for result in read_results(config)])
 ```
 
-The monitors are `freshness`, `volume.rows` and `volume.change`. The columns of `_ldp.monitor_results` are in
+The monitors are `freshness`, `volume.rows`, `volume.change` and `schema`. The columns of `_ldp.monitor_results` are in
 [the table of the `_ldp` tables](observability.md#the-_ldp-namespace).
