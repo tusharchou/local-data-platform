@@ -1,6 +1,6 @@
 [project]
 name = "local-data-platform"
-version = "0.1.3"
+version = "0.1.4"
 description = "A Python API layer for running a complete Iceberg lakehouse data platform on your laptop."
 readme = "README.md"
 license = { text = "MIT" }

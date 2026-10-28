@@ -4,7 +4,7 @@ Local Data Platform aims to be a full data platform in a box. Each milestone add
 
 One dataset makes the whole journey. `examples/restaurant` starts in 0.1.2 as the sales, customers, menus and reviews of a small restaurant group. Every later milestone extends the same example, so you can follow the same rows from a raw file to a dashboard and a plain-English answer.
 
-**Version numbers.** From 0.1.1 on, the package version equals the milestone number. 0.1.3 is the current release, and 0.1.1 was made from PR #117. Milestone 0.1.4 ships as package 0.1.4, and so on up to 0.2.0 Cloud Integration. APIs deprecated in 0.1.1 are removed in 0.2.0.
+**Version numbers.** From 0.1.1 on, the package version equals the milestone number. 0.1.4 is the current release, and 0.1.1 was made from PR #117. Milestone 0.1.5 ships as package 0.1.5, and so on up to 0.2.0 Cloud Integration. APIs deprecated in 0.1.1 are removed in 0.2.0.
 
 **Sizes.** Sizes are estimates in engineer-days for one engineer working with an AI assistant, before review cycles. A small issue (S) is 1.5 days, a medium one (M) is 5 days and a large one (L) is 11 days. The whole plan comes to about 288 engineer-days.
 
@@ -15,7 +15,7 @@ One dataset makes the whole journey. `examples/restaurant` starts in 0.1.2 as th
 | 0.1.1 | Today's platform on PyPI, renumbered from 0.2.0 | `ldp demo` | 1.5 | Released |
 | 0.1.2 Warehousing: DuckDB, Iceberg, DBT | dbt models over Iceberg tables, published back to Iceberg, plus Excel input | `make demo-warehouse` | 33.5 | Released |
 | 0.1.3 Orchestration | Windows, backfills, retries and a laptop scheduler, plus an Airflow operator | `make demo-orchestration` | 34 | Released |
-| 0.1.4 Self Serving Gold Layer | Gold tables with owners and docs, releases, metrics, a catalog and exports | `make demo-gold` | 31 | Planned |
+| 0.1.4 Self Serving Gold Layer | Gold tables with owners and docs, releases, metrics, a catalog and exports | `make demo-gold` | 31 | Released |
 | 0.1.5 Monitoring | SLAs, freshness, volume, schema and metric monitors, alerts and `ldp status` | `make demo-monitor` | 25.5 | Planned |
 | 0.1.6 Business Intelligence Reporting Dashboarding | Offline HTML reports, Slack delivery, a live dashboard and BI tool recipes | `make demo-bi` | 27 | Planned |
 | 0.1.7 Data Science Insights | Churn, retention, funnels, sessions, training sets and a notebook | `make demo-insights` | 29.5 | Planned |
@@ -183,6 +183,8 @@ ldp schedule install --print launchd ldp_demo/restaurant
 - Unattended Colab Enterprise notebook schedules are not planned.
 
 ## 0.1.4 Self Serving Gold Layer
+
+Released as 0.1.4.
 
 **Goal.** Make the gold layer self-serving. Every gold table carries an owner, a meaning, a grain and column docs, all gold tables publish together as one consistent release, and metrics are defined once. People who are not engineers reach the data without asking one, through a catalog page, CSV and Excel exports, a DuckDB file and the MCP server. The restaurant data mart (#97) shows all of it on a laptop.
 

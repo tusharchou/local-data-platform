@@ -6,11 +6,15 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+Work towards 0.1.5 Monitoring, see `docs/roadmap.md`.
+
+## [0.1.4] - 2026-10-28
+
 Milestone 0.1.4 Self Serving Gold Layer, see `docs/roadmap.md`. The gold layer is for people who are not engineers.
 Every gold table says who owns it, what it means, what one row is and what each column holds, all the gold tables are
 published together as one release, and a number such as the average ticket is defined once. People get the tables as a
 catalog page, an Excel file and one DuckDB file, and an agent can be limited to the gold tables. The guide is
-`docs/gold.md`, and `make demo-gold` runs the example.
+`docs/gold.md`, and `make demo-gold` runs the example. The release tag for this version is `v0.1.4`.
 
 ### Added
 
@@ -51,7 +55,7 @@ catalog page, an Excel file and one DuckDB file, and an agent can be limited to 
   catalog page. The daily workflow of the example has a `gold` task, so a night that passes its gates cuts a release.
 - The recipe Monthly churn from an orders table, in `docs/recipes.md` (#154).
 - The gold layer guide, `docs/gold.md`, whose commands run in the test suite through the shared block runner in
-  `tests/docs_runner.py`, with a section for people who are not engineers, and a Gold layer section in the README.
+  `tests/docs_runner.py`, with a section for people who are not engineers, and a Gold layer section in the README (#156).
 
 ### Changed
 
