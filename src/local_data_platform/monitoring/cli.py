@@ -83,17 +83,17 @@ def _cmd_monitor(args: argparse.Namespace) -> int:
 
     configs, failures = _load(args.config)
     now = args.now if args.now is not None else dt.datetime.now(dt.timezone.utc)
-    evaluated: list[tuple[Path, Any, list[MonitorResult]]] = []
+    evaluated: list[tuple[Any, list[MonitorResult]]] = []
     without_sla: list[Path] = []
     for file, config in configs:
         if config.sla is None:
             without_sla.append(file)
             continue
         try:
-            evaluated.append((file, config, evaluate(config, now)))
+            evaluated.append((config, evaluate(config, now)))
         except Exception as error:  # noqa: BLE001 - one config that cannot be read must not hide the others
             failures.append((file, str(error) if isinstance(error, LDPError) else f"{type(error).__name__}: {error}"))
-    results = [result for _, _, found in evaluated for result in found]
+    results = [result for _, found in evaluated for result in found]
 
     if args.json:
         print(json.dumps([result.to_dict() for result in results], indent=2))
@@ -110,10 +110,7 @@ def _cmd_monitor(args: argparse.Namespace) -> int:
         elif without_sla:
             names = ", ".join(file.name for file in without_sla)
             print(f"{len(without_sla)} configs have no metadata.sla, so there is nothing to check in {names}")
-        for file, _, found in evaluated:
-            if not found:
-                print(f"{file.name} has an SLA with no section that a monitor runs for yet")
-    written = record([(config, found) for _, config, found in evaluated])
+    written = record(evaluated)
     if written and not args.json:
         print(f"Results recorded in {', '.join(dict.fromkeys(written))}")
     for file, message in failures:
