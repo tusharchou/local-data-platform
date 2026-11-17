@@ -1249,6 +1249,11 @@ def _describe(result: dict[str, Any], spec: Mapping[str, Any], base: Path | None
     sla = sla_settings.parse_sla(metadata.get("sla"))
     result["sla"] = sla.to_dict() if sla is not None else None
     result["notes"].extend(_sla_notes(sla, result["sinks"]))
+    if sla is not None and sla.metrics and base is not None:
+        from local_data_platform.monitoring.metric import folder_problems
+
+        for path, message in folder_problems(sla.metrics, base):
+            errors.append(ConfigError(f"metadata.sla{path}: {message}"))
     errors.extend(_describe_schedule(result, spec))
     if window_error is not None:
         errors.append(window_error)
@@ -1269,6 +1274,10 @@ def _sla_notes(sla: sla_settings.Sla | None, sinks: Sequence[str]) -> list[str]:
     if volume is not None and volume.max_change_pct is not None and volume.lookback_runs < 4:
         notes.append(f"volume.lookback_runs is {volume.lookback_runs}, which leaves fewer than 3 earlier runs, so the "
                      "change rule never reports")
+    for index, rule in enumerate(sla.metrics if sla is not None else ()):
+        if rule.max_change_pct is not None and rule.lookback < 4:
+            notes.append(f"metrics[{index}].lookback is {rule.lookback}, which leaves fewer than 3 earlier values, so "
+                         "the change rule never reports")
     return notes
 
 

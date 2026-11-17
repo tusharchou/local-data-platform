@@ -377,9 +377,9 @@ def test_validate_spec_reports_a_bad_sla_with_its_json_path():
 
 
 def test_validate_spec_rejects_unknown_keys_inside_sla():
-    messages = _messages(_spec(metadata__sla={"metrics": [], "volume": {"min_rows": 1, "min_row": 2}}))
+    messages = _messages(_spec(metadata__sla={"alerts": [], "volume": {"min_rows": 1, "min_row": 2}}))
     assert messages == [
-        "metadata.sla: has unknown keys ['metrics']; allowed: ['freshness', 'volume', 'schema']",
+        "metadata.sla: has unknown keys ['alerts']; allowed: ['freshness', 'volume', 'schema', 'metrics']",
         "metadata.sla.volume: has unknown keys ['min_row']; allowed: ['min_rows', 'max_rows', 'max_change_pct', "
         "'lookback_runs']",
     ]
@@ -394,15 +394,29 @@ def test_the_json_schema_describes_the_sla_and_agrees_with_validate_spec():
     jsonschema = pytest.importorskip("jsonschema")
     schema = json_schema()
     assert schema["$defs"]["metadata"]["properties"]["sla"] == {"$ref": "#/$defs/sla"}
-    assert sorted(schema["$defs"]["sla"]["properties"]) == ["freshness", "schema", "volume"]
+    assert sorted(schema["$defs"]["sla"]["properties"]) == ["freshness", "metrics", "schema", "volume"]
     validator = jsonschema.Draft202012Validator(schema)
     for good in (SLA, {"freshness": {"error_after": {"count": 1, "period": "day"}}},
-                 {"volume": {"max_change_pct": 12.5}}, {"schema": {}}):
+                 {"volume": {"max_change_pct": 12.5}}, {"schema": {}},
+                 {"metrics": [{"metric": "revenue", "grain": "day", "min": 0, "max_change_pct": 50,
+                               "filter": {"city": ["Pune", "Delhi"], "open": True}, "lookback": 4},
+                              {"name": "late", "sql": "SELECT 1", "grain": "week", "max": 3.5}]}):
         validator.validate(_spec(metadata__sla=good))
         assert _messages(_spec(metadata__sla=good)) == [], good
-    # Only what a JSON Schema can say: that warn_after is shorter than error_after, or that min_rows is not above
-    # max_rows, only validate_spec checks.
+    # Only what a JSON Schema can say: that warn_after is shorter than error_after, that min_rows is not above
+    # max_rows, that min is not above max, that two entries have different names and that a query has no filter, only
+    # validate_spec checks.
+    metric = {"metric": "revenue", "grain": "day", "min": 0}
     for bad in ({}, {"metrics": []}, {"freshness": {"column": "pickup_ts"}}, {"volume": {"lookback_runs": 5}},
+                {"metrics": [{"metric": "revenue", "grain": "day"}]}, {"metrics": [{"grain": "day", "min": 0}]},
+                {"metrics": [{"metric": "revenue", "min": 0}]},
+                {"metrics": [{"sql": "SELECT 1", "grain": "day", "min": 0}]},
+                {"metrics": [{**metric, "sql": "SELECT 1", "name": "late"}]},
+                {"metrics": [{**metric, "grain": "hour"}]},
+                {"metrics": [{**metric, "min": "0"}]}, {"metrics": [{**metric, "name": "Revenue"}]},
+                {"metrics": [{**metric, "filter": {}}]}, {"metrics": [{**metric, "lookback": 0}]},
+                {"metrics": [{**metric, "max_change_pct": 0}]}, {"metrics": [{**metric, "limit": 3}]},
+                {"metrics": [{**metric, "filter": {"city": [None]}}]}, {"metrics": "revenue"},
                 {"freshness": {"error_after": {"count": 26, "period": "week"}}},
                 {"freshness": {"error_after": {"count": 0, "period": "hour"}}},
                 {"freshness": {"error_after": {"count": 1, "period": "day", "hours": 2}}},

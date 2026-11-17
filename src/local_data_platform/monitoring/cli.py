@@ -5,9 +5,10 @@
     ldp monitor CONFIG_OR_FOLDER [--json] [--now ISO-8601]
 
 Each monitor prints one line. The results are recorded in the history of the monitors (see
-:mod:`local_data_platform.monitoring.history`). The command reads the metadata of tables, scans no rows, writes to no
-table and creates no catalog. Its exit status is 0 when every monitor is ``ok`` or ``warn``, 2 when at least one is
-``error``, and 1 when ``ldp`` itself fails, such as a config that cannot be read.
+:mod:`local_data_platform.monitoring.history`). The command reads the metadata of tables and the history of the runs and
+of the monitors, and a metric monitor runs one aggregate query on a table. It writes to no table and creates no catalog.
+Its exit status is 0 when every monitor is ``ok`` or ``warn``, 2 when at least one is ``error``, and 1 when ``ldp``
+itself fails, such as a config that cannot be read.
 """
 
 import argparse
@@ -130,7 +131,8 @@ def add_cli(subparsers: Any, parents: Sequence[argparse.ArgumentParser] = ()) ->
     monitor = subparsers.add_parser(
         "monitor", parents=list(parents), help="check tables against their SLA",
         description="Check the SLA in the metadata.sla block of CONFIG, or of every dataset config of a folder, and "
-                    "print one line for each monitor. It reads the metadata of the tables, scans no rows, writes to no "
+                    "print one line for each monitor. It reads the metadata of the tables and the history of the "
+                    "runs, and it runs one aggregate query for each metric of a metrics section. It writes to no "
                     "table and creates no catalog. The results are recorded in _ldp.monitor_results when a config has "
                     "an iceberg sink and its catalog exists, and in .ldp/monitor.jsonl next to the config otherwise.",
         epilog="Exit status is 0 when every monitor is ok or warn, 2 when at least one is error, and 1 when ldp itself "

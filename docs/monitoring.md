@@ -1,15 +1,16 @@
 # Monitors that check the SLA of a table
 
-A config can say how fresh, how big and how stable its table should be, in a `metadata.sla` block. `ldp monitor` checks
-the table against it between runs, reads the metadata of the table and the history of its runs, scans no rows, and
-records what it found. This page says what each monitor measures. The alerts and the status screen that build on it are
-later parts of the same milestone.
+A config can say how fresh, how big and how stable its table should be, and which business numbers to watch, in a
+`metadata.sla` block. `ldp monitor` checks the table against it between runs. It reads the metadata of the table and the
+history of its runs, runs one aggregate query for each business number, and records what it found. This page says what
+each monitor measures. The alerts and the status screen that build on it are later parts of the same milestone.
 
 ```json
 "sla": {
   "freshness": {"warn_after": {"count": 6, "period": "hour"}, "error_after": {"count": 26, "period": "hour"}},
   "volume": {"min_rows": 50, "max_rows": 200000, "max_change_pct": 50, "lookback_runs": 7},
-  "schema": {"on_change": "warn", "allow": ["added_column"]}
+  "schema": {"on_change": "warn", "allow": ["added_column"]},
+  "metrics": [{"metric": "revenue", "grain": "day", "min": 0, "max_change_pct": 50}]
 }
 ```
 
@@ -117,6 +118,109 @@ another type are never allowed. A change that is not allowed has the status that
 The metrics of a result hold the `fingerprint` and the `columns` of the table, which are the next baseline, and each change
 with where it happened, `table` or `source`, the column, the types before and after and whether it was allowed.
 
+## Metrics
+
+A business number can be watched too, such as the revenue of yesterday. An entry of `metrics` names a metric of the
+metrics file that sits next to the config, or gives one query that returns one number, and it says at what `grain` to
+measure it.
+
+```json
+"metrics": [
+  {"metric": "revenue", "grain": "day", "min": 0, "max_change_pct": 50},
+  {"name": "pune_revenue", "metric": "revenue", "grain": "day", "filter": {"city": "Pune"}, "max_change_pct": 40,
+   "lookback": 14}
+]
+```
+
+| Key | What it says |
+|---|---|
+| `metric` | The name of a metric of the metrics file of the folder of the config. Give this or `sql` |
+| `sql` | One read-only `SELECT` or `WITH` query that returns one number, for a folder that has no metrics file. It needs a `name` |
+| `name` | What the monitors of the entry are called. A metric is called by its own name when the entry has none, so two entries of one metric need names |
+| `grain` | How long a period is, `day`, `week`, `month`, `quarter` or `year`. It is required |
+| `min` and `max` | The least and the most that the value may be |
+| `max_change_pct` | How far in percent the value may be from the median of the periods before it |
+| `filter` | `{dimension: value or values}` that narrows a metric. A list of values means either. A query filters in its own text |
+| `lookback` | How many periods, the latest one included, the median is taken over. It is 7 by default |
+
+An entry has at least one of `min`, `max` and `max_change_pct`. A `name` is lower case letters, digits and underscores that
+start with a letter.
+
+### What is measured
+
+The monitor measures the latest complete period of the grain, counted in UTC. At 10:00 on a Wednesday that is Tuesday for
+`day`, and the week that ended on Sunday for `week`. A week starts on Monday, and a quarter starts in January, April, July
+or October. `--now` moves the period, and the data is read as it is now. A metric is computed by
+`local_data_platform.metrics` from the current release of the gold tables, as `ldp metrics query` does, so the number is the
+one that the reports and the agents show. The metric may be over a table
+other than the one of the config, which is the case when the SLA is in the config of a raw table and the metrics are over
+gold tables.
+
+Nothing tells the monitor when a period has been loaded. A day that is still being loaded looks like a fall, so schedule
+`ldp monitor` after the load and after the gold build that cuts the release. Until that release holds the day, the day has no
+rows, and the result is `unknown`. The freshness monitor is the one that says that a table is late.
+
+### Two results
+
+An entry makes up to two results, so that each rule has its own history and its own status. `metric.<key>.value` holds the
+value against `min` and `max`, and `metric.<key>.change` holds it against the median of the periods before it. The key is
+the `name` of the entry, or its metric. A value that breaks a limit, or that is further from the median than
+`max_change_pct` percent, is an `error`, whether it fell or rose, and a value exactly at a limit is not. A change in percent
+is measured against the size of the median, so a loss that gets smaller is a rise.
+
+### The baseline
+
+The change needs 3 earlier values, so that one odd day is not the baseline. The earlier values come from the history of the
+monitors, so there is no query for the days before, and the first change report comes 3 periods after the first look. With
+fewer values, `metric.<key>.change` is `unknown` with the details `not enough history`, and it never raises an alert. The
+history has one look for each time that `ldp monitor` ran, and it may run many times in a period, so the baseline takes one
+value for each earlier period, the last that was measured. Only the looks of the same definition count, which is the metric or
+the query, the grain and the filter, so a history of another metric or grain is never mixed in. Changing a limit, the
+`lookback` or the name does not start a new baseline, and changing the metric, the query, the grain or the filter does.
+
+`lookback` counts the latest period too, so a `lookback` of 3 or less leaves fewer than 3 earlier values, and the change
+would never report. `ldp plan` says so. When the median of the earlier values is 0, a change in percent has no meaning, and
+the result is `unknown`, unless the value is 0 too.
+
+### When there is no value
+
+| What happens | Status |
+|---|---|
+| The period has no rows, such as a day that the release does not hold yet, or a day that the restaurant was shut | `unknown` |
+| The value is NULL, such as the average of a column that has no value in the period | `unknown` |
+| The gold table does not exist yet | `unknown` |
+| The duckdb package is not installed, and the details say `pip install "local-data-platform[duckdb]"` | `unknown` |
+| A metric that the metrics file does not define, a grain or a filter that its model does not allow, or a metrics file that is not valid | `error` |
+| A query that is not one read-only statement, or that cannot run, or that does not return one number | `error` |
+
+An `unknown` result never raises an alert. An `error` for a definition that cannot run is on purpose, because a monitor that
+quietly never alerts is worse than one that says it is broken. The other monitors of the config still run. `ldp plan` finds
+the unknown metric, the grain and the filter before a run, and its message lists the valid names.
+
+### A query instead of a metric
+
+A folder that has no metrics file has no definitions to share, so an entry can give the number as a query. The query runs on
+the table of the config, which it calls by its name.
+
+```json
+{"name": "orders_seen", "sql": "SELECT count(*) FROM orders WHERE order_date = current_date - 1", "grain": "day", "min": 1}
+```
+
+The query goes through the statement guard of the MCP server, which lets one `SELECT` or `WITH` through and refuses `DELETE`
+and anything else, with the message of the guard in the details of an `error`. It runs on a DuckDB engine that has only that
+table, at its current snapshot, and it has to return one row of one number. A folder that has a metrics file refuses a query,
+because the number belongs in the file, where every reader gets it the same way. The grain of a query says how long a period is
+for the history, since the text of the query says which rows to count. The text runs as it is, so `current_date` is the date
+of the machine and not the moment of `--now`.
+
+### What is stored
+
+Only the value is stored in the history, with its period, grain and the names behind it. A row of a table is never stored.
+The metrics of a result are `value`, `period`, `grain`, `definition`, the `table` and, for a metric, what it was `read` from,
+and the limits and `lookback` of the rule. The change adds `earlier_values`, `baseline_median` and `change_pct`. An error of
+DuckDB that speaks about a value of a row, such as a value that cannot be cast, is said by its kind only, because its text may
+quote the row.
+
 ## The history
 
 Every invocation records its results. A config with an `iceberg` sink in `metadata.observability` gets them in
@@ -136,5 +240,6 @@ record([(config, results)])
 print([(result.monitor, result.status) for result in read_results(config)])
 ```
 
-The monitors are `freshness`, `volume.rows`, `volume.change` and `schema`. The columns of `_ldp.monitor_results` are in
+The monitors are `freshness`, `volume.rows`, `volume.change`, `schema`, and `metric.<key>.value` and `metric.<key>.change`
+for each entry of `metrics`. The columns of `_ldp.monitor_results` are in
 [the table of the `_ldp` tables](observability.md#the-_ldp-namespace).

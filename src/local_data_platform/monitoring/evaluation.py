@@ -1,7 +1,8 @@
 """Evaluate the SLA of a config: every monitor that it asks for, at one moment.
 
 :func:`evaluate` reads the ``metadata.sla`` block of a config and runs one monitor for each section that it has, and
-returns what they found. It reads table metadata and nothing else. It does not record the results, which
+returns what they found. It reads table metadata, the history of the runs and the history of the monitors, and a
+metric monitor also runs one aggregate query on a table. It does not record the results, which
 :func:`~local_data_platform.monitoring.history.record` does, so it can be called as often as a person wants.
 
 This module needs only the standard library when it is imported. The monitors import what they need when they run.
@@ -32,7 +33,7 @@ def evaluate(config: Any, now: dt.datetime | str | None = None) -> list[MonitorR
 
     Returns:
         The :class:`~local_data_platform.monitoring.results.MonitorResult` of each monitor, freshness first, then the
-        two of the volume and then the schema, and empty when the config has no SLA.
+        two of the volume, the schema and then the two of each metric, and empty when the config has no SLA.
 
     Raises:
         ConfigError: If ``now`` is not a time.
@@ -57,6 +58,10 @@ def evaluate(config: Any, now: dt.datetime | str | None = None) -> list[MonitorR
         from local_data_platform.monitoring.schema import evaluate_schema
 
         results.append(evaluate_schema(sla.schema, config, target, moment))
+    if sla.metrics:
+        from local_data_platform.monitoring.metric import evaluate_metrics
+
+        results.extend(evaluate_metrics(sla.metrics, config, target, moment))
     return results
 
 
