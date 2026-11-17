@@ -2,8 +2,9 @@
 
 A config can say how fresh, how big and how stable its table should be, and which business numbers to watch, in a
 `metadata.sla` block. `ldp monitor` checks the table against it between runs. It reads the metadata of the table and the
-history of its runs, runs one aggregate query for each business number, and records what it found. This page says what
-each monitor measures. The alerts and the status screen that build on it are later parts of the same milestone.
+history of its runs, runs one aggregate query for each business number, and records what it found. A config that lists
+channels in `metadata.observability.alerts` is told when a monitor changes state, as [the page on alerts](alerts.md) says.
+This page says what each monitor measures. The status screen that builds on it is a later part of the same milestone.
 
 ```json
 "sla": {

@@ -3,7 +3,6 @@
 import argparse
 import dataclasses
 import datetime as dt
-import http.server
 import json
 import logging
 import threading
@@ -415,32 +414,6 @@ def test_openlineage_sink_reports_blocked_and_failed_runs_as_fail(tmp_path, stat
     assert final["eventType"] == "FAIL"
     assert final["run"]["facets"]["errorMessage"]["message"].startswith(message)
     assert "outputStatistics" not in json.dumps(final)
-
-
-class _LineageHandler(http.server.BaseHTTPRequestHandler):
-    received: list = []
-    status = 201
-
-    def do_POST(self):  # noqa: N802 - http.server's naming
-        body = self.rfile.read(int(self.headers["Content-Length"]))
-        type(self).received.append((self.path, self.headers.get("Authorization"), json.loads(body)))
-        self.send_response(type(self).status)
-        self.end_headers()
-
-    def log_message(self, *args):
-        pass
-
-
-@pytest.fixture
-def lineage_server():
-    _LineageHandler.received = []
-    _LineageHandler.status = 201
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _LineageHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    yield f"http://127.0.0.1:{server.server_address[1]}", _LineageHandler
-    server.shutdown()
-    server.server_close()
 
 
 def test_openlineage_sink_posts_to_an_http_endpoint_with_a_token_from_the_environment(lineage_server, monkeypatch):

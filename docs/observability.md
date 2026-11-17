@@ -167,6 +167,11 @@ named after the type; options in the list item win.
 With no `observability` block a run emits nothing. Secrets are never written into a config:
 `api_key_env` names an environment variable that holds the token.
 
+`observability` can also list `alerts`, which are channels that a person or a tool is told on when a run fails, a quality
+check blocks it or a monitor breaks and recovers. They are not sinks of events, and a config that lists only `alerts` still
+records nothing in `_ldp`. A Slack webhook URL is never in a config, and `redact_text` masks the path of one in an error
+message. [Alerts to Slack, a webhook or a file](alerts.md) has the channels and the events.
+
 ### In Python
 
 Pass a sink to `Pipeline.run`, to the `Pipeline(..., sink=)` constructor, or to `run_config`:

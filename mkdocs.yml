@@ -14,6 +14,7 @@ nav:
       - "Exactly-once writes": exactly_once.md
       - "Run events and the _ldp namespace": observability.md
       - "Monitors that check an SLA": monitoring.md
+      - "Alerts to Slack, a webhook or a file": alerts.md
       - "MCP server for agents": agents.md
       - "Robot-episode datasets": robotics.md
       - "Spark (experimental)": spark.md

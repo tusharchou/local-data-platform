@@ -6,6 +6,7 @@ here is offline. Where DuckDB's iceberg extension is not installed the tables ar
 the same rows, so the tests need no extension.
 """
 
+import dataclasses
 import json
 import re
 from pathlib import Path
@@ -671,6 +672,34 @@ def test_a_config_that_names_its_own_sinks_keeps_them_and_gets_no_iceberg_sink(t
 
     assert [json.loads(line)["type"] for line in log.read_text().splitlines()][0] == "run.started"
     assert read_iceberg_events({"identifier": "gold", "warehouse_path": str(tmp_path / "warehouse")}) == []
+
+
+def test_a_config_that_lists_only_alerts_still_gets_the_iceberg_sink_and_keeps_its_alerts(tmp_path):
+    from local_data_platform.gold.build import with_events
+
+    alerts = [{"type": "file", "path": "alerts.jsonl"}]
+    silver(tmp_path)
+    gold(tmp_path, observability={"alerts": alerts})
+    [found] = find_gold(tmp_path)
+    kept = with_events(found.config).metadata["observability"]
+    assert kept == {"alerts": alerts, "sinks": ["iceberg"]}
+
+    build_gold(tmp_path)
+
+    assert read_iceberg_events({"identifier": "gold", "warehouse_path": str(tmp_path / "warehouse")}) != []
+    assert not (tmp_path / "alerts.jsonl").exists(), "a build that publishes sends no alert"
+
+
+def test_a_config_with_no_observability_gets_the_iceberg_sink_and_other_blocks_are_left_alone(tmp_path):
+    from local_data_platform.gold.build import with_events
+
+    silver(tmp_path)
+    gold(tmp_path)
+    [found] = find_gold(tmp_path)
+    assert with_events(found.config).metadata["observability"] == {"sinks": ["iceberg"]}
+    for block in ({}, {"sinks": []}, {"sinks": ["jsonl"]}, {"sinks": ["null"], "alerts": []}):
+        config = dataclasses.replace(found.config, metadata={**found.config.metadata, "observability": block})
+        assert with_events(config) is config, block
 
 
 def test_a_gate_that_blocks_a_table_stops_the_build_and_the_tables_after_it_are_not_run(tmp_path, capsys):

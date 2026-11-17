@@ -9,6 +9,7 @@ Fixtures:
     sample_table_tz: ``make_table(tz="Asia/Bangkok")``, the same rides with a tz-aware
         ``timestamp[ns, tz=Asia/Bangkok]`` column.
     catalog_config: An Iceberg catalog config dict whose warehouse is under ``tmp_path``.
+    lineage_server: A local HTTP server that records the JSON that is posted to it.
 
 Tests marked ``dbt`` need the ``dbt`` extra (dbt-core and the dbt-duckdb adapter). They skip when
 dbt cannot be imported, so ``make test`` passes on a plain install, and the ``dbt`` CI job runs
@@ -16,7 +17,9 @@ them with ``pytest -m dbt``.
 """
 
 import datetime as dt
+import http.server
 import importlib.util
+import json
 import os
 import socket
 import threading
@@ -105,6 +108,38 @@ def network_trap():
         yield env, connections
     finally:
         server.close()
+
+
+class _LineageHandler(http.server.BaseHTTPRequestHandler):
+    received: list = []
+    status = 201
+
+    def do_POST(self):  # noqa: N802 - http.server's naming
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        type(self).received.append((self.path, self.headers.get("Authorization"), json.loads(body)))
+        self.send_response(type(self).status)
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def lineage_server():
+    """A local HTTP server that takes any JSON ``POST``. Yields ``(url, handler)``.
+
+    ``handler.received`` is a list of ``(path, Authorization header, parsed body)`` in the order that the requests came,
+    and ``handler.status`` is the status that the server answers with, 201 by default. The OpenLineage sink, the alert
+    channels and the report delivery of the later milestones post here, so a test sends nothing outside the machine.
+    """
+    _LineageHandler.received = []
+    _LineageHandler.status = 201
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _LineageHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}", _LineageHandler
+    server.shutdown()
+    server.server_close()
 
 
 @pytest.fixture

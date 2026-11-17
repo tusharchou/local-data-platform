@@ -94,6 +94,7 @@ MODULE_COMMANDS = (
     ("local_data_platform.gold.cli", ("gold",)),
     ("local_data_platform.metrics.cli", ("metrics",)),
     ("local_data_platform.monitoring.cli", ("monitor",)),
+    ("local_data_platform.notify", ("alert",)),
 )
 """``(module, commands)``: each module's ``add_cli(subparsers, parents=...)`` registers its commands."""
 
