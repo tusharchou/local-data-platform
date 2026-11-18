@@ -421,6 +421,26 @@ def test_a_pipeline_that_never_ran_a_check_has_none_even_when_the_catalog_holds_
     assert (found["checked"].quality_7d, found["unchecked"].quality_7d) == (1, None)
 
 
+def test_the_quality_table_is_the_truth_for_the_failed_checks_when_the_events_that_carried_them_were_trimmed(
+        tmp_path):
+    from pyiceberg.expressions import EqualTo
+
+    configs = []
+    for name in ("first", "second"):
+        _table(tmp_path, name, newest_hours_ago=1)
+        configs.append(Config.from_json(_write(tmp_path, name, sinks=("iceberg",))))
+    spec, base = configs[0].metadata["target"]["catalog"], configs[0].base_dir
+    sink = IcebergSink(spec, base)
+    for event in (_run("first", 1, 3, results=[_check("not_null", False, 1)])
+                  + _run("second", 1, 3, results=[_check("not_null", False, 1), _check("unique", False, 2)])):
+        sink.emit(event)
+    sink.flush()
+    assert _by_pipeline(rows(tmp_path / "config", NOW))["second"].quality_7d == 2, "the events say so too"
+    create_catalog(spec, base_dir=base).load_table("_ldp.runs").delete(EqualTo("type", "quality.evaluated"))
+    found = _by_pipeline(rows(tmp_path / "config", NOW))
+    assert (found["first"].quality_7d, found["second"].quality_7d) == (1, 2)
+
+
 def test_a_pipeline_that_keeps_its_events_in_a_file_is_counted_from_the_file_whatever_its_catalog_holds(tmp_path):
     for name in ("filed", "catalogued"):
         _table(tmp_path, name, newest_hours_ago=1)
