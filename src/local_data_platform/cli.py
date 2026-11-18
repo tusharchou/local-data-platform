@@ -26,6 +26,8 @@ Commands::
     ldp backfill FILE --from START [--to END] [--dry-run] [--replace]   (orchestration.cli)
     ldp schedule list|tick|install DIR ... (orchestration.schedule_cli)
     ldp monitor CONFIG_OR_FOLDER [--json] [--now ISO-8601]   (monitoring.cli)
+    ldp status CONFIG_OR_FOLDER [--json] [--html FILE] [--now ISO-8601]   (monitoring.cli)
+    ldp alert test CONFIG                  (notify)
 
 The commands in the second group are added by the ``add_cli`` function of the module named
 next to them (``docs/design/v0_1_1_platform.md`` C9).
@@ -93,7 +95,7 @@ MODULE_COMMANDS = (
     ("local_data_platform.orchestration.schedule_cli", ("schedule",)),
     ("local_data_platform.gold.cli", ("gold",)),
     ("local_data_platform.metrics.cli", ("metrics",)),
-    ("local_data_platform.monitoring.cli", ("monitor",)),
+    ("local_data_platform.monitoring.cli", ("monitor", "status")),
     ("local_data_platform.notify", ("alert",)),
 )
 """``(module, commands)``: each module's ``add_cli(subparsers, parents=...)`` registers its commands."""

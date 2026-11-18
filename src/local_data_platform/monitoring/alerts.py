@@ -77,6 +77,11 @@ def before(history: Sequence[MonitorResult], monitor: str, now: dt.datetime) -> 
     return Before(status, entered, last)
 
 
+def _alerting(channel: Channel) -> tuple[str, ...]:
+    """The statuses that a channel treats as alerting, which are the ones that it asked an event for."""
+    return tuple(name for name, event in _ALERTING if channel.wants(event))
+
+
 def repeat_due(entered: dt.datetime, last: dt.datetime, now: dt.datetime, minutes: int) -> bool:
     """Whether a multiple of ``minutes`` since ``entered`` falls after ``last`` and by ``now``."""
     period = minutes * 60
@@ -92,7 +97,7 @@ def decide(channel: Channel, earlier: Before, status: str, now: dt.datetime) -> 
     """
     if status not in KNOWN:
         return None
-    alerting = tuple(name for name, event in _ALERTING if channel.wants(event))
+    alerting = _alerting(channel)
     was = earlier.status if earlier.status in alerting else None
     is_now = status if status in alerting else None
     if is_now is not None and is_now != was:
@@ -127,6 +132,29 @@ def plan_alerts(notifier: Notifier, results: Sequence[MonitorResult], history: S
     return planned
 
 
+def holds_open(notifier: Notifier, results: Sequence[MonitorResult], history: Sequence[MonitorResult],
+               now: dt.datetime) -> int:
+    """How many monitors have an alert open on some channel at ``now``, which is what ``ldp status`` counts.
+
+    A monitor holds an alert open while some channel hears its status, which is ``error`` for a channel that wants
+    ``monitor.error`` and ``warn`` too for one that wants ``monitor.warn``. A monitor that says ``unknown`` neither
+    raises an alert nor clears one, so it holds one open when the last status that it did have is one that a channel
+    hears, as :func:`before` finds it in the history.
+
+    Args:
+        notifier: The channels of the config.
+        results: What the monitors say at ``now``, which are measured and not recorded.
+        history: The recorded results of the config.
+        now: The moment of the look.
+    """
+    count = 0
+    for result in results:
+        status = result.status if result.status in KNOWN else before(history, result.monitor, now).status
+        if any(status in _alerting(channel) for channel in notifier.channels):
+            count += 1
+    return count
+
+
 @dataclasses.dataclass(frozen=True)
 class Sent:
     """What went out after a look at a config.
@@ -154,6 +182,7 @@ __all__ = [
     "Sent",
     "before",
     "decide",
+    "holds_open",
     "plan_alerts",
     "repeat_due",
     "send_alerts",

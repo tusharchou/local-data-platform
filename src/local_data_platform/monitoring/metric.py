@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from local_data_platform.exceptions import ConfigError, EngineNotFound, LDPError, TableNotFound
+from local_data_platform.monitoring.history import DIRECT
 from local_data_platform.monitoring.results import MonitorResult
 from local_data_platform.monitoring.sla import MetricRule, figure
 from local_data_platform.monitoring.target import Target
@@ -322,7 +323,8 @@ def _definitions(folder: Path, rules: Sequence[MetricRule]) -> tuple[Any, list[s
         return None, [str(error)]
 
 
-def evaluate_metrics(rules: Sequence[MetricRule], config: Any, target: Target, now: dt.datetime) -> list[MonitorResult]:
+def evaluate_metrics(rules: Sequence[MetricRule], config: Any, target: Target, now: dt.datetime,
+                     history: Any = DIRECT) -> list[MonitorResult]:
     """Check the business numbers of the ``metrics`` section of an SLA.
 
     Args:
@@ -331,16 +333,16 @@ def evaluate_metrics(rules: Sequence[MetricRule], config: Any, target: Target, n
         target: The table of the config, from :func:`~local_data_platform.monitoring.target.load_target`, which a query
             runs on.
         now: The moment of the evaluation, with a time zone.
+        history: What the earlier results are read with, which is
+            :data:`~local_data_platform.monitoring.history.DIRECT` by default.
 
     Returns:
         ``metric.<key>.value`` for an entry that has ``min`` or ``max``, and ``metric.<key>.change`` for one that has
         ``max_change_pct``, in the order of the entries. ``error`` when a limit is broken or an entry cannot be
         measured, and ``unknown`` when there is no value or too little history, or the duckdb package is not installed.
     """
-    from local_data_platform.monitoring.history import read_results
-
     folder = Path(config.base_dir) if config.base_dir is not None else Path.cwd()
-    history = read_results(config) if any(rule.max_change_pct is not None for rule in rules) else []
+    earlier = history.monitor_results(config) if any(rule.max_change_pct is not None for rule in rules) else []
     definitions, problems = _definitions(folder, rules)
     common = {"kind": KIND, "evaluated_at": now, "pipeline": target.pipeline, "table_identifier": target.identifier,
               "table_uuid": target.table_uuid}
@@ -355,7 +357,7 @@ def evaluate_metrics(rules: Sequence[MetricRule], config: Any, target: Target, n
         if rule.min is not None or rule.max is not None:
             results.append(_value_result(rule, reading, period[0], found, common))
         if rule.max_change_pct is not None:
-            results.append(_change_result(rule, reading, period[0], found, history, now, common))
+            results.append(_change_result(rule, reading, period[0], found, earlier, now, common))
     return results
 
 

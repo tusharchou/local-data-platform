@@ -570,7 +570,7 @@ def test_ldp_monitor_changes_neither_the_table_nor_the_runs_that_ldp_runs_shows(
 def test_ldp_monitor_is_a_command_and_its_help_says_what_the_exit_statuses_mean(capsys):
     from local_data_platform.cli import MODULE_COMMANDS
 
-    assert ("local_data_platform.monitoring.cli", ("monitor",)) in MODULE_COMMANDS
+    assert ("local_data_platform.monitoring.cli", ("monitor", "status")) in MODULE_COMMANDS
     assert main(["monitor", "--help"]) == 0
     help_text = " ".join(capsys.readouterr().out.split())
     assert "Exit status is 0 when every monitor is ok or warn, 2 when at least one is error, and 1 when ldp itself" in \

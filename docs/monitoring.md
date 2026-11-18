@@ -4,7 +4,7 @@ A config can say how fresh, how big and how stable its table should be, and whic
 `metadata.sla` block. `ldp monitor` checks the table against it between runs. It reads the metadata of the table and the
 history of its runs, runs one aggregate query for each business number, and records what it found. A config that lists
 channels in `metadata.observability.alerts` is told when a monitor changes state, as [the page on alerts](alerts.md) says.
-This page says what each monitor measures. The status screen that builds on it is a later part of the same milestone.
+This page says what each monitor measures, and [the status screen](#the-status-screen) shows them all at once.
 
 ```json
 "sla": {
@@ -244,3 +244,71 @@ print([(result.monitor, result.status) for result in read_results(config)])
 The monitors are `freshness`, `volume.rows`, `volume.change`, `schema`, and `metric.<key>.value` and `metric.<key>.change`
 for each entry of `metrics`. The columns of `_ldp.monitor_results` are in
 [the table of the `_ldp` tables](observability.md#the-_ldp-namespace).
+
+## The status screen
+
+`ldp status` shows every pipeline of a folder on one screen, so that ten pipelines on a laptop take one command to look at
+in the morning. It is a view, and not a monitor. It evaluates the monitors in memory with the code that `ldp monitor` runs,
+and it records no result and sends no alert, so it can run as often as a person wants and it does not use up the change of
+state that `ldp monitor` alerts for. It creates nothing, and each `_ldp` table is read once for all the configs that share a
+catalog.
+
+```bash
+ldp status config
+ldp status config/orders.json --now 2026-10-30T12:00:00Z
+ldp status config --json
+ldp status config --html status.html
+```
+
+```text
+Status at 2026-10-28T12:00:00Z
+pipeline  table          owner     last_run               last_success_age  rows  freshness  volume  schema  metrics  quality_7d  open_alerts
+--------  -------------  --------  ---------------------  ----------------  ----  ---------  ------  ------  -------  ----------  -----------
+payments  shop.payments  finance   published 30.0 minute  30.0 minute          2  ok         error   -       -                 -            -
+refunds   shop.refunds   finance   failed 1.0 hour        5.0 hour             2  ok         -       -       -                 -            -
+orders    shop.orders    ops team  published 3.0 hour     3.0 hour             2  warn       ok      -       -                 2            1
+legacy    shop.legacy    -         published 2.1 day      2.1 day              7  no sla     no sla  no sla  no sla            -            -
+(4 rows)
+2 error, 1 warn, 1 no sla
+History goes back to 2026-10-26T10:00:00Z, the oldest event of any pipeline here.
+```
+
+| Column | What it says |
+|---|---|
+| `pipeline`, `table`, `owner` | The identifier of the config, its target table, and its `who` |
+| `last_run` | The status of the latest run and how long ago it started, from the run history |
+| `last_success_age` | How long ago the last run that went well started. `published`, `skipped_duplicate` and `succeeded` went well. A config with no run history shows the age of the last commit of the table instead, marked `(commit)` |
+| `rows` | The rows of the table, from the summary of its current snapshot |
+| `freshness`, `volume`, `schema`, `metrics` | What the monitors of that section say now, the worst of them when a section has several. `-` is a section that the SLA does not have, and `no sla` is a config that has no `metadata.sla` |
+| `quality_7d` | How many checks failed in the last 7 days, counted in `_ldp.quality_results`, or in the events of a config that keeps them in a file. `-` says that no check ever ran |
+| `open_alerts` | How many monitors have an alert open on a channel of the config, which is how many it would still be telling someone about. A monitor that says `unknown` keeps open what it held before. `-` says that the config has no channel |
+
+The rows come worst first, and then by name. A monitor in `error`, a run that `failed` or went `upstream_failed`, and a file
+that cannot be read as a config make a row an `error`. A monitor in `warn`, and a run that a quality check held back with
+`blocked_quality`, make it a `warn`. A monitor that says `unknown` comes next, then a pipeline whose monitors are all `ok`,
+and last a config that has no SLA and no run that went wrong. Ages count from the start of the run.
+
+The last line says how far back the history goes, which is the oldest run event or monitor result of any pipeline on the
+screen, so that a history that was trimmed shows, and so does a baseline that is shorter than it should be. `--now` looks
+at another moment. The last run, the last success, the failed checks and the oldest event leave out what came after it, and
+the monitors read the history as `ldp monitor --now` does.
+
+| Exit | Meaning |
+|---|---|
+| 0 | the screen was printed, whatever the monitors say |
+| 1 | `ldp` itself failed, such as a config that cannot be read. Its row is on the screen, and the reason is on stderr |
+
+`--json` prints the rows as a list of objects, with ages in seconds and times in UTC, and the monitors and the last 20 runs of
+each pipeline in them. `--html FILE` also writes one page that has the table, the monitors behind each row and the last 20
+runs of each pipeline. It is built on the same page shell as the gold catalog, so it is one file with no script, it asks for
+nothing from the network, and its links are anchors inside it.
+
+```python
+from local_data_platform.monitoring.status import rows
+
+for row in rows("config", now="2026-10-30T12:00:00Z"):
+    print(row.pipeline, row.health, row.freshness, row.open_alerts, row.last_run and row.last_run.status)
+```
+
+`rows` returns a `StatusRow` for each config, the worst first, and it is what a panel or a gate in another tool calls. A
+config that cannot be read or evaluated is a row too, with the reason in `problem`.

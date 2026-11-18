@@ -1,8 +1,9 @@
-"""``ldp monitor``: check the tables of a config, or of a folder of configs, against their SLA.
+"""``ldp monitor`` and ``ldp status``: check the tables of a config, or of a folder of configs, against their SLA.
 
 ::
 
     ldp monitor CONFIG_OR_FOLDER [--json] [--now ISO-8601]
+    ldp status CONFIG_OR_FOLDER [--json] [--html FILE] [--now ISO-8601]
 
 Each monitor prints one line. The results are recorded in the history of the monitors (see
 :mod:`local_data_platform.monitoring.history`). The command reads the metadata of tables and the history of the runs
@@ -11,17 +12,23 @@ catalog. A config that lists channels in ``metadata.observability.alerts`` is to
 when it recovers (see :mod:`local_data_platform.monitoring.alerts`), after the results are recorded, and a channel that
 is down is a warning and no failure. Its exit status is 0 when every monitor is ``ok`` or ``warn``, 2 when at least one
 is ``error``, and 1 when ``ldp`` itself fails, such as a config that cannot be read.
+
+``ldp status`` prints one row for each config, the worst first, with the last run, the SLA, the failed checks of the
+last 7 days and the open alerts (see :mod:`local_data_platform.monitoring.status`). It evaluates the monitors in memory
+and records and sends nothing, so its exit status is 0 unless ``ldp`` itself fails.
 """
 
 import argparse
 import datetime as dt
 import json
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from local_data_platform.exceptions import ConfigError, LDPError
+from local_data_platform.monitoring.configs import load_configs
 from local_data_platform.monitoring.results import STATUSES, MonitorResult, format_moment
 
 
@@ -32,46 +39,6 @@ def _moment(text: str) -> Any:
         return parse_moment(text)
     except ConfigError as error:
         raise argparse.ArgumentTypeError(str(error)) from None
-
-
-def _is_a_config(file: Path) -> bool:
-    """Whether a JSON file of a folder is a dataset config, so that a file of another kind or sort is left alone.
-
-    A file that cannot be read as JSON counts as a config, so that it is reported. A table must not leave the monitors
-    without a word because of a typo.
-    """
-    from local_data_platform.spec import DEFAULT_KIND, kind_of_file
-
-    if kind_of_file(file) not in (DEFAULT_KIND, None):
-        return False
-    try:
-        data = json.loads(file.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return True
-    return isinstance(data, dict) and "identifier" in data and "metadata" in data
-
-
-def _load(target: str) -> tuple[list[tuple[Path, Any]], list[tuple[Path, str]]]:
-    """The dataset configs of a file or a folder, and the files that could not be read as one."""
-    from local_data_platform.config import Config
-    from local_data_platform.paths import resolve_path
-
-    path = resolve_path(target)
-    if path.is_dir():
-        files = [file for file in sorted(path.glob("*.json")) if file.is_file() and _is_a_config(file)]
-        if not files:
-            raise ConfigError(f"no dataset configs in {path}")
-    elif path.is_file():
-        files = [path]
-    else:
-        raise ConfigError(f"config path not found: {path}")
-    configs, failures = [], []
-    for file in files:
-        try:
-            configs.append((file, Config.from_json(file)))
-        except ConfigError as error:
-            failures.append((file, str(error)))
-    return configs, failures
 
 
 def _counts(results: Sequence[MonitorResult]) -> str:
@@ -86,7 +53,7 @@ def _cmd_monitor(args: argparse.Namespace) -> int:
     from local_data_platform.monitoring.history import read_results, record
     from local_data_platform.notify import notifier_for
 
-    configs, failures = _load(args.config)
+    configs, failures = load_configs(args.config)
     now = args.now if args.now is not None else dt.datetime.now(dt.timezone.utc)
     evaluated: list[tuple[Any, list[MonitorResult]]] = []
     queued: list[tuple[Any, Any, list[MonitorResult]]] = []
@@ -137,8 +104,62 @@ def _cmd_monitor(args: argparse.Namespace) -> int:
     return EXIT_SLA if any(result.status == "error" for result in results) else EXIT_OK
 
 
+def _health_counts(rows: Sequence[Any]) -> str:
+    from local_data_platform.monitoring.status import HEALTH
+
+    counts = [f"{sum(1 for row in rows if row.health == health)} {health}" for health in HEALTH]
+    return ", ".join(text for text in counts if not text.startswith("0 "))
+
+
+def _history_line(rows: Sequence[Any]) -> str:
+    """How far back the history goes, so that a history that was trimmed shows."""
+    oldest = min((row.history_since for row in rows if row.history_since is not None), default=None)
+    if oldest is None:
+        return "No run or monitor history was found."
+    without = sum(1 for row in rows if row.history_since is None and row.problem is None)
+    line = f"History goes back to {format_moment(oldest, seconds=True)}, the oldest event of any pipeline here."
+    return line + (f" {without} pipeline{'' if without == 1 else 's'} {'has' if without == 1 else 'have'} none."
+                   if without else "")
+
+
+def _write_page(out: str, text: str) -> Path:
+    """Write the page whole or not at all, so that a reader never opens half of it."""
+    target = Path(out)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    os.replace(temporary, target)
+    return target
+
+
+def _cmd_status(args: argparse.Namespace) -> int:
+    from local_data_platform.cli import EXIT_ERROR, EXIT_OK, format_table
+    from local_data_platform.monitoring.status import rows
+    from local_data_platform.monitoring.status_page import render
+
+    now = args.now if args.now is not None else dt.datetime.now(dt.timezone.utc)
+    found = rows(args.config, now)
+    if args.json:
+        print(json.dumps([row.to_dict() for row in found], indent=2))
+    else:
+        print(f"Status at {format_moment(now, seconds=True)}")
+        print(format_table([row.cells() for row in found], right=("rows", "quality_7d", "open_alerts")))
+        print(_health_counts(found))
+        print(_history_line(found))
+    if args.html is not None:
+        text = render(found)
+        target = _write_page(args.html, text)
+        print(f"wrote {target}, {len(found)} pipeline{'' if len(found) == 1 else 's'}, "
+              f"{len(text.encode('utf-8')) / 1024:.1f} KB. Open it as a page. It needs no network.",
+              file=sys.stderr if args.json else sys.stdout)
+    problems = [row for row in found if row.problem is not None]
+    for row in problems:
+        print(f"ldp: {Path(row.file).name}: {row.problem}", file=sys.stderr)
+    return EXIT_ERROR if problems else EXIT_OK
+
+
 def add_cli(subparsers: Any, parents: Sequence[argparse.ArgumentParser] = ()) -> None:
-    """Register ``ldp monitor`` on an ``argparse`` subparsers object.
+    """Register ``ldp monitor`` and ``ldp status`` on an ``argparse`` subparsers object.
 
     Args:
         subparsers: What ``ArgumentParser.add_subparsers()`` returned.
@@ -160,3 +181,21 @@ def add_cli(subparsers: Any, parents: Sequence[argparse.ArgumentParser] = ()) ->
                          help="measure at this moment, as ISO 8601 such as 2026-07-31T23:59:59Z, and not at the "
                               "current time. A time with no offset is UTC")
     monitor.set_defaults(handler=_cmd_monitor)
+    status = subparsers.add_parser(
+        "status", parents=list(parents), help="one screen of health for every pipeline",
+        description="Print one row for each dataset config of CONFIG or of a folder, the worst first. A row has the "
+                    "last run, how long ago a run succeeded, the rows of the table, what the freshness, volume, "
+                    "schema and metrics monitors say now, the checks that failed in the last 7 days, and the open "
+                    "alerts. It evaluates the monitors in memory with the code of ldp monitor, and it records no "
+                    "result and sends no alert. Each _ldp table is read once for all the configs that share a catalog.",
+        epilog="Exit status is 0 unless ldp itself fails, such as a config that cannot be read. A monitor in error is "
+               "not a failure here. ldp monitor reports it with 2.")
+    status.add_argument("config", metavar="CONFIG", help="a JSON dataset config, or a folder of them")
+    status.add_argument("--json", action="store_true", help="print the rows as JSON")
+    status.add_argument("--html", metavar="FILE",
+                        help="also write one self-contained page with the table, the monitors and the last 20 runs of "
+                             "each pipeline. It needs no network and no script")
+    status.add_argument("--now", type=_moment, metavar="TIME",
+                        help="measure at this moment, as ISO 8601 such as 2026-07-31T23:59:59Z, and not at the "
+                             "current time. A time with no offset is UTC")
+    status.set_defaults(handler=_cmd_status)

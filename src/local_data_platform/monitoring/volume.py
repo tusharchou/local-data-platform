@@ -28,6 +28,7 @@ import statistics
 from dataclasses import dataclass
 from typing import Any
 
+from local_data_platform.monitoring.history import DIRECT
 from local_data_platform.monitoring.results import MonitorResult
 from local_data_platform.monitoring.sla import Volume
 from local_data_platform.monitoring.target import Target
@@ -67,12 +68,11 @@ class Counts:
     snapshot_id: int | None = None
 
 
-def _from_events(config: Any, limit: int) -> Counts | None:
+def _from_events(config: Any, limit: int, history: Any) -> Counts | None:
     """The counts of the last published runs in the history of the pipeline, or ``None`` when it has none."""
-    from local_data_platform.events import run_events, summarize_runs
+    from local_data_platform.events import summarize_runs
 
-    events, _ = run_events(config)
-    runs = [run for run in summarize_runs(events)
+    runs = [run for run in summarize_runs(history.run_events(config))
             if run["status"] == "published" and isinstance(run["rows_written"], int)]
     if not runs:
         return None
@@ -97,9 +97,9 @@ def _from_snapshots(table: Any, limit: int) -> Counts | None:
     return Counts(tuple(values), "snapshots", None, latest) if values else None
 
 
-def counts_of(config: Any, target: Target, limit: int) -> Counts:
+def counts_of(config: Any, target: Target, limit: int, history: Any = DIRECT) -> Counts:
     """The row counts of the last ``limit`` runs, from the history of the pipeline, else from the snapshots."""
-    counts = _from_events(config, limit)
+    counts = _from_events(config, limit, history)
     if counts is None and target.table is not None:
         counts = _from_snapshots(target.table, limit)
     return counts or Counts()
@@ -114,7 +114,8 @@ def _what(counts: Counts) -> str:
     return "the latest run wrote" if counts.source == "events" else "the latest commit added"
 
 
-def evaluate_volume(rule: Volume, config: Any, target: Target, now: dt.datetime) -> list[MonitorResult]:
+def evaluate_volume(rule: Volume, config: Any, target: Target, now: dt.datetime,
+                    history: Any = DIRECT) -> list[MonitorResult]:
     """Check the rows of the latest run of a pipeline against the ``volume`` section of an SLA.
 
     Args:
@@ -122,13 +123,15 @@ def evaluate_volume(rule: Volume, config: Any, target: Target, now: dt.datetime)
         config: The :class:`~local_data_platform.Config`, whose history holds the runs.
         target: The table, from :func:`~local_data_platform.monitoring.target.load_target`.
         now: The moment of the evaluation, with a time zone.
+        history: What the run events are read with, which is
+            :data:`~local_data_platform.monitoring.history.DIRECT` by default.
 
     Returns:
         ``volume.rows`` when the section has ``min_rows`` or ``max_rows``, and ``volume.change`` when it has
         ``max_change_pct``. ``unknown`` when there is no run to measure, or for the change when fewer than 3 earlier
         runs are there. ``error`` when a limit is broken, and ``ok`` otherwise.
     """
-    counts = counts_of(config, target, rule.lookback_runs)
+    counts = counts_of(config, target, rule.lookback_runs, history)
     common = {"kind": KIND, "evaluated_at": now, "pipeline": target.pipeline, "table_identifier": target.identifier,
               "table_uuid": target.table_uuid}
     where = {"source": counts.source, "run_id": counts.run_id, "snapshot_id": counts.snapshot_id}
