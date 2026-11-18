@@ -1310,6 +1310,9 @@ def read_iceberg_events(catalog: Any, *, namespace: str = SYSTEM_NAMESPACE, pipe
     Returns:
         The events, sorted by ``(ts, run_id, attempt, seq)``. Empty if the table doesn't exist.
     """
+    names = None if pipelines is None else sorted(set(pipelines))
+    if names is not None and not names:
+        return []
     from pyiceberg.exceptions import NoSuchNamespaceError, NoSuchTableError
     from pyiceberg.expressions import AlwaysTrue, And, EqualTo, In
 
@@ -1324,10 +1327,7 @@ def read_iceberg_events(catalog: Any, *, namespace: str = SYSTEM_NAMESPACE, pipe
     row_filter: Any = AlwaysTrue()
     if pipeline is not None:
         row_filter = And(row_filter, EqualTo("pipeline", pipeline))
-    if pipelines is not None:
-        names = sorted(set(pipelines))
-        if not names:
-            return []
+    if names is not None:
         row_filter = And(row_filter, In("pipeline", names))
     if run_id is not None:
         row_filter = And(row_filter, EqualTo("run_id", run_id))

@@ -70,10 +70,9 @@ class Ledger:
         for config in configs:
             try:  # a config whose sinks are invalid fails where it is evaluated, and not for all the others
                 source = run_source(config)
-                if source.has_catalog(config.base_dir):
-                    key = _key(source.catalog, config.base_dir, source.namespace)
-                    self._runs.register(key, config.identifier)
-                    self._quality.register(key, config.identifier)
+                key = _key(source.catalog, config.base_dir, source.namespace)
+                self._runs.register(key, config.identifier)
+                self._quality.register(key, config.identifier)
                 destination = iceberg_destination(config)
                 if destination is not None:
                     self._results.register(_key(destination[0], config.base_dir, destination[1]), config.identifier)
@@ -170,9 +169,9 @@ class Ledger:
     def failed_checks(self, config: Any, until: dt.datetime) -> int | None:
         """How many check results of the pipeline failed from the start of the window up to ``until``.
 
-        They are counted in ``_ldp.quality_results`` when the catalog has that table, and in the
+        They are counted in ``_ldp.quality_results`` when that table has rows of the pipeline, and in the
         ``quality.evaluated`` events of the pipeline otherwise, so a config that keeps its events in a file has them
-        too. What came after ``until`` is left out.
+        too, whatever its catalog holds for other pipelines. What came after ``until`` is left out.
 
         Returns:
             The number, which is 0 for a pipeline whose checks all passed in the window, and ``None`` when no check
@@ -181,19 +180,15 @@ class Ledger:
         from local_data_platform.events import run_source
 
         source = run_source(config)
-
-        def inside(moment: dt.datetime) -> bool:
-            return (self._since is None or moment >= self._since) and moment <= until
-
         evaluated = [event for event in self.run_events(config)
                      if event.type == "quality.evaluated" and event.ts <= until and event.payload.get("results")]
         rows = self._quality_rows(config, source) if source.has_catalog(config.base_dir) else None
         mine = [row for row in (rows or {}).get(config.identifier, []) if row["ts"] <= until]
-        if rows is not None and (mine or evaluated):
-            return sum(1 for row in mine if not row.get("passed") and inside(row["ts"]))
+        if mine:  # the table has rows of this pipeline, and it was read from the start of the window
+            return sum(1 for row in mine if not row.get("passed"))
         if not evaluated:
             return None
-        return sum(1 for event in evaluated if inside(event.ts)
+        return sum(1 for event in evaluated if self._since is None or event.ts >= self._since
                    for result in event.payload["results"] if not result.get("passed"))
 
 

@@ -14,11 +14,18 @@ from local_data_platform import Config
 from local_data_platform.catalog import provider
 from local_data_platform.catalog.provider import create_catalog
 from local_data_platform.cli import MODULE_COMMANDS, main
-from local_data_platform.events import IcebergSink, RunEvent, read_iceberg_events, run_events, run_source
+from local_data_platform.events import (
+    IcebergSink,
+    RunEvent,
+    append_line,
+    read_iceberg_events,
+    run_events,
+    run_source,
+)
 from local_data_platform.exceptions import ConfigError
 from local_data_platform.monitoring.configs import is_a_config, load_configs
 from local_data_platform.monitoring.evaluation import evaluate
-from local_data_platform.monitoring.history import DIRECT, read_iceberg_results, read_results, record
+from local_data_platform.monitoring.history import JSONL_PATH, DIRECT, read_iceberg_results, read_results, record
 from local_data_platform.monitoring.ledger import Ledger
 from local_data_platform.monitoring.results import MonitorResult
 from local_data_platform.monitoring.status import (
@@ -90,10 +97,11 @@ def _event(name: str, number: int, kind: str, hours_ago: float, *, seq: int = 0,
 
 
 def _run(name: str, number: int, hours_ago: float, status: str = "published", rows_written: int = 100,
-         results: list | None = None) -> list[RunEvent]:
+         results: list | None = None, rows_read: int | None = None) -> list[RunEvent]:
     """The events of one run that ended with ``status``, with the verdicts of the checks that it ran."""
     events = [_event(name, number, "run.started", hours_ago, mode="overwrite", publish=True),
-              _event(name, number, "run.extracted", hours_ago - 0.001, seq=1, rows_read=rows_written)]
+              _event(name, number, "run.extracted", hours_ago - 0.001, seq=1,
+                     rows_read=rows_written if rows_read is None else rows_read)]
     if results is not None:
         failed = sum(1 for result in results if not result["passed"])
         events.append(_event(name, number, "quality.evaluated", hours_ago - 0.002, seq=2, checks_run=len(results),
@@ -173,13 +181,15 @@ def test_the_health_values_are_the_order_of_the_rows_and_the_columns_are_the_one
 def test_a_row_has_the_last_run_the_last_success_the_size_of_the_table_and_the_sections_of_the_sla(tmp_path):
     _table(tmp_path, "orders", newest_hours_ago=2, rows_in_table=3)
     path = _write(tmp_path, sla={"freshness": LATE, "volume": {"min_rows": 50}})
-    _history(tmp_path, _run("orders", 1, 30, rows_written=120), _run("orders", 2, 5, rows_written=100))
+    three = [_check("not_null", True), _check("unique", True), _check("range", False, 1)]
+    _history(tmp_path, _run("orders", 1, 30, rows_written=120),
+             _run("orders", 2, 5, rows_written=100, rows_read=130, results=three))
     [row] = rows(path, NOW)
     assert (row.pipeline, row.table, row.owner, row.as_of, row.health) == (
         "orders", "shop.orders", "ops team", NOW, "ok")
     assert row.file == str(path)
-    assert (row.last_run.run_id, row.last_run.status, row.last_run.rows_written) == (
-        "orders-run-002", "published", 100)
+    assert row.last_run == Run(run_id="orders-run-002", attempt=1, status="published", started_at=_hours_ago(5),
+                               rows_read=130, rows_written=100, checks="2/3", duration_s=1.5, snapshot_id=1002)
     assert (row.last_run.age(NOW), row.last_success_age_seconds) == (5 * 3600, 5 * 3600)
     assert row.rows == 3 and row.last_commit_age_seconds is not None and row.last_commit_age_seconds >= 0
     assert (row.freshness, row.volume, row.schema, row.metrics) == ("ok", "ok", None, None)
@@ -202,16 +212,16 @@ def test_the_rows_come_worst_first_and_then_by_pipeline(tmp_path):
 
 
 def test_a_run_that_failed_makes_a_pipeline_an_error_and_one_that_a_gate_held_back_a_warning(tmp_path):
-    for name in ("broke", "held", "fine"):
+    for name in ("broke", "held", "fine", "cascade"):
         _table(tmp_path, name, newest_hours_ago=1)
         _write(tmp_path, name)
     _history(tmp_path, _run("broke", 1, 3, status="failed"), _run("held", 1, 3, status="blocked_quality"),
-             _run("fine", 1, 3))
+             _run("fine", 1, 3), _run("cascade", 1, 3, status="upstream_failed"))
     found = _by_pipeline(rows(tmp_path / "config", NOW))
     assert [(name, found[name].health, found[name].freshness, found[name].last_run.status)
-            for name in ("broke", "held", "fine")] == [
+            for name in ("broke", "held", "fine", "cascade")] == [
         ("broke", "error", "ok", "failed"), ("held", "warn", "ok", "blocked_quality"),
-        ("fine", "ok", "ok", "published")]
+        ("fine", "ok", "ok", "published"), ("cascade", "error", "ok", "upstream_failed")]
     assert found["broke"].last_success_age_seconds is None and found["held"].last_success_age_seconds is None
 
 
@@ -307,6 +317,18 @@ def test_a_section_says_the_worst_of_its_monitors(tmp_path):
     assert row.volume == "error"
 
 
+def test_the_metrics_section_says_what_its_monitors_say_and_the_other_sections_say_nothing_when_they_are_not_there(
+        tmp_path):
+    _table(tmp_path, "orders", newest_hours_ago=1)
+    path = _write(tmp_path, sla={"freshness": LATE, "metrics": [{"metric": "revenue", "grain": "day", "min": 0}]})
+    [row] = rows(path, NOW)
+    assert [result.monitor for result in row.results] == ["freshness", "metric.revenue.value"]
+    assert (row.freshness, row.volume, row.schema, row.metrics) == ("ok", None, None, "error")
+    assert row.health == "error" and row.cells()["metrics"] == "error"
+    only = rows(_write(tmp_path, sla={"metrics": [{"metric": "revenue", "grain": "day", "min": 0}]}), NOW)[0]
+    assert (only.freshness, only.metrics) == (None, "error")
+
+
 def test_a_target_that_is_a_file_has_no_commit_and_no_rows(tmp_path):
     path = _write(tmp_path, sla=None, sinks=(), target={"name": "orders_csv", "format": "CSV", "path": "../out.csv"})
     [row] = rows(path, NOW)
@@ -370,11 +392,48 @@ def test_checks_that_ran_only_before_the_window_make_it_0_and_not_none(tmp_path)
     assert rows(path, NOW)[0].quality_7d == 0
 
 
-def test_a_check_that_ran_after_the_moment_asked_for_is_not_evidence_that_checks_ran(tmp_path):
+@pytest.mark.parametrize("sinks", [("jsonl",), ("iceberg",)])
+def test_a_check_that_ran_after_the_moment_asked_for_is_not_evidence_that_checks_ran(tmp_path, sinks):
     _table(tmp_path, "orders", newest_hours_ago=1)
-    path = _write(tmp_path)
-    _history(tmp_path, _run("orders", 1, 1, results=[_check("not_null", False, 1)]))
+    path = _write(tmp_path, sinks=sinks)
+    config = Config.from_json(path)
+    run = _run("orders", 1, 1, results=[_check("not_null", False, 1)])
+    if sinks == ("jsonl",):
+        _history(tmp_path, run)
+    else:
+        sink = IcebergSink(config.metadata["target"]["catalog"], config.base_dir)
+        for event in run:
+            sink.emit(event)
+        sink.flush()
     assert rows(path, NOW - dt.timedelta(hours=5))[0].quality_7d is None
+    assert rows(path, NOW)[0].quality_7d == 1
+
+
+def test_a_pipeline_that_never_ran_a_check_has_none_even_when_the_catalog_holds_the_checks_of_others(tmp_path):
+    for name in ("checked", "unchecked"):
+        _table(tmp_path, name, newest_hours_ago=1)
+    configs = [Config.from_json(_write(tmp_path, name, sinks=("iceberg",))) for name in ("checked", "unchecked")]
+    sink = IcebergSink(configs[0].metadata["target"]["catalog"], configs[0].base_dir)
+    for event in _run("checked", 1, 3, results=[_check("not_null", False, 1)]) + _run("unchecked", 1, 3):
+        sink.emit(event)
+    sink.flush()
+    found = _by_pipeline(rows(tmp_path / "config", NOW))
+    assert (found["checked"].quality_7d, found["unchecked"].quality_7d) == (1, None)
+
+
+def test_a_pipeline_that_keeps_its_events_in_a_file_is_counted_from_the_file_whatever_its_catalog_holds(tmp_path):
+    for name in ("filed", "catalogued"):
+        _table(tmp_path, name, newest_hours_ago=1)
+    filed = Config.from_json(_write(tmp_path, "filed", sinks=("jsonl",)))
+    catalogued = Config.from_json(_write(tmp_path, "catalogued", sinks=("iceberg",)))
+    sink = IcebergSink(catalogued.metadata["target"]["catalog"], catalogued.base_dir)
+    for event in _run("catalogued", 1, 3, results=[_check("not_null", True)]):
+        sink.emit(event)
+    sink.flush()
+    _history(tmp_path, _run("filed", 1, 4, results=[_check("not_null", False, 1), _check("unique", False, 2)]))
+    found = _by_pipeline(rows(tmp_path / "config", NOW))
+    assert (found["filed"].quality_7d, found["catalogued"].quality_7d) == (2, 0)
+    assert filed.identifier == "filed"
 
 
 def test_the_quality_results_table_is_where_the_failed_checks_are_counted_when_the_catalog_has_it(tmp_path):
@@ -594,6 +653,13 @@ def test_the_cells_of_a_row_are_the_text_of_its_columns(tmp_path):
         "metrics": "-", "quality_7d": 1, "open_alerts": 0}
 
 
+def test_a_zero_is_a_number_in_a_cell_and_only_a_missing_value_is_a_dash():
+    zeros = _plain_row(rows=0, quality_7d=0, open_alerts=0).cells()
+    assert (zeros["rows"], zeros["quality_7d"], zeros["open_alerts"]) == (0, 0, 0)
+    missing = _plain_row(rows=None, quality_7d=None, open_alerts=None).cells()
+    assert (missing["rows"], missing["quality_7d"], missing["open_alerts"]) == ("-", "-", "-")
+
+
 def test_a_row_is_json_with_ages_in_seconds_and_times_in_utc(tmp_path):
     _table(tmp_path, "orders", newest_hours_ago=1)
     path = _write(tmp_path, alerts=[FILE_CHANNEL])
@@ -698,18 +764,18 @@ def _lake_of_every_kind(tmp_path: Path) -> list[Config]:
     configs = []
     for name, sinks in (("only_file", ("jsonl",)), ("in_catalog", ("iceberg",)), ("no_sink", ()),
                         ("both", ("jsonl", "iceberg")), ("file_with_empty_catalog", ("jsonl",)),
-                        ("iceberg_empty", ("iceberg", "jsonl"))):
+                        ("iceberg_empty", ("iceberg", "jsonl")), ("catalog_and_file", ("jsonl",))):
         _table(tmp_path, name, newest_hours_ago=1)
         configs.append(Config.from_json(_write(tmp_path, name, sinks=sinks)))
     sink = IcebergSink(configs[1].metadata["target"]["catalog"], configs[1].base_dir)
-    for name in ("in_catalog", "both"):
+    for name in ("in_catalog", "both", "catalog_and_file"):
         for event in _run(name, 1, 6, results=[_check("not_null", False, 1)]) + _run(name, 2, 2):
             sink.emit(event)
     sink.flush()
     nameless = RunEvent(event_id="nameless", type="run.started", schema_version=1, ts=_hours_ago(9), run_id="nameless",
                         attempt=1, seq=0, payload={})
     _history(tmp_path, _run("only_file", 1, 7), _run("file_with_empty_catalog", 1, 8), _run("both", 9, 1),
-             _run("no_sink", 1, 6), _run("iceberg_empty", 1, 5), [nameless])
+             _run("no_sink", 1, 6), _run("iceberg_empty", 1, 5), _run("catalog_and_file", 3, 4), [nameless])
     record([(config, evaluate(config, _hours_ago(9))) for config in configs[:2]])
     return configs
 
@@ -721,8 +787,49 @@ def test_the_ledger_answers_as_the_readers_of_one_config_do_for_every_place_that
         assert ledger.run_events(config) == run_events(config)[0], config.identifier
         assert ledger.monitor_results(config) == read_results(config), config.identifier
         assert ledger.monitor_results(config, "freshness") == read_results(config, monitor="freshness")
+        assert ledger.monitor_results(config, "nothing") == []
+    assert ledger.monitor_results(configs[0], "freshness") != [] and ledger.monitor_results(configs[0]) != []
+    assert {event.run_id for event in ledger.run_events(configs[6])} >= {"catalog_and_file-run-001"}
+    assert "catalog_and_file-run-003" not in {event.run_id for event in ledger.run_events(configs[6])}
     assert {event.run_id for event in ledger.run_events(configs[4])} == {"file_with_empty_catalog-run-001", "nameless"}
     assert len(ledger.run_events(configs[4])) == 5, "the file, because the catalog has nothing of this pipeline"
+
+
+def test_two_lakes_with_the_same_catalog_spec_are_two_catalogs(tmp_path):
+    configs = []
+    for name in ("alpha", "beta"):
+        lake = tmp_path / name
+        lake.mkdir()
+        _table(lake, name, newest_hours_ago=1)
+        config = Config.from_json(_write(lake, name, sinks=("iceberg",)))
+        sink = IcebergSink(config.metadata["target"]["catalog"], config.base_dir)
+        for event in _run(name, 1, 3):
+            sink.emit(event)
+        sink.flush()
+        configs.append(config)
+    assert configs[0].metadata["target"]["catalog"] == configs[1].metadata["target"]["catalog"]
+    ledger = Ledger(configs)
+    assert {event.run_id for event in ledger.run_events(configs[0])} == {"alpha-run-001"}
+    assert {event.run_id for event in ledger.run_events(configs[1])} == {"beta-run-001"}
+
+
+def test_the_results_of_the_file_and_of_the_table_are_one_history_in_the_order_of_time(tmp_path):
+    _table(tmp_path, "orders", newest_hours_ago=1)
+    config = Config.from_json(_write(tmp_path, sinks=("iceberg",)))
+
+    def result(hours: float, status: str) -> MonitorResult:
+        return MonitorResult(monitor="freshness", kind="freshness", status=status, evaluated_at=_hours_ago(hours),
+                             pipeline="orders")
+
+    file = config.resolve(JSONL_PATH)
+    file.parent.mkdir(parents=True, exist_ok=True)
+    for hours in (30, 10):
+        append_line(file, json.dumps(result(hours, "ok").to_dict()))
+    record([(config, [result(20, "warn")])])
+    found = Ledger([config]).monitor_results(config)
+    assert [(item.evaluated_at, item.status) for item in found] == [
+        (_hours_ago(30), "ok"), (_hours_ago(20), "warn"), (_hours_ago(10), "ok")]
+    assert found == read_results(config)
 
 
 def test_a_pipeline_whose_events_are_in_a_file_does_not_see_those_of_another_pipeline_that_share_it(tmp_path):
@@ -855,6 +962,30 @@ def test_results_are_read_for_the_pipelines_that_are_asked_for_and_none_when_the
     assert read_iceberg_results(catalog, base, "_elsewhere", ["pipe_00"]) == []
 
 
+def test_no_pipeline_is_no_read_of_a_table_and_a_catalog_with_no_namespace_has_no_history(
+        tmp_path, counting, monkeypatch):
+    configs = _shared_lake(tmp_path, 1)
+    catalog, base = configs[0].metadata["target"]["catalog"], configs[0].base_dir
+
+    class Refusing:
+        def load_table(self, identifier):
+            raise AssertionError(f"{identifier} was read")
+
+    assert read_iceberg_events(Refusing(), pipelines=[]) == []
+    counting.clear()
+    assert read_iceberg_results(catalog, base, "_ldp", []) == []
+    assert counting["_ldp.monitor_results"] == 0
+
+    from pyiceberg.exceptions import NoSuchNamespaceError
+
+    class NoNamespace:
+        def load_table(self, identifier):
+            raise NoSuchNamespaceError(identifier)
+
+    monkeypatch.setattr(provider, "create_catalog", lambda *args, **kwargs: NoNamespace())
+    assert read_iceberg_results(catalog, base, "_ldp", ["pipe_00"]) == []
+
+
 def test_the_default_history_reads_one_config_at_a_time_as_the_functions_do(tmp_path):
     configs = _lake_of_every_kind(tmp_path)
     for config in configs:
@@ -864,12 +995,24 @@ def test_the_default_history_reads_one_config_at_a_time_as_the_functions_do(tmp_
     assert DIRECT.monitor_results(configs[0], "nothing") == []
 
 
+def test_the_configs_of_a_folder_are_in_the_order_of_their_names_whatever_the_file_system_says(tmp_path, monkeypatch):
+    for name in ("b", "a", "c"):
+        _write(tmp_path, name)
+    real = Path.glob
+    monkeypatch.setattr(Path, "glob", lambda self, pattern: iter(sorted(real(self, pattern), reverse=True)))
+    assert [file.name for file, _ in load_configs(tmp_path / "config")[0]] == ["a.json", "b.json", "c.json"]
+
+
 def test_the_configs_of_a_path_are_a_file_or_the_dataset_configs_of_a_folder_and_the_files_that_were_not(tmp_path):
     first, second = _write(tmp_path, "first"), _write(tmp_path, "second")
     (tmp_path / "config" / "workflow.json").write_text(json.dumps({"apiVersion": "ldp/v1", "kind": "Workflow"}))
     (tmp_path / "config" / "notes.json").write_text(json.dumps({"hello": "world"}))
     (tmp_path / "config" / "typo.json").write_text("{nope")
     (tmp_path / "config" / "bad.json").write_text(json.dumps({"identifier": "bad", "metadata": {}}))
+    (tmp_path / "config" / "daily.json").write_text(json.dumps(
+        {"apiVersion": "ldp/v1", "kind": "Workflow", "identifier": "daily", "metadata": {}}))
+    (tmp_path / "config" / "only_id.json").write_text(json.dumps({"identifier": "orders"}))
+    (tmp_path / "config" / "only_metadata.json").write_text(json.dumps({"metadata": {}}))
     configs, failures = load_configs(tmp_path / "config")
     assert [file.name for file, _ in configs] == ["first.json", "second.json"]
     assert [config.identifier for _, config in configs] == ["first", "second"]
@@ -879,6 +1022,9 @@ def test_the_configs_of_a_path_are_a_file_or_the_dataset_configs_of_a_folder_and
     assert [file.name for file, _ in only] == ["first.json"] and none == []
     assert load_configs(str(second))[0][0][0] == second.resolve()
     assert is_a_config(first) and not is_a_config(tmp_path / "config" / "workflow.json")
+    assert not is_a_config(tmp_path / "config" / "daily.json"), "a file of another kind is left alone"
+    assert not is_a_config(tmp_path / "config" / "only_id.json")
+    assert not is_a_config(tmp_path / "config" / "only_metadata.json")
     assert not is_a_config(tmp_path / "config" / "notes.json") and is_a_config(tmp_path / "config" / "typo.json")
     assert is_a_config(tmp_path / "config" / "bad.json")
 
@@ -1080,6 +1226,24 @@ def test_the_page_shows_20_runs_for_a_pipeline_and_the_text_of_a_config_is_escap
     assert "<img" not in page and "&lt;img src=x onerror=alert(1)&gt; &amp; co" in page
 
 
+def test_the_page_is_written_to_a_temporary_file_and_moved_into_place_so_that_nobody_opens_half_of_it(
+        tmp_path, capsys, monkeypatch):
+    import os
+
+    real, calls = os.replace, []
+
+    def spy(source, target):
+        calls.append((Path(source).name, Path(target).name, Path(source).read_text(encoding="utf-8")[:15]))
+        real(source, target)
+
+    monkeypatch.setattr(os, "replace", spy)
+    _table(tmp_path, "orders", newest_hours_ago=1)
+    path = _write(tmp_path)
+    page = tmp_path / "out" / "status.html"
+    _ldp(["status", str(path), "--now", "2026-10-28T12:00:00Z", "--html", str(page)], capsys)
+    assert calls == [(".status.html.tmp", "status.html", "<!doctype html>")]
+
+
 def test_the_page_with_json_keeps_the_json_clean_and_says_where_it_wrote_on_stderr(tmp_path, capsys):
     folder = _morning(tmp_path)
     target = tmp_path / "status.html"
@@ -1135,10 +1299,29 @@ def test_the_counts_of_the_page_are_chips_of_the_colour_of_their_health():
         page.index("1 no sla")
 
 
+def test_the_counts_of_the_page_leave_out_a_health_that_no_pipeline_has():
+    page = render([_plain_row(pipeline="a"), _plain_row(pipeline="b")])
+    assert '<span class="chip ok">2 ok</span>' in page
+    for health in ("error", "warn", "unknown", "no sla"):
+        assert f"0 {health}" not in page
+
+
+def test_the_runs_of_a_pipeline_are_in_a_table_that_has_its_numbers_on_the_right_and_a_heading_that_says_20():
+    run = Run(run_id="r1", attempt=2, status="published", started_at=_hours_ago(1), rows_read=5, rows_written=4,
+              checks="3/4", duration_s=1.5, snapshot_id=77)
+    page = render([_plain_row(last_run=run, recent_runs=(run,), file="/secret/place/orders.json")])
+    runs = page[page.index("<h3>Last 20 runs</h3>"):]
+    for number in ("2", "5", "4", "1.5"):
+        assert f'<td class="num">{number}</td>' in runs, number
+    assert "<td>3/4</td>" in runs and "<td>r1</td>" in runs and "<td>2026-10-28T11:00:00Z</td>" in runs
+    assert "orders.json" in page and "/secret/place" not in page
+
+
 def test_the_cells_of_the_sla_that_say_nothing_are_not_chips_and_numbers_are_on_the_right():
     page = render([_plain_row(freshness=None, volume=NO_SLA, rows=7, quality_7d=0, open_alerts=3)])
     summary = page[page.index("<table>"):page.index("</table>")]
-    assert "<td>-</td>" in summary and "<td>no sla</td>" in summary
+    assert summary.count("<td>-</td>") == 5, "last_run, last_success_age, freshness, schema and metrics"
+    assert "<td>no sla</td>" in summary
     assert '<td class="num">7</td>' in summary and '<td class="num">0</td>' in summary
     assert '<td class="num">3</td>' in summary and '<th scope="col" class="num">rows</th>' in summary
 

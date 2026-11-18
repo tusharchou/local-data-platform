@@ -208,26 +208,24 @@ class StatusRow:
             "recent_runs": [run.to_dict(self.as_of) for run in self.recent_runs], "problem": self.problem}
 
 
-def _health(results: Iterable[MonitorResult], last_run: Run | None, has_sla: bool) -> str:
+def _health(results: Iterable[MonitorResult], last_run: Run | None) -> str:
     statuses = [result.status for result in results]
     if last_run is not None and last_run.status in FAILING:
         statuses.append("error")
     elif last_run is not None and last_run.status in HELD:
         statuses.append("warn")
-    if statuses:
-        return max(statuses, key=SEVERITY.__getitem__)
-    return "ok" if has_sla else NO_SLA
+    return max(statuses, key=SEVERITY.__getitem__) if statuses else NO_SLA
 
 
 def _sections(config: Any, results: Sequence[MonitorResult]) -> dict[str, str | None]:
-    """What each section of the SLA says, ``None`` for one that the SLA does not have."""
-    sla = config.sla
-    if sla is None:
+    """What each section of the SLA says, ``None`` for one that the SLA does not have.
+
+    A section that the SLA has always gives at least one result, and an SLA has at least one section, so a section with
+    no result is one that the SLA does not have.
+    """
+    if config.sla is None:
         return {name: NO_SLA for name in SECTIONS}
-    declared = {"freshness": sla.freshness is not None, "volume": sla.volume is not None,
-                "schema": sla.schema is not None, "metrics": bool(sla.metrics)}
-    return {name: worst(result for result in results if result.kind == kind) if declared[name] else None
-            for name, kind in SECTIONS.items()}
+    return {name: worst(result for result in results if result.kind == kind) for name, kind in SECTIONS.items()}
 
 
 def _table_size(table: Any, now: dt.datetime) -> tuple[float | None, int | None]:
@@ -265,7 +263,7 @@ def _row(file: Path, config: Any, now: dt.datetime, ledger: Any) -> StatusRow:
     notifier = notifier_for(config)
     return StatusRow(
         pipeline=config.identifier, table=target.identifier, owner=config.who or None, file=str(file), as_of=now,
-        health=_health(results, runs[0] if runs else None, config.sla is not None),
+        health=_health(results, runs[0] if runs else None),
         last_run=runs[0] if runs else None,
         last_success_age_seconds=None if success is None else success.age(now),
         last_commit_age_seconds=commit_age, rows=size, **_sections(config, results),
