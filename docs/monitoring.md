@@ -312,3 +312,7 @@ for row in rows("config", now="2026-10-30T12:00:00Z"):
 
 `rows` returns a `StatusRow` for each config, the worst first, and it is what a panel or a gate in another tool calls. A
 config that cannot be read or evaluated is a row too, with the reason in `problem`.
+
+An agent that asks [the MCP server](agents.md#the-sla-verdict-in-describe_table) about one table gets the SLA verdict of
+that table in `describe_table`, from the latest results that `ldp monitor` stored, or from freshness worked out at that
+moment.

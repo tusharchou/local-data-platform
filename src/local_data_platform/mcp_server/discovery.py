@@ -76,6 +76,9 @@ class ExposedTable:
         catalog: The catalog the table lives in.
         source: Where the table was found: a config file or a catalog spec file.
         layer: The layer that the config of the table declares in ``metadata.docs``, or ``None``.
+        pipeline: The identifier of the config that writes the table, which is the config that has it as its target.
+            ``None`` for a table that only a catalog spec or the ``source`` of a config named.
+        sla: The :class:`~local_data_platform.monitoring.sla.Sla` of that config, or ``None`` when it has none.
     """
 
     identifier: str
@@ -84,6 +87,8 @@ class ExposedTable:
     catalog: CatalogHandle = field(repr=False)
     source: str = ""
     layer: str | None = None
+    pipeline: str | None = None
+    sla: Any = field(default=None, repr=False)
 
     def load(self) -> Any:
         """Load the pyiceberg table from its catalog (fresh metadata every call)."""
@@ -294,18 +299,22 @@ def discover_tables(configs: Iterable[str | os.PathLike] = (), catalogs: Iterabl
     unavailable: list[dict[str, str]] = []
 
     def offer(identifier: str, namespace: tuple[str, ...], name: str, handle: CatalogHandle, source: str,
-              declared: str | None = None) -> None:
+              declared: str | None = None, pipeline: str | None = None, sla: Any = None) -> None:
         if not is_allowed(identifier, patterns):
             logger.debug("Table %s from %s is not on the allowlist", identifier, source)
             return
         if identifier in found:
-            if found[identifier].catalog is not handle:
+            existing = found[identifier]
+            if existing.catalog is not handle:
                 unavailable.append({"table": identifier, "source": source,
-                                    "reason": f"duplicate identifier; already served from {found[identifier].source}"})
-            elif declared and found[identifier].layer is None:
-                found[identifier].layer = declared
+                                    "reason": f"duplicate identifier; already served from {existing.source}"})
+                return
+            if declared and existing.layer is None:
+                existing.layer = declared
+            if existing.pipeline is None:  # the writer, when it was found after a config that only reads the table
+                existing.pipeline, existing.sla = pipeline, sla
             return
-        found[identifier] = ExposedTable(identifier, namespace, name, handle, source, declared)
+        found[identifier] = ExposedTable(identifier, namespace, name, handle, source, declared, pipeline, sla)
 
     for path in configs:
         explicit = resolve_path(path).is_file()
@@ -339,7 +348,9 @@ def discover_tables(configs: Iterable[str | os.PathLike] = (), catalogs: Iterabl
                 except Unavailable as error:
                     unavailable.append({"table": identifier, "source": str(file), "reason": str(error)})
                     continue
-                offer(identifier, namespace, str(name), handle, str(file), declared)
+                writer = section == "target"  # an SLA is about the table that a config writes, not one it reads
+                offer(identifier, namespace, str(name), handle, str(file), declared,
+                      config.identifier if writer else None, config.sla if writer else None)
 
     for path in catalogs:
         file = resolve_path(path)

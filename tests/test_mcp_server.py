@@ -28,6 +28,7 @@ import pytest
 
 duckdb = pytest.importorskip("duckdb")
 
+from local_data_platform import Config  # noqa: E402
 from local_data_platform.contracts import Docs, apply_contract  # noqa: E402
 from local_data_platform.exceptions import ConfigError  # noqa: E402
 from local_data_platform.format.iceberg import Iceberg  # noqa: E402
@@ -693,6 +694,366 @@ def test_describe_table_reads_latest_run_and_quality_from_ldp(tools, lake):
     assert described["ldp"] == {"runs_table": True, "quality_table": True}
     # _ldp tables themselves stay hidden without an explicit allowlist entry.
     assert _refused(tools, "describe_table", table="_ldp.runs").status == "rejected"
+
+
+# ---------------------------------------------------------------------- the SLA verdict
+
+FRESH_BY_COMMIT = {"freshness": {"warn_after": {"count": 1, "period": "day"},
+                                 "error_after": {"count": 30, "period": "day"}}}
+LATE_BY_DATA = {"freshness": {"warn_after": {"count": 1, "period": "day"}, "error_after": {"count": 2, "period": "day"},
+                              "column": "pickup_ts"}}
+NO_VERDICT = "This table has no SLA, so there is no verdict."
+
+
+def _sla(lake: Lake, sla: dict | None, **more) -> None:
+    """Put an SLA, and anything else, into the config that writes ``demo.rides``."""
+    path = lake.configs / "rides.json"
+    config = json.loads(path.read_text())
+    config["who"] = "ride operations"
+    if sla is not None:
+        config["metadata"]["sla"] = sla
+    config["metadata"].update(more)
+    path.write_text(json.dumps(config))
+
+
+def _described(lake: Lake, tmp_path: Path, table: str = "demo.rides") -> dict:
+    with LakeTools.from_sources([lake.configs], allow=table, audit_path=tmp_path / "audit.jsonl") as served:
+        return _ok(served, "describe_table", table=table)["sla"]
+
+
+def _hours_before_now(hours: float) -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
+
+
+def _result(monitor: str = "freshness", status: str = "ok", at: dt.datetime | None = None,
+            table: str | None = "demo.rides", uuid: str | None = None, pipeline: str = "rides_config",
+            **fields) -> dict:
+    return {"monitor": monitor, "kind": monitor.split(".")[0], "status": status,
+            "evaluated_at": (at or _hours_before_now(1)).isoformat(), "pipeline": pipeline, "table_identifier": table,
+            "table_uuid": uuid, "observed": f"observed by {monitor}", "expected": "expected", "metrics": {},
+            "details": f"{monitor} is {status}", "schema_version": 1, **fields}
+
+
+def _store(lake: Lake, *results: dict) -> None:
+    """Write results into ``_ldp.monitor_results`` of the lake, as ``ldp monitor`` does."""
+    events = pytest.importorskip("local_data_platform.events")
+    sink = events.IcebergSink({"identifier": "demo", "warehouse_path": str(lake.warehouse)})
+    for result in results:
+        sink.emit_monitor(result)
+    sink.flush()
+
+
+def test_a_table_with_no_sla_says_that_there_is_no_verdict(lake, tmp_path):
+    _sla(lake, None)
+    assert _described(lake, tmp_path) == {
+        "defined": False, "pipeline": "rides_config", "summary": None, "settings": None, "status": None,
+        "last_evaluated_at": None, "evaluated_age_seconds": None, "source": "none", "message": NO_VERDICT,
+        "results": []}
+
+
+def test_a_fresh_table_is_ok_by_freshness_worked_out_from_its_metadata(lake, tmp_path):
+    _sla(lake, FRESH_BY_COMMIT)
+    sla = _described(lake, tmp_path)
+    assert (sla["defined"], sla["status"], sla["source"], sla["pipeline"]) == (True, "ok", "computed", "rides_config")
+    assert "error" not in sla
+    assert sla["summary"] == "freshness warn after 1 day and error after 30 day"
+    assert sla["settings"] == Config.from_json(lake.configs / "rides.json").sla.to_dict()
+    [result] = sla["results"]
+    assert (result["monitor"], result["kind"], result["status"], result["recorded"]) == (
+        "freshness", "freshness", "ok", False)
+    assert result["observed"].endswith(" day") and result["expected"] == "warn after 1 day and error after 30 day"
+    assert sla["message"] == f"ok: {result['details']}" and result["details"].startswith("the last commit was ")
+    assert sla["evaluated_age_seconds"] < 60 and sla["last_evaluated_at"] == result["evaluated_at"]
+
+
+def test_a_late_table_is_an_error_by_the_newest_value_of_its_column(lake, tmp_path):
+    _sla(lake, LATE_BY_DATA)
+    sla = _described(lake, tmp_path)
+    [result] = sla["results"]
+    assert (sla["status"], sla["source"], result["status"], result["recorded"]) == ("error", "computed", "error", False)
+    assert "error" not in sla, "an SLA that is broken is not an error of the server"
+    assert result["details"].startswith("the newest pickup_ts is ") and sla["message"].startswith("error: the newest ")
+    assert float(result["observed"].split()[0]) > 2 and result["observed"].endswith(" day")
+
+
+def test_a_freshness_that_cannot_be_worked_out_is_the_error_that_the_monitor_reports(lake, tmp_path):
+    _sla(lake, {"freshness": {"error_after": {"count": 1, "period": "day"}, "column": "nope"}})
+    sla = _described(lake, tmp_path)
+    assert sla["status"] == "error" and sla["results"][0]["details"] == "the table has no column nope"
+    assert sla["message"] == "error: the table has no column nope"
+
+
+def test_a_stored_result_is_the_verdict_and_nothing_is_worked_out_in_its_place(lake, tmp_path):
+    _sla(lake, LATE_BY_DATA)  # the data is late, so a result worked out now would be an error
+    at = _hours_before_now(2)
+    _store(lake, _result(status="warn", at=at))
+    sla = _described(lake, tmp_path)
+    assert (sla["status"], sla["source"]) == ("warn", "recorded")
+    [result] = sla["results"]
+    assert result["recorded"] is True and result["status"] == "warn" and result["details"] == "freshness is warn"
+    assert result["evaluated_at"] == at.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    assert sla["last_evaluated_at"] == result["evaluated_at"] and 7100 < sla["evaluated_age_seconds"] < 7300
+    assert sla["message"] == "warn: freshness is warn"
+
+
+def test_only_the_results_of_this_table_are_its_own_and_a_row_is_matched_by_uuid_or_by_identifier(lake, tmp_path):
+    _sla(lake, FRESH_BY_COMMIT)
+    rides_uuid = str(lake.rides.table().metadata.table_uuid)
+    _store(lake,
+           _result("freshness", "error", table="demo.secret", uuid=str(lake.secret.table().metadata.table_uuid)),
+           _result("volume.rows", "warn", table="demo.elsewhere", uuid=rides_uuid),
+           _result("freshness", "ok", table="demo.rides", uuid=None),
+           _result("schema", "error", table="demo.other", uuid="another-uuid"))
+    sla = _described(lake, tmp_path)
+    assert [(item["monitor"], item["status"]) for item in sla["results"]] == [("freshness", "ok"),
+                                                                              ("volume.rows", "warn")]
+    assert sla["status"] == "warn" and sla["source"] == "recorded"
+
+
+def test_the_latest_result_of_each_monitor_is_the_one_that_counts_and_they_come_in_the_order_of_ldp_monitor(
+        lake, tmp_path):
+    _sla(lake, FRESH_BY_COMMIT)
+    _store(lake, _result("metric.revenue.value", "ok", at=_hours_before_now(4)),
+           _result("volume.rows", "warn", at=_hours_before_now(3)), _result("schema", "ok", at=_hours_before_now(4)),
+           _result("freshness", "error", at=_hours_before_now(5)), _result("freshness", "ok", at=_hours_before_now(1)),
+           _result("volume.change", "ok", at=_hours_before_now(3)))
+    sla = _described(lake, tmp_path)
+    assert [(item["monitor"], item["status"]) for item in sla["results"]] == [
+        ("freshness", "ok"), ("volume.change", "ok"), ("volume.rows", "warn"), ("schema", "ok"),
+        ("metric.revenue.value", "ok")]
+    assert sla["status"] == "warn" and sla["message"] == "warn: volume.rows is warn"
+    assert 3500 < sla["evaluated_age_seconds"] < 3700, "the newest result is the freshness of an hour ago"
+
+
+def test_the_message_says_the_details_or_else_what_was_observed_or_else_the_monitor(lake, tmp_path):
+    _sla(lake, FRESH_BY_COMMIT)
+    cases = [({"details": ""}, "warn: observed by freshness"),
+             ({"details": "", "observed": None}, "warn: freshness"),
+             ({"details": None, "observed": ""}, "warn: freshness"),
+             ({"details": "late", "observed": "3"}, "warn: late")]
+    for number, (fields, message) in enumerate(cases):
+        _store(lake, _result("freshness", "warn", at=_hours_before_now(4 - number), **fields))
+        assert _described(lake, tmp_path)["message"] == message, fields
+
+
+def test_two_problems_at_once_are_both_said(lake, tmp_path, monkeypatch):
+    from local_data_platform.mcp_server import sla as sla_module
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("no table")
+
+    def no_metadata(*args, **kwargs):
+        raise OSError("no metadata")
+
+    monkeypatch.setattr(sla_module, "ldp_rows", refuse)
+    monkeypatch.setattr(sla_module, "_freshness", no_metadata)
+    _sla(lake, FRESH_BY_COMMIT)
+    assert _described(lake, tmp_path)["error"] == (
+        "the stored results could not be read (RuntimeError) and freshness could not be worked out (OSError)")
+
+
+def test_two_configs_that_write_the_same_table_leave_it_with_the_first(lake):
+    _sla(lake, LATE_BY_DATA)
+    second = json.loads((lake.configs / "rides.json").read_text())
+    second["identifier"] = "rides_two"
+    second["metadata"]["sla"] = FRESH_BY_COMMIT
+    (lake.configs / "rides_two.json").write_text(json.dumps(second))
+    table = next(table for table in discover_tables([lake.configs], allow="demo.rides").tables)
+    assert table.pipeline == "rides_config" and table.sla.freshness.column == "pickup_ts"
+
+
+def test_a_kind_of_monitor_that_the_server_does_not_know_comes_last_with_the_metrics(lake, tmp_path):
+    _sla(lake, FRESH_BY_COMMIT)
+    _store(lake, _result("custom.thing", "ok", at=_hours_before_now(3)),
+           _result("metric.revenue.value", "ok", at=_hours_before_now(3)),
+           _result("schema", "ok", at=_hours_before_now(3)), _result("freshness", "ok", at=_hours_before_now(3)))
+    monitors = [item["monitor"] for item in _described(lake, tmp_path)["results"]]
+    assert monitors == ["freshness", "schema", "custom.thing", "metric.revenue.value"]
+
+
+def test_the_latest_result_is_found_whatever_order_the_rows_come_in(monkeypatch):
+    from local_data_platform.mcp_server import sla as sla_module
+
+    def row(monitor: str, status: str, hour: int) -> dict:
+        return {"monitor": monitor, "kind": "freshness", "status": status, "metrics": "{}", "table_uuid": "u",
+                "ts": dt.datetime(2026, 10, 28, hour, 0, 0, tzinfo=dt.timezone.utc)}
+
+    rows = [row("freshness", "ok", 11), row("volume.rows", "error", 9), row("freshness", "error", 8),
+            row("volume.rows", "ok", 10), row("freshness", "warn", 12)]
+    for ordered in (rows, rows[::-1]):
+        monkeypatch.setattr(sla_module, "ldp_rows", lambda *args, rows=ordered: list(rows))
+        found = sla_module.stored_results(None, "u", "demo.rides")
+        assert [(item.monitor, item.status, item.evaluated_at.hour) for item in found] == [
+            ("volume.rows", "ok", 10), ("freshness", "warn", 12)]
+
+
+def test_freshness_is_worked_out_for_a_monitor_that_has_no_stored_result_and_the_others_keep_theirs(lake, tmp_path):
+    _sla(lake, {**FRESH_BY_COMMIT, "volume": {"min_rows": 1}})
+    _store(lake, _result("volume.rows", "ok", at=_hours_before_now(3)))
+    sla = _described(lake, tmp_path)
+    assert [(item["monitor"], item["status"], item["recorded"]) for item in sla["results"]] == [
+        ("freshness", "ok", False), ("volume.rows", "ok", True)]
+    assert sla["source"] == "recorded"
+
+
+def test_an_sla_with_no_freshness_and_no_stored_result_has_no_verdict_yet_and_says_why(lake, tmp_path):
+    _sla(lake, {"volume": {"min_rows": 1}})
+    sla = _described(lake, tmp_path)
+    assert (sla["defined"], sla["status"], sla["source"], sla["results"]) == (True, None, "none", [])
+    assert "error" not in sla and sla["settings"] == {"volume": {"min_rows": 1, "lookback_runs": 7}}
+    assert sla["summary"] == "volume min 1 row"
+    assert sla["message"].startswith("The SLA of this table has no stored result")
+
+
+def test_results_that_ldp_monitor_stored_are_shown_when_the_server_has_no_config_for_the_table(lake, tmp_path):
+    spec = lake.root / "catalog.json"
+    spec.write_text(json.dumps({"catalog": {"identifier": "demo", "warehouse_path": str(lake.warehouse)}}))
+    with LakeTools.from_sources(catalogs=[spec], allow="demo.rides", audit_path=tmp_path / "audit.jsonl") as served:
+        nothing = _ok(served, "describe_table", table="demo.rides")["sla"]
+    assert (nothing["defined"], nothing["pipeline"], nothing["settings"], nothing["message"]) == (
+        False, None, None, NO_VERDICT)
+    _store(lake, _result("freshness", "error", at=_hours_before_now(1)))
+    with LakeTools.from_sources(catalogs=[spec], allow="demo.rides", audit_path=tmp_path / "audit.jsonl") as served:
+        sla = _ok(served, "describe_table", table="demo.rides")["sla"]
+    assert (sla["defined"], sla["pipeline"], sla["settings"], sla["summary"]) == (True, None, None, None)
+    assert (sla["status"], sla["source"], len(sla["results"])) == ("error", "recorded", 1)
+
+
+def test_the_sla_of_a_config_that_only_reads_a_table_is_not_the_sla_of_the_table(lake):
+    relative = {"identifier": "demo", "warehouse_path": "../warehouse"}
+    reader = {"identifier": "reader", "who": "readers", "metadata": {
+        "source": {"name": "rides", "format": "ICEBERG", "catalog": relative},
+        "target": {"name": "copy", "format": "CSV", "path": "copy.csv"}, "sla": FRESH_BY_COMMIT}}
+    (lake.configs / "a_reader.json").write_text(json.dumps(reader))
+    (lake.configs / "rides.json").unlink()
+    only_read = next(table for table in discover_tables([lake.configs]).tables if table.identifier == "demo.rides")
+    assert only_read.source.endswith("a_reader.json") and (only_read.pipeline, only_read.sla) == (None, None)
+    (lake.configs / "rides.json").write_text(json.dumps(_config("rides", relative)))
+    _sla(lake, LATE_BY_DATA)  # found after the reader, and it writes the table
+    written = next(table for table in discover_tables([lake.configs]).tables if table.identifier == "demo.rides")
+    assert written.source.endswith("a_reader.json") and written.pipeline == "rides_config"
+    assert written.sla is not None and written.sla.freshness.column == "pickup_ts"
+
+
+def test_a_config_that_names_the_table_of_another_catalog_gives_it_no_sla_pipeline_or_layer(lake, tmp_path):
+    other = tmp_path / "other_warehouse"
+    Iceberg("rides", {"identifier": "demo", "warehouse_path": str(other)}).put(pa.table({"ride_id": [1]}))
+    relative = {"identifier": "demo", "warehouse_path": "../warehouse"}
+    reader = {"identifier": "reader", "who": "readers", "metadata": {
+        "source": {"name": "rides", "format": "ICEBERG", "catalog": relative},
+        "target": {"name": "copy", "format": "CSV", "path": "copy.csv"}}}
+    writer = {"identifier": "writer", "who": "writers", "metadata": {
+        "source": {"name": "x", "format": "CSV", "path": "x.csv"},
+        "target": {"name": "rides", "format": "ICEBERG",
+                   "catalog": {"identifier": "demo", "warehouse_path": str(other)}},
+        "docs": {"layer": "silver"}, "sla": FRESH_BY_COMMIT}}
+    (lake.configs / "rides.json").unlink()
+    (lake.configs / "a_reader.json").write_text(json.dumps(reader))
+    (lake.configs / "b_writer.json").write_text(json.dumps(writer))
+    found = discover_tables([lake.configs], allow="demo.rides")
+    [table] = found.tables
+    assert table.source.endswith("a_reader.json") and (table.pipeline, table.sla, table.layer) == (None, None, None)
+    assert [item["reason"] for item in found.unavailable] == [
+        f"duplicate identifier; already served from {table.source}"]
+
+
+def test_describing_a_table_records_no_result_and_sends_no_alert(lake, tmp_path):
+    _sla(lake, LATE_BY_DATA, observability={"alerts": [{"type": "file", "path": "alerts.jsonl"}]})
+    for _ in range(2):
+        sla = _described(lake, tmp_path)
+        assert (sla["status"], sla["source"]) == ("error", "computed")
+    assert not any("monitor_results" in path.name for path in lake.root.rglob("*")), "no results table was made"
+    assert not list(lake.root.rglob("monitor.jsonl")) and not list(lake.root.rglob("alerts.jsonl"))
+    assert not lake.rides.catalog.table_exists(("_ldp", "monitor_results"))
+
+
+def test_stored_results_that_cannot_be_read_do_not_stop_the_description_and_freshness_is_still_worked_out(
+        lake, tmp_path, monkeypatch, caplog):
+    from local_data_platform.mcp_server import sla as sla_module
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("the table is corrupt")
+
+    monkeypatch.setattr(sla_module, "ldp_rows", broken)
+    _sla(lake, LATE_BY_DATA)
+    with caplog.at_level(logging.WARNING, logger=PACKAGE_LOGGER):
+        sla = _described(lake, tmp_path)
+    assert sla["error"] == "the stored results could not be read (RuntimeError)"
+    assert (sla["status"], sla["source"]) == ("error", "computed")
+    assert "Could not read the monitor results of demo.rides: the table is corrupt" in caplog.text
+
+
+def test_freshness_that_cannot_be_worked_out_at_all_is_an_error_line_and_no_verdict(
+        lake, tmp_path, monkeypatch, caplog):
+    from local_data_platform.mcp_server import sla as sla_module
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("no metadata")
+
+    monkeypatch.setattr(sla_module, "_freshness", broken)
+    _sla(lake, FRESH_BY_COMMIT)
+    with caplog.at_level(logging.WARNING, logger=PACKAGE_LOGGER):
+        sla = _described(lake, tmp_path)
+    assert (sla["results"], sla["status"]) == ([], None)
+    assert sla["error"] == "freshness could not be worked out (RuntimeError)"
+    assert "Could not work out the freshness of demo.rides: no metadata" in caplog.text
+
+
+def test_a_row_of_the_results_table_that_is_not_a_result_is_left_out_and_the_others_are_used(
+        lake, tmp_path, caplog):
+    _sla(lake, FRESH_BY_COMMIT)
+    _store(lake, _result("volume.rows", "broken", at=_hours_before_now(2)), _result("freshness", "warn"))
+    with caplog.at_level(logging.WARNING, logger=PACKAGE_LOGGER):
+        sla = _described(lake, tmp_path)
+    assert [(item["monitor"], item["status"]) for item in sla["results"]] == [("freshness", "warn")]
+    assert "that is not a monitor result" in caplog.text
+
+
+def test_the_age_of_a_verdict_is_counted_from_the_moment_asked_for_and_never_below_zero(lake):
+    from local_data_platform.mcp_server.sla import sla_status, stored_results
+
+    _sla(lake, FRESH_BY_COMMIT)
+    exposed = next(table for table in discover_tables([lake.configs], allow="demo.rides").tables)
+    at = dt.datetime(2026, 10, 28, 10, 30, 0, tzinfo=dt.timezone.utc)
+    _store(lake, _result("freshness", "ok", at=at))
+    iceberg_table = exposed.load()
+    assert [item.monitor for item in stored_results(exposed.catalog.catalog, str(iceberg_table.metadata.table_uuid),
+                                                    "demo.rides")] == ["freshness"]
+    sla = sla_status(exposed, iceberg_table, now=dt.datetime(2026, 10, 28, 12, 0, 0, tzinfo=dt.timezone.utc))
+    assert (sla["last_evaluated_at"], sla["evaluated_age_seconds"]) == ("2026-10-28T10:30:00Z", 5400.0)
+    early = sla_status(exposed, iceberg_table, now=dt.datetime(2026, 10, 28, 9, 0, 0, tzinfo=dt.timezone.utc))
+    assert early["evaluated_age_seconds"] == 0.0
+
+
+def test_no_stored_result_when_there_is_no_results_table(lake):
+    from local_data_platform.mcp_server.sla import stored_results
+
+    exposed = next(table for table in discover_tables([lake.configs], allow="demo.rides").tables)
+    assert stored_results(exposed.catalog.catalog, "any-uuid", "demo.rides") == []
+
+
+def test_the_results_table_is_served_to_the_query_tool_only_when_an_allow_pattern_names_ldp(lake, tmp_path):
+    _store(lake, _result("freshness", "warn"))
+    spec = lake.root / "catalog.json"
+    spec.write_text(json.dumps({"catalog": {"identifier": "demo", "warehouse_path": str(lake.warehouse)}}))
+    for allow in (None, "demo.*", "*", "monitor_results", "demo.*,monitor_results"):
+        found = {table.identifier for table in discover_tables(catalogs=[spec], allow=allow).tables}
+        assert "_ldp.monitor_results" not in found, allow
+    for allow in ("_ldp.*", "_ldp.monitor_results", "demo.*,_ldp.monitor_results"):
+        found = {table.identifier for table in discover_tables(catalogs=[spec], allow=allow).tables}
+        assert "_ldp.monitor_results" in found, allow
+    with LakeTools.from_sources(catalogs=[spec], allow="demo.rides", audit_path=tmp_path / "audit.jsonl") as closed:
+        refused = _refused(closed, "query", sql="SELECT * FROM _ldp.monitor_results")
+        assert refused.status in ("rejected", "denied", "error")
+    with LakeTools.from_sources(catalogs=[spec], allow="demo.rides,_ldp.monitor_results",
+                                audit_path=tmp_path / "audit.jsonl") as served:
+        rows = _ok(served, "query", sql="SELECT monitor, status FROM _ldp.monitor_results")["rows"]
+    assert rows == [["freshness", "warn"]]
+
+
+def test_describe_table_says_in_its_description_that_it_gives_the_sla_verdict(tools):
+    description = next(spec.description for spec in tools.tool_specs() if spec.name == "describe_table")
+    assert "SLA verdict" in description and "sla:" in description
 
 
 # ---------------------------------------------------------------------- the contract and the layer
