@@ -10,7 +10,15 @@ import pytest
 
 from local_data_platform import Config
 from local_data_platform.cli import main
-from local_data_platform.monitoring.alerts import Before, before, decide, plan_alerts, repeat_due, send_alerts
+from local_data_platform.monitoring.alerts import (
+    Before,
+    before,
+    decide,
+    holds_open,
+    plan_alerts,
+    repeat_due,
+    send_alerts,
+)
 from local_data_platform.monitoring.history import JSONL_PATH, read_jsonl, read_results
 from local_data_platform.monitoring.results import MonitorResult
 from local_data_platform.notify import Channel, Notifier
@@ -176,6 +184,53 @@ def test_the_alerts_of_a_look_have_their_channel_and_say_what_changed():
     warn = planned[0][1]
     assert warn.facts["status"] == "warn" and warn.facts["previous_status"] == "ok" and "repeat" not in warn.facts
     assert (warn.pipeline, warn.table, warn.owner) == ("orders", "shop.orders", "ops")
+
+
+# ---------------------------------------------------------------------- the alerts that are open
+
+
+def _open(channels, results, history=(), minutes=20) -> int:
+    return holds_open(_notifier(*channels), results, list(history), T0 + dt.timedelta(minutes=minutes))
+
+
+@pytest.mark.parametrize("on, status, expected", [
+    ((), "error", 1), ((), "warn", 0), ((), "ok", 0), (EVERYTHING, "warn", 1), (EVERYTHING, "error", 1),
+    (EVERYTHING, "ok", 0), (("monitor.warn",), "error", 0), (("monitor.warn",), "warn", 1),
+    (("monitor.resolved",), "error", 0), (("monitor.heartbeat",), "error", 0), (("monitor.error",), "error", 1)])
+def test_a_monitor_holds_an_alert_open_while_a_channel_hears_its_status(on, status, expected):
+    assert _open([_channel(*on)], [_result(status)]) == expected
+
+
+def test_a_monitor_that_is_in_the_status_of_one_channel_and_not_of_another_is_one_open_alert_and_not_two():
+    both = [_channel(*EVERYTHING), Channel(kind="file", path="a.jsonl")]
+    assert _open(both, [_result("error")]) == 1
+    assert _open(both, [_result("warn")]) == 1
+    assert _open([_channel(), Channel(kind="file", path="a.jsonl", on=("monitor.resolved",))], [_result("warn")]) == 0
+
+
+def test_every_monitor_that_is_alerting_is_counted_once():
+    results = [_result("error", monitor="freshness"), _result("error", monitor="volume.rows"),
+               _result("warn", monitor="schema"), _result("ok", monitor="metric.revenue.value")]
+    assert _open([_channel()], results) == 2
+    assert _open([_channel(*EVERYTHING)], results) == 3
+    assert _open([_channel()], []) == 0 and _open([], results) == 0
+
+
+def test_a_monitor_that_says_unknown_holds_open_what_it_held_before_and_not_what_came_after_the_moment():
+    history = [_result("ok", 0), _result("error", 10)]
+    unknown = [_result("unknown", 20)]
+    assert _open([_channel()], unknown, history) == 1
+    assert _open([_channel()], unknown, history, minutes=5) == 0
+    assert _open([_channel()], unknown, []) == 0
+    assert _open([_channel()], unknown, [_result("error", 0), _result("ok", 10)]) == 0
+    assert _open([_channel()], unknown, [_result("warn", 0)]) == 0
+    assert _open([_channel(*EVERYTHING)], unknown, [_result("warn", 0)]) == 1
+    assert _open([_channel()], unknown, [_result("error", 0, monitor="volume.rows")]) == 0
+
+
+def test_a_known_status_is_what_it_says_now_whatever_the_history_says():
+    assert _open([_channel()], [_result("ok", 20)], [_result("error", 10)]) == 0
+    assert _open([_channel()], [_result("error", 20)], [_result("ok", 10)]) == 1
 
 
 def test_a_monitor_that_is_looked_at_for_the_first_time_has_no_previous_status_in_its_alert():

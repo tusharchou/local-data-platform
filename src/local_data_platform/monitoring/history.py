@@ -15,7 +15,7 @@ This module needs only the standard library when it is imported.
 """
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +28,7 @@ JSONL_PATH = ".ldp/monitor.jsonl"
 """Where the results go when a config has no ``iceberg`` sink, relative to the folder of the config."""
 
 
-def _iceberg_destination(config: Any) -> tuple[dict[str, Any], str] | None:
+def iceberg_destination(config: Any) -> tuple[dict[str, Any], str] | None:
     """The catalog and the namespace of the ``iceberg`` sink of a config, or ``None`` when it has none to write to.
 
     A local catalog that does not exist yet is not a destination, because writing into it would create it.
@@ -67,7 +67,7 @@ def record(entries: Iterable[tuple[Any, Iterable[MonitorResult]]]) -> list[str]:
         results = list(results)
         if not results:
             continue
-        destination = _iceberg_destination(config)
+        destination = iceberg_destination(config)
         if destination is None:
             files.setdefault(config.resolve(JSONL_PATH), []).extend(results)
             continue
@@ -109,23 +109,42 @@ def read_jsonl(path: str | Path) -> list[MonitorResult]:
     return results
 
 
-def _read_iceberg(config: Any) -> list[MonitorResult]:
-    destination = _iceberg_destination(config)
-    if destination is None:
+def read_iceberg_results(catalog: Mapping[str, Any], base_dir: Any, namespace: str,
+                         pipelines: Iterable[str]) -> list[MonitorResult]:
+    """The results of the monitors of some pipelines in ``<namespace>.monitor_results``, in one read of the table.
+
+    Args:
+        catalog: The catalog spec of the ``iceberg`` sink.
+        base_dir: The folder that a relative path of the catalog is relative to.
+        namespace: The system namespace.
+        pipelines: The identifiers of the configs whose results are wanted.
+
+    Returns:
+        The results of all of them, in the order of the table. Nothing when the table is not there. Nothing is created.
+    """
+    names = sorted(set(pipelines))
+    if not names:
         return []
     from pyiceberg.exceptions import NoSuchNamespaceError, NoSuchTableError
-    from pyiceberg.expressions import EqualTo
+    from pyiceberg.expressions import In
 
     from local_data_platform.catalog.provider import create_catalog
     from local_data_platform.events import MONITOR_TABLE
 
-    catalog, namespace = destination
     try:
-        table = create_catalog(catalog, base_dir=config.base_dir).load_table(f"{namespace}.{MONITOR_TABLE}")
+        table = create_catalog(catalog, base_dir=base_dir).load_table(f"{namespace}.{MONITOR_TABLE}")
     except (NoSuchTableError, NoSuchNamespaceError):
         return []
-    rows = table.scan(row_filter=EqualTo("pipeline", config.identifier)).to_arrow().to_pylist()
+    rows = table.scan(row_filter=In("pipeline", names)).to_arrow().to_pylist()
     return [MonitorResult.from_dict(row) for row in rows]
+
+
+def _read_iceberg(config: Any) -> list[MonitorResult]:
+    destination = iceberg_destination(config)
+    if destination is None:
+        return []
+    catalog, namespace = destination
+    return read_iceberg_results(catalog, config.base_dir, namespace, [config.identifier])
 
 
 def read_results(config: Any, *, monitor: str | None = None) -> list[MonitorResult]:
@@ -146,8 +165,35 @@ def read_results(config: Any, *, monitor: str | None = None) -> list[MonitorResu
     return sorted(results, key=lambda result: (result.evaluated_at, result.monitor))
 
 
+class Direct:
+    """The history of one config at a time, read from where it is kept each time that it is asked for.
+
+    The monitors ask a history object for the run events and the monitor results of a config, and this is the one
+    that ``ldp monitor`` gives them. :class:`~local_data_platform.monitoring.ledger.Ledger` answers the same two
+    questions for many configs with one read of each table.
+    """
+
+    def run_events(self, config: Any) -> list[Any]:
+        """The events of the pipeline of the config, oldest first, as ``local_data_platform.events.run_events``."""
+        from local_data_platform.events import run_events
+
+        return run_events(config)[0]
+
+    def monitor_results(self, config: Any, monitor: str | None = None) -> list[MonitorResult]:
+        """The recorded results of the config, oldest first, as :func:`read_results`."""
+        return read_results(config, monitor=monitor)
+
+
+DIRECT = Direct()
+"""What the monitors read the history with unless they are given another."""
+
+
 __all__ = [
+    "DIRECT",
+    "Direct",
     "JSONL_PATH",
+    "iceberg_destination",
+    "read_iceberg_results",
     "read_jsonl",
     "read_results",
     "record",

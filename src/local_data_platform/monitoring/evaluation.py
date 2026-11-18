@@ -23,13 +23,19 @@ def _moment(now: dt.datetime | str | None) -> dt.datetime:
     return parse_moment(now)
 
 
-def evaluate(config: Any, now: dt.datetime | str | None = None) -> list[MonitorResult]:
+def evaluate(config: Any, now: dt.datetime | str | None = None, history: Any = None,
+             target: Any = None) -> list[MonitorResult]:
     """Run the monitors that the SLA of ``config`` asks for.
 
     Args:
         config: A :class:`~local_data_platform.Config`.
         now: The moment to measure at, as a ``datetime`` or as ISO 8601 text, where a time with no offset is UTC. The
             current time by default.
+        history: What the run events and the earlier results are read with. By default each is read for this config
+            alone, which is what ``ldp monitor`` does. A :class:`~local_data_platform.monitoring.ledger.Ledger` reads
+            them once for many configs.
+        target: The table of the config, when the caller has loaded it already with
+            :func:`~local_data_platform.monitoring.target.load_target`.
 
     Returns:
         The :class:`~local_data_platform.monitoring.results.MonitorResult` of each monitor, freshness first, then the
@@ -41,10 +47,12 @@ def evaluate(config: Any, now: dt.datetime | str | None = None) -> list[MonitorR
     sla = config.sla
     if sla is None:
         return []
+    from local_data_platform.monitoring.history import DIRECT
     from local_data_platform.monitoring.target import load_target
 
     moment = _moment(now)
-    target = load_target(config)
+    history = DIRECT if history is None else history
+    target = load_target(config) if target is None else target
     results: list[MonitorResult] = []
     if sla.freshness is not None:
         from local_data_platform.monitoring.freshness import evaluate_freshness
@@ -53,15 +61,15 @@ def evaluate(config: Any, now: dt.datetime | str | None = None) -> list[MonitorR
     if sla.volume is not None:
         from local_data_platform.monitoring.volume import evaluate_volume
 
-        results.extend(evaluate_volume(sla.volume, config, target, moment))
+        results.extend(evaluate_volume(sla.volume, config, target, moment, history))
     if sla.schema is not None:
         from local_data_platform.monitoring.schema import evaluate_schema
 
-        results.append(evaluate_schema(sla.schema, config, target, moment))
+        results.append(evaluate_schema(sla.schema, config, target, moment, history))
     if sla.metrics:
         from local_data_platform.monitoring.metric import evaluate_metrics
 
-        results.extend(evaluate_metrics(sla.metrics, config, target, moment))
+        results.extend(evaluate_metrics(sla.metrics, config, target, moment, history))
     return results
 
 

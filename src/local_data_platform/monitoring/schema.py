@@ -22,6 +22,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from local_data_platform.monitoring.history import DIRECT
 from local_data_platform.monitoring.results import MonitorResult
 from local_data_platform.monitoring.sla import SchemaDrift
 from local_data_platform.monitoring.target import Target
@@ -111,22 +112,17 @@ def diff(where: str, old: Mapping[str, str], new: Mapping[str, str], allow: set[
     return changes
 
 
-def _previous(config: Any, now: dt.datetime) -> Mapping[str, Any] | None:
+def _previous(config: Any, now: dt.datetime, history: Any) -> Mapping[str, Any] | None:
     """The metrics of the latest evaluation of this monitor at or before ``now`` that kept the columns of the table."""
-    from local_data_platform.monitoring.history import read_results
-
-    for result in reversed(read_results(config, monitor=MONITOR)):
+    for result in reversed(history.monitor_results(config, MONITOR)):
         if result.evaluated_at <= now and isinstance(result.metrics.get("columns"), Mapping):
             return result.metrics
     return None
 
 
-def _source_columns(config: Any) -> tuple[dict[str, str], dict[str, str]] | None:
+def _source_columns(config: Any, history: Any) -> tuple[dict[str, str], dict[str, str]] | None:
     """The columns of the source in the last two ``run.extracted`` events of the pipeline, or ``None`` with fewer."""
-    from local_data_platform.events import run_events
-
-    events, _ = run_events(config)
-    extracted = sorted((event for event in events if event.type == "run.extracted"
+    extracted = sorted((event for event in history.run_events(config) if event.type == "run.extracted"
                         and isinstance(event.payload.get("schema"), list)),
                        key=lambda event: (event.ts, event.run_id, event.attempt, event.seq))
     if len(extracted) < 2:
@@ -134,7 +130,8 @@ def _source_columns(config: Any) -> tuple[dict[str, str], dict[str, str]] | None
     return tuple({item["name"]: item["type"] for item in event.payload["schema"]} for event in extracted[-2:])
 
 
-def evaluate_schema(rule: SchemaDrift, config: Any, target: Target, now: dt.datetime) -> MonitorResult:
+def evaluate_schema(rule: SchemaDrift, config: Any, target: Target, now: dt.datetime,
+                    history: Any = DIRECT) -> MonitorResult:
     """Check the columns of the table and of its source for a change since the last look.
 
     Args:
@@ -142,6 +139,8 @@ def evaluate_schema(rule: SchemaDrift, config: Any, target: Target, now: dt.date
         config: The :class:`~local_data_platform.Config`, whose history holds the baseline and the runs.
         target: The table, from :func:`~local_data_platform.monitoring.target.load_target`.
         now: The moment of the evaluation, with a time zone.
+        history: What the run events and the earlier results are read with, which is
+            :data:`~local_data_platform.monitoring.history.DIRECT` by default.
 
     Returns:
         One result. ``unknown`` when there is nothing to compare, because the table does not exist yet or is a file and
@@ -159,7 +158,7 @@ def evaluate_schema(rule: SchemaDrift, config: Any, target: Target, now: dt.date
         current = {field.name: str(field.field_type) for field in table.schema().fields}
         fingerprint = schema_fingerprint(table.schema())
         metrics.update({"fingerprint": fingerprint, "columns": current})
-        previous = _previous(config, now)
+        previous = _previous(config, now, history)
         if previous is None:
             baseline = True
         else:
@@ -167,7 +166,7 @@ def evaluate_schema(rule: SchemaDrift, config: Any, target: Target, now: dt.date
             changes = diff("table", previous["columns"], current, allow)
             if not changes and previous.get("fingerprint") not in (None, fingerprint):
                 changes = [Change("table", OTHER)]
-    source = _source_columns(config)
+    source = _source_columns(config, history)
     if source is not None:
         changes += diff("source", source[0], source[1], allow)
 

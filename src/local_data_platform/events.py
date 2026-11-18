@@ -1294,7 +1294,8 @@ def _event_from_row(row: Mapping[str, Any]) -> RunEvent:
 
 
 def read_iceberg_events(catalog: Any, *, namespace: str = SYSTEM_NAMESPACE, pipeline: str | None = None,
-                        run_id: str | None = None, table: str | None = None) -> list[RunEvent]:
+                        run_id: str | None = None, table: str | None = None,
+                        pipelines: Iterable[str] | None = None) -> list[RunEvent]:
     """Read events back from ``<namespace>.runs``, oldest first.
 
     Args:
@@ -1304,12 +1305,16 @@ def read_iceberg_events(catalog: Any, *, namespace: str = SYSTEM_NAMESPACE, pipe
         pipeline: Only events of this pipeline.
         run_id: Only events of this run.
         table: Only events whose target is this table identifier, e.g. ``"nyc.rides"``.
+        pipelines: Only events of these pipelines, which reads the table once for all of them.
 
     Returns:
         The events, sorted by ``(ts, run_id, attempt, seq)``. Empty if the table doesn't exist.
     """
+    names = None if pipelines is None else sorted(set(pipelines))
+    if names is not None and not names:
+        return []
     from pyiceberg.exceptions import NoSuchNamespaceError, NoSuchTableError
-    from pyiceberg.expressions import AlwaysTrue, And, EqualTo
+    from pyiceberg.expressions import AlwaysTrue, And, EqualTo, In
 
     if isinstance(catalog, Mapping):
         from local_data_platform.catalog.provider import create_catalog
@@ -1322,6 +1327,8 @@ def read_iceberg_events(catalog: Any, *, namespace: str = SYSTEM_NAMESPACE, pipe
     row_filter: Any = AlwaysTrue()
     if pipeline is not None:
         row_filter = And(row_filter, EqualTo("pipeline", pipeline))
+    if names is not None:
+        row_filter = And(row_filter, In("pipeline", names))
     if run_id is not None:
         row_filter = And(row_filter, EqualTo("run_id", run_id))
     if table is not None:
@@ -1618,6 +1625,40 @@ def _local_catalog_missing(spec: Mapping[str, Any], base_dir: Path | None) -> bo
     return database is not None and not database.is_file()
 
 
+@dataclasses.dataclass(frozen=True)
+class RunSource:
+    """Where the events of the pipeline of a config are kept, as :func:`run_events` looks for them.
+
+    Attributes:
+        catalog: The catalog spec whose ``_ldp`` tables hold them, or ``None`` when the config names no Iceberg catalog.
+        namespace: The system namespace of those tables.
+        iceberg: Whether the config lists an ``iceberg`` sink, so that its events are in the catalog and nowhere else.
+        jsonl: The events file of its ``jsonl`` sink, or the default file.
+        jsonl_listed: Whether the config lists a ``jsonl`` sink.
+    """
+
+    catalog: Mapping[str, Any] | None
+    namespace: str
+    iceberg: bool
+    jsonl: Path
+    jsonl_listed: bool
+
+    def has_catalog(self, base_dir: Path | None) -> bool:
+        """Whether there is a catalog to ask. A local catalog that does not exist yet is not one."""
+        return self.catalog is not None and not _local_catalog_missing(self.catalog, base_dir)
+
+
+def run_source(config: Any) -> RunSource:
+    """Where the events of the pipeline of a config are kept. Nothing is read, and nothing is created."""
+    specs = sink_specs(config.metadata)
+    iceberg_specs = [spec for spec in specs if spec["type"] == "iceberg"]
+    jsonl_specs = [spec for spec in specs if spec["type"] == "jsonl"]
+    catalog = iceberg_specs[0]["catalog"] if iceberg_specs else _iceberg_catalog_block(config.metadata)
+    namespace = (iceberg_specs[0].get("namespace") if iceberg_specs else None) or SYSTEM_NAMESPACE
+    jsonl = config.resolve((jsonl_specs[0].get("path") if jsonl_specs else None) or DEFAULT_JSONL_PATH)
+    return RunSource(catalog, namespace, bool(iceberg_specs), jsonl, bool(jsonl_specs))
+
+
 def load_run_events(config_or_path: str | os.PathLike, *, jsonl: str | os.PathLike | None = None,
                     run_id: str | None = None) -> tuple[list[RunEvent], str]:
     """Load the events ``ldp runs`` shows.
@@ -1658,23 +1699,18 @@ def run_events(config: Any, *, run_id: str | None = None) -> tuple[list[RunEvent
         config lists an ``iceberg`` sink or its catalog already has the table, else from its ``jsonl`` sink's file.
         Nothing is created while looking.
     """
-    specs = sink_specs(config.metadata)
-    iceberg_specs = [spec for spec in specs if spec["type"] == "iceberg"]
-    jsonl_specs = [spec for spec in specs if spec["type"] == "jsonl"]
-    catalog_spec = iceberg_specs[0]["catalog"] if iceberg_specs else _iceberg_catalog_block(config.metadata)
-    namespace = (iceberg_specs[0].get("namespace") if iceberg_specs else None) or SYSTEM_NAMESPACE
-    if catalog_spec is not None and not _local_catalog_missing(catalog_spec, config.base_dir):
+    source = run_source(config)
+    if source.has_catalog(config.base_dir):
         from local_data_platform.catalog.provider import create_catalog
 
-        catalog = create_catalog(catalog_spec, base_dir=config.base_dir)
-        events = read_iceberg_events(catalog, namespace=namespace, pipeline=config.identifier, run_id=run_id)
-        if events or iceberg_specs or not jsonl_specs:
-            return events, f"{namespace}.{RUNS_TABLE}"
-    file = config.resolve((jsonl_specs[0].get("path") if jsonl_specs else None) or DEFAULT_JSONL_PATH)
-    if not file.is_file():
-        return [], str(file)
-    events = [e for e in read_jsonl(file) if e.payload.get("pipeline") in (None, config.identifier)]
-    return [e for e in events if run_id is None or e.run_id == run_id], str(file)
+        catalog = create_catalog(source.catalog, base_dir=config.base_dir)
+        events = read_iceberg_events(catalog, namespace=source.namespace, pipeline=config.identifier, run_id=run_id)
+        if events or source.iceberg or not source.jsonl_listed:
+            return events, f"{source.namespace}.{RUNS_TABLE}"
+    if not source.jsonl.is_file():
+        return [], str(source.jsonl)
+    events = [e for e in read_jsonl(source.jsonl) if e.payload.get("pipeline") in (None, config.identifier)]
+    return [e for e in events if run_id is None or e.run_id == run_id], str(source.jsonl)
 
 
 def _short(value: Any, width: int = 12) -> Any:
@@ -1800,6 +1836,7 @@ __all__ = [
     "RUN_STATUSES",
     "RunEmitter",
     "RunEvent",
+    "RunSource",
     "SCHEMA_VERSION",
     "SINK_TYPES",
     "SYSTEM_NAMESPACE",
@@ -1818,6 +1855,7 @@ __all__ = [
     "read_openlineage",
     "redact_text",
     "run_events",
+    "run_source",
     "schema_payload",
     "sink_from_config",
     "sink_specs",
