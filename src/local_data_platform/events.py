@@ -317,6 +317,7 @@ _SECRET_PATTERNS = (
                 r"(\s*[\"']?\s*[:=]\s*[\"']?)[^\s\"',;&}]+"), r"\1\2***"),
     (re.compile(r"(?i)(authorization:?\s*(?:bearer|basic)\s+)\S+"), r"\1***"),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AKIA****************"),
+    (re.compile(r"(https://hooks\.slack\.com/(?:services|workflows|triggers)/)[^\s\"'<>)]+"), r"\1***"),
 )
 
 
@@ -325,7 +326,8 @@ def redact_text(text: str, limit: int | None = _MAX_MESSAGE) -> str:
 
     Masks PEM blocks, passwords in URLs (``scheme://user:***@host``), ``key=value``
     pairs whose key mentions a token, secret, password, credential or API key, bearer
-    tokens, and AWS access key ids.
+    tokens, AWS access key ids, and the path of a Slack incoming webhook
+    (``https://hooks.slack.com/services/***``).
 
     Args:
         text: The text.
@@ -1492,7 +1494,7 @@ _SINK_OPTIONS = {
     "openlineage": {"path", "url", "namespace", "api_key_env", "timeout"},
     "iceberg": {"catalog", "namespace", "batch_size"},
 }
-_OBSERVABILITY_KEYS = {"sinks"} | set(_SINK_OPTIONS)
+_OBSERVABILITY_KEYS = {"sinks", "alerts"} | set(_SINK_OPTIONS)
 
 
 def _iceberg_catalog_block(metadata: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -1584,16 +1586,22 @@ def sink_from_config(config: Any) -> EventSink:
     """Build the default sink of a :class:`~local_data_platform.Config` from ``metadata.observability``.
 
     Returns:
-        A :class:`NullSink` when the block is absent or lists no sinks, the one sink
-        it lists, or a :class:`MultiSink`.
+        A :class:`NullSink` when the block is absent or lists no sinks and no alert channels, the one sink
+        it lists, or a :class:`MultiSink`. A config with ``alerts`` gets a
+        :class:`~local_data_platform.notify.NotifySink` among them, which sends an alert when a run fails or is blocked.
 
     Raises:
         ConfigError: If the block is invalid.
     """
     if config is None:
         return NullSink()
+    from local_data_platform.notify import NotifySink, notifier_for
+
     sinks = [build_sink(spec, getattr(config, "base_dir", None)) for spec in sink_specs(config.metadata)]
     sinks = [sink for sink in sinks if not isinstance(sink, NullSink)]
+    notifier = notifier_for(config)
+    if notifier is not None:
+        sinks.append(NotifySink(notifier))
     if not sinks:
         return NullSink()
     return sinks[0] if len(sinks) == 1 else MultiSink(sinks)

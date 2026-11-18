@@ -5,10 +5,12 @@
     ldp monitor CONFIG_OR_FOLDER [--json] [--now ISO-8601]
 
 Each monitor prints one line. The results are recorded in the history of the monitors (see
-:mod:`local_data_platform.monitoring.history`). The command reads the metadata of tables and the history of the runs and
-of the monitors, and a metric monitor runs one aggregate query on a table. It writes to no table and creates no catalog.
-Its exit status is 0 when every monitor is ``ok`` or ``warn``, 2 when at least one is ``error``, and 1 when ``ldp``
-itself fails, such as a config that cannot be read.
+:mod:`local_data_platform.monitoring.history`). The command reads the metadata of tables and the history of the runs
+and of the monitors, and a metric monitor runs one aggregate query on a table. It writes to no table and creates no
+catalog. A config that lists channels in ``metadata.observability.alerts`` is told when a monitor changes state and
+when it recovers (see :mod:`local_data_platform.monitoring.alerts`), after the results are recorded, and a channel that
+is down is a warning and no failure. Its exit status is 0 when every monitor is ``ok`` or ``warn``, 2 when at least one
+is ``error``, and 1 when ``ldp`` itself fails, such as a config that cannot be read.
 """
 
 import argparse
@@ -79,19 +81,26 @@ def _counts(results: Sequence[MonitorResult]) -> str:
 
 def _cmd_monitor(args: argparse.Namespace) -> int:
     from local_data_platform.cli import EXIT_ERROR, EXIT_OK, EXIT_SLA, format_table
+    from local_data_platform.monitoring.alerts import plan_alerts, send_alerts
     from local_data_platform.monitoring.evaluation import evaluate
-    from local_data_platform.monitoring.history import record
+    from local_data_platform.monitoring.history import read_results, record
+    from local_data_platform.notify import notifier_for
 
     configs, failures = _load(args.config)
     now = args.now if args.now is not None else dt.datetime.now(dt.timezone.utc)
     evaluated: list[tuple[Any, list[MonitorResult]]] = []
+    queued: list[tuple[Any, Any, list[MonitorResult]]] = []
     without_sla: list[Path] = []
     for file, config in configs:
         if config.sla is None:
             without_sla.append(file)
             continue
         try:
-            evaluated.append((config, evaluate(config, now)))
+            notifier = notifier_for(config)
+            found = evaluate(config, now)
+            if notifier is not None:  # what the history says is read now, before this look is recorded
+                queued.append((notifier, plan_alerts(notifier, found, read_results(config), now), found))
+            evaluated.append((config, found))
         except Exception as error:  # noqa: BLE001 - one config that cannot be read must not hide the others
             failures.append((file, str(error) if isinstance(error, LDPError) else f"{type(error).__name__}: {error}"))
     results = [result for _, found in evaluated for result in found]
@@ -114,6 +123,13 @@ def _cmd_monitor(args: argparse.Namespace) -> int:
     written = record(evaluated)
     if written and not args.json:
         print(f"Results recorded in {', '.join(dict.fromkeys(written))}")
+    told: dict[str, int] = {}
+    for notifier, planned, found in queued:
+        for delivery in send_alerts(notifier, planned, found, now).alerts:
+            if delivery.ok:
+                told[delivery.channel] = told.get(delivery.channel, 0) + 1
+    if told and not args.json:
+        print("Alerts sent to " + ", ".join(f"{channel} ({number})" for channel, number in told.items()))
     for file, message in failures:
         print(f"ldp: {file.name}: {message}", file=sys.stderr)
     if failures:
@@ -134,7 +150,8 @@ def add_cli(subparsers: Any, parents: Sequence[argparse.ArgumentParser] = ()) ->
                     "print one line for each monitor. It reads the metadata of the tables and the history of the "
                     "runs, and it runs one aggregate query for each metric of a metrics section. It writes to no "
                     "table and creates no catalog. The results are recorded in _ldp.monitor_results when a config has "
-                    "an iceberg sink and its catalog exists, and in .ldp/monitor.jsonl next to the config otherwise.",
+                    "an iceberg sink and its catalog exists, and in .ldp/monitor.jsonl next to the config otherwise. A "
+                    "config with alert channels is told when a monitor changes state, and when it recovers.",
         epilog="Exit status is 0 when every monitor is ok or warn, 2 when at least one is error, and 1 when ldp itself "
                "fails, such as a config that cannot be read.")
     monitor.add_argument("config", metavar="CONFIG", help="a JSON dataset config, or a folder of them")

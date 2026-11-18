@@ -256,10 +256,16 @@ def _describe_cycle(reads: Mapping[Path, list[Path]], remaining: list[Path]) -> 
 
 
 def with_events(config: Config) -> Config:
-    """The config with the ``iceberg`` sink when it names no sinks, so the run is recorded next to its table."""
-    if "observability" in config.metadata:
+    """The config with the ``iceberg`` sink when it names no sinks, so the run is recorded next to its table.
+
+    A block that lists only ``alerts`` names no sinks, so it gets the ``iceberg`` sink and keeps its alerts. An
+    ``observability`` block that names anything else, even an empty one, is left as it is.
+    """
+    block = config.metadata.get("observability")
+    if block is not None and (not block or set(block) - {"alerts"}):
         return config
-    return dataclasses.replace(config, metadata={**config.metadata, "observability": {"sinks": ["iceberg"]}})
+    observability = {**(block or {}), "sinks": ["iceberg"]}
+    return dataclasses.replace(config, metadata={**config.metadata, "observability": observability})
 
 
 def _gate(report: Any) -> str:

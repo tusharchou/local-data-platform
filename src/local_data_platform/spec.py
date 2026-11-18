@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any
 
-from local_data_platform import contracts
+from local_data_platform import contracts, notify
 from local_data_platform.exceptions import ConfigError, PipelineNotFound
 from local_data_platform.monitoring import sla as sla_settings
 from local_data_platform.orchestration import retries, windows
@@ -72,7 +72,7 @@ _UPPER_KEYS = {"format", "engine"}
 _LOWER_KEYS = {"write_mode", "on_failure", "transform", "type"}
 _SECRET_WORDS = ("password", "passwd", "secret", "token", "credential", "api_key", "apikey", "private_key")
 _REFERENCE_SUFFIXES = ("_env", "_path", "_file", "_ref")
-_INLINE_SECRET = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b")
+_INLINE_SECRET = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b|https://hooks\.slack\.com/")
 _UTC = dt.timezone.utc
 
 
@@ -730,6 +730,7 @@ def json_schema() -> dict[str, Any]:
                     "iceberg": {"type": "object", "additionalProperties": False, "properties": {
                         "catalog": {"$ref": "#/$defs/catalog"}, "namespace": non_empty,
                         "batch_size": {"type": "integer", "minimum": 1}}},
+                    "alerts": notify.alerts_schema(),
                 },
             },
         },
@@ -982,6 +983,14 @@ def _check_sla(problems: _Problems, metadata: Mapping[str, Any]) -> None:
         problems.add(f"metadata.sla{path}", message)
 
 
+def _check_alerts(problems: _Problems, metadata: Mapping[str, Any]) -> None:
+    """Check ``metadata.observability.alerts``, the channels that tell a person when something breaks."""
+    block = metadata.get("observability")
+    if isinstance(block, Mapping):
+        for path, message in notify.alert_problems(block.get("alerts")):
+            problems.add(f"metadata.observability.alerts{path}", message)
+
+
 def _check_placeholder_places(problems: _Problems, value: Any, where: str) -> None:
     """A window placeholder works only in ``metadata.source.path``, so flag one anywhere else."""
     if isinstance(value, Mapping):
@@ -1063,6 +1072,7 @@ def _validate_pipeline(spec: Mapping[str, Any]) -> list[ConfigError]:
         _check_schedule_and_window(problems, metadata)
         _check_docs(problems, metadata, spec.get("who"))
         _check_sla(problems, metadata)
+        _check_alerts(problems, metadata)
         _check_lineage(problems, metadata.get("lineage"))
         if "retries" in metadata:
             for path, message in retries.retries_problems(metadata["retries"]):

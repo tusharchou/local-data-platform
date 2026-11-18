@@ -28,7 +28,9 @@ class Config:
     ``base_dir`` is the folder relative paths resolve against. ``Config.from_json``
     sets it to the config file's folder; when built by hand it defaults to the cwd.
     ``api_version`` is the config's ``apiVersion``, when it has one, and ``kind`` is
-    ``Pipeline``, the only kind that is a dataset config.
+    ``Pipeline``, the only kind that is a dataset config. ``source_path`` is the file that ``Config.from_json`` read,
+    and ``None`` for a config that was built by hand. It is not part of what a config is, so two configs that differ
+    only in it are equal.
     """
 
     identifier: str
@@ -41,6 +43,7 @@ class Config:
     base_dir: Path | None = None
     api_version: str | None = None
     kind: str = DEFAULT_KIND
+    source_path: Path | None = field(default=None, compare=False, repr=False)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], base_dir: str | os.PathLike | None = None) -> "Config":
@@ -79,7 +82,9 @@ class Config:
             data = json.loads(resolved.read_text())
         except json.JSONDecodeError as exc:
             raise ConfigError(f"config file {resolved} is not valid JSON: {exc}") from exc
-        return cls.from_dict(data, base_dir=resolved.parent)
+        config = cls.from_dict(data, base_dir=resolved.parent)
+        config.source_path = resolved
+        return config
 
     def validate(self) -> None:
         """Raise :class:`ConfigError` if the metadata block is incomplete, or its schedule or window is invalid."""
