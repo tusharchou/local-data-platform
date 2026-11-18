@@ -110,7 +110,7 @@ back with `isError: true` and `{"error": {"type", "message"}}`.
 | Tool | Arguments | Returns |
 |---|---|---|
 | `list_tables` | none | Each table's `table` identifier, `layer`, `description`, `owner` and `grain` (each `null` when the table does not say), `sql_name` (for example `"demo"."rides"`), `aliases` (its bare name when that is unique), `access` (`native` or `arrow`), `row_count`, `last_updated` and `source`. Also returns the `unavailable` tables and the `limits`. |
-| `describe_table` | `table` | The `contract` of the table (see below), the schema, partition spec, sort order, `row_count` (from snapshot metadata), the 10 most recent snapshots, table properties (keys that look secret are redacted), `location` and `metadata_location`. Also `freshness` (the last commit time and its age in seconds, plus the last run's time and status), `latest_run` and `quality` from `_ldp`. |
+| `describe_table` | `table` | The `contract` of the table (see below), the schema, partition spec, sort order, `row_count` (from snapshot metadata), the 10 most recent snapshots, table properties (keys that look secret are redacted), `location` and `metadata_location`. Also `freshness` (the last commit time and its age in seconds, plus the last run's time and status), `sla` (the SLA verdict, see below), `latest_run` and `quality` from `_ldp`. |
 | `query` | `sql`, optional `max_rows` | `columns` (name and Arrow type), `rows` (lists in column order), `row_count`, `truncated`, `max_rows`, `duration_ms` and `stale_tables` (tables the refresh didn't reach in time or couldn't load). The default is 100 rows. |
 | `sample_rows` | `table`, optional `n` (default 10) | The first `n` rows in scan order, in the same shape as `query`. |
 | `table_history` | `table`, optional `limit` (default 50) | Snapshots newest first, each with `committed_at`, `operation`, the added, deleted and total records, `is_current`, `on_main` (on the current snapshot's lineage) and the `ldp.*` snapshot properties such as `ldp.run-id` and `ldp.idempotency-key`. Also the branch and tag `refs`. |
@@ -186,6 +186,35 @@ the same run and the same quality, from the same code.
 
 The `_ldp` tables are read with pyiceberg, never through the DuckDB sandbox, so agents can't query
 them unless you allowlist them.
+
+### The SLA verdict in `describe_table`
+
+An agent that is asked whether a table is up to date can say what the SLA says, and does not have to guess from a
+timestamp. `describe_table` returns an `sla` object made of what the server can see. The server only reads for it. It
+records no result and sends no alert.
+
+- `settings` and `summary` are the `metadata.sla` of the config that writes the table, with its defaults, and the same SLA
+  in a line. The server has them when it was started with that config (`--config`). A table that came from a `--catalog`
+  file, or that a config only reads, has `null` for both, and for `pipeline`, which names the config.
+- `results` holds the latest result of each monitor in `_ldp.monitor_results`, which [`ldp monitor`](monitoring.md)
+  records. A row is the table's when its `table_uuid` or its `table_identifier` is, as for the rows of `_ldp.runs`. Each
+  result has `monitor`, `kind`, `status` (`ok`, `warn`, `error` or `unknown`), `observed`, `expected`, `details`,
+  `evaluated_at` and `recorded`, in the order that `ldp monitor` prints them.
+- When the SLA has a freshness rule and no freshness result is stored, the server works freshness out from the metadata
+  of the table, as `ldp monitor` does, and the result has `recorded: false`. Nothing stores it. The other monitors are not
+  worked out, so a table whose SLA has only a volume rule has no verdict until `ldp monitor` has run.
+- `status` is the worst status of `results`, and `message` is the verdict in one sentence, such as
+  `error: the last commit was 30.1 hour ago, at 2026-10-27T05:54:00Z`. `last_evaluated_at` and `evaluated_age_seconds`
+  say when the newest result was evaluated and how long ago, so that an agent can tell a verdict of an hour ago from one
+  of last week. `source` is `recorded` when a stored result is in `results`, `computed` when only freshness worked out
+  now is, and `none`.
+- `defined` is false for a table that has no SLA and no stored result, and then `message` says that there is no verdict.
+- `error` is there only when the stored results could not be read, or freshness could not be worked out, and it says
+  which. The rest of the description still comes back.
+
+`_ldp.monitor_results` is a system table like the other `_ldp` tables. The `query` tool can read it only when an `--allow`
+pattern that starts with `_ldp` names it, such as `--allow 'sales.*,_ldp.monitor_results'`. `describe_table` reads it
+with pyiceberg whatever `--allow` says, and only for the table that it describes.
 
 ### Time travel and pinned datasets
 

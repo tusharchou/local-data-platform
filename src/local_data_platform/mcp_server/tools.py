@@ -7,7 +7,7 @@ The MCP layer (:mod:`local_data_platform.mcp_server.server`) only translates out
 MCP results, so everything here can be used and tested without the ``mcp`` SDK.
 
 * ``list_tables()``: every allowlisted table, how to name it in SQL, its row count and last commit.
-* ``describe_table(table)``: schema, partition spec, row count, snapshots, freshness, and the
+* ``describe_table(table)``: schema, partition spec, row count, snapshots, freshness, the SLA verdict, and the
   latest ``_ldp`` run and quality status.
 * ``query(sql, max_rows)``: rows of one read-only ``SELECT``/``WITH`` query, capped and timed out.
 * ``sample_rows(table, n)``: the first ``n`` rows in scan order.
@@ -53,6 +53,7 @@ from .audit import AuditLog, AuditRecord, iceberg_audit_sink
 from .discovery import Discovery, ExposedTable, discover_tables, redact
 from .errors import DatasetNotFound, InvalidArguments, TableNotAllowed, ToolError
 from .sandbox import DuckDBSandbox, QueryResult
+from .sla import sla_status
 
 logger = get_logger(__name__)
 
@@ -316,7 +317,9 @@ class LakeTools:
             ToolSpec("describe_table", "Describe a table",
                      "Show a table's contract (what it means, who owns it, its grain and key, and what each column "
                      "holds), its schema, partition spec, row count, recent snapshots, freshness (time since the last "
-                     "commit) and the latest pipeline run and data-quality status recorded in _ldp.",
+                     "commit), its SLA verdict (sla: the SLA of the table, the latest result of each monitor and a "
+                     "sentence that says whether the table is up to date) and the latest pipeline run and data-quality "
+                     "status recorded in _ldp.",
                      {"type": "object", "properties": {"table": table_arg}, "required": ["table"],
                       "additionalProperties": False}),
             ToolSpec("query", "Run a read-only SQL query",
@@ -544,7 +547,7 @@ class LakeTools:
                 "limits": {"max_rows": self.max_rows, "timeout_s": self.timeout_s}}
 
     def describe_table(self, table: str) -> dict[str, Any]:
-        """Schema, partitioning, counts, snapshots, freshness and ``_ldp`` status of one table."""
+        """Schema, partitioning, counts, snapshots, freshness, SLA verdict and ``_ldp`` status of one table."""
         exposed = self._resolve(table)
         iceberg_table = exposed.load()
         schema = iceberg_table.schema()
@@ -586,6 +589,7 @@ class LakeTools:
             "recent_snapshots": [_snapshot_entry(item) for item in snapshots[:RECENT_SNAPSHOTS]],
             "properties": redact(dict(iceberg_table.properties)),
             "freshness": freshness,
+            "sla": sla_status(exposed, iceberg_table),
             "latest_run": latest_run,
             "quality": ldp.get("quality"),
             "ldp": {key: value for key, value in ldp.items() if key not in ("latest_run", "quality")},
