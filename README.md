@@ -239,7 +239,7 @@ call:
 | `ldp runs CONFIG [--run RUN_ID] [--events] [--attempts]` | List the runs a config's sinks recorded, the last attempt of a run that was retried, or every attempt with `--attempts` | `events.summarize_runs(events.read_jsonl(path))` or `read_iceberg_events(catalog)` |
 | `ldp commits CONFIG [--key KEY] [--branches]` | List the staged publishes on a table, newest first | `format.iceberg.commit.commit_log(iceberg.table())` and `staged_branches(...)` |
 | `ldp datasets pin\|list\|export` | Pin, list and export dataset versions, as Parquet, JSONL or CSV | `datasets.pin`, `list_versions`, `export` |
-| `ldp maintain CONFIG [--expire DAYS] [--orphans] [--apply]` | Expire snapshots and find orphan files; a dry run unless `--apply` | `maintenance.expire_snapshots`, `find_orphans`, `remove_orphans` |
+| `ldp maintain CONFIG [--system [--keep-days N]] [--expire DAYS] [--orphans] [--apply]` | Expire snapshots and find orphan files; a dry run unless `--apply`. With `--system` it trims the `_ldp` history tables of the config's catalog instead, deleting the rows older than N days (90 by default) first | `maintenance.expire_snapshots`, `find_orphans`, `remove_orphans`, `delete_old_rows`, `maintain_system_tables` |
 | `ldp mcp --config CONFIG ...` | Serve tables to an agent over MCP (stdio) | `python -m local_data_platform.mcp_server ...`, same options |
 | `ldp dbt init\|build\|test\|docs\|exec PROJECT_DIR` | Run a dbt project over your Iceberg tables; `build` writes the models marked `ldp_publish` back to Iceberg (needs the `dbt` extra) | `dbt_layer.register_sources(...)`, `dbt_layer.publish.plan_publish(...)` and `publish(...)` |
 | `ldp gold sync CONFIG [--dbt-manifest FILE] [--dry-run] [--json]` | Write the contract of a config (its `metadata.docs`) into its existing Iceberg table, with no new data. `--dbt-manifest` reads it from a dbt manifest, for a table that dbt built, and `--dry-run` only says what would change. See [Table contracts](#table-contracts) | `gold.sync.sync_config(path)`, `contracts.apply_contract(table, docs)` |
@@ -1308,7 +1308,10 @@ Expiry always keeps the current snapshot, branch and tag heads and `main`'s last
 table's idempotency horizon (7 days by default), because re-runs rely on finding it. Orphans are
 files under the table's location that no metadata references and that are older than 72 hours
 (`older_than_hours`), so the files of a write still in progress are left alone. `ldp maintain
-CONFIG` runs both from the command line, as a dry run unless `--apply` is given. There is no
+CONFIG` runs both from the command line, as a dry run unless `--apply` is given. `ldp maintain
+CONFIG --system` does the same for the `_ldp` history tables of the config's catalog, after it
+deletes their rows older than `--keep-days` days (90 by default), a whole UTC day at a time, which
+drops data files and rewrites none. Run it once a week where `ldp monitor` runs often. There is no
 compaction yet.
 
 ## Spark (experimental)

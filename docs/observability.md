@@ -223,6 +223,10 @@ its results never enter `_ldp.runs`, and `ldp runs` shows the same runs before a
 no `iceberg` sink, or whose catalog is not there yet, gets the same results as one JSON object for each line of
 `.ldp/monitor.jsonl` next to the config, which `monitoring.history.read_results` reads together with the table.
 
+Every commit adds files and nothing in these tables ever leaves them, so `ldp maintain CONFIG --system` deletes the rows
+older than `--keep-days` days (90 by default) and then expires their snapshots and finds their orphan files. The page on
+monitors says [how fast they grow and how to trim them](monitoring.md#keeping-the-history-small).
+
 ```python
 from local_data_platform.catalog.provider import create_catalog
 from local_data_platform.engine.duckdb import DuckDBEngine
