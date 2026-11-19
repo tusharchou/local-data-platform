@@ -245,6 +245,75 @@ The monitors are `freshness`, `volume.rows`, `volume.change`, `schema`, and `met
 for each entry of `metrics`. The columns of `_ldp.monitor_results` are in
 [the table of the `_ldp` tables](observability.md#the-_ldp-namespace).
 
+## Keeping the history small
+
+Every invocation of `ldp monitor` is one commit to `_ldp.monitor_results` for each catalog that it records into. A commit
+adds one small data file, one manifest and one manifest list, so a monitor that runs every 15 minutes adds about 290 files a
+day to that one table, which is about 26,000 files in 90 days. The table drops its old metadata files by itself, and nothing
+else leaves it. A run of a pipeline adds commits to `_ldp.runs` and, when it has checks, to `_ldp.quality_results`, and the
+MCP server adds them to `_ldp.audit`, so those tables grow too, more slowly.
+
+`ldp maintain` with `--system` trims all four tables of the catalog of a config. Run it once a week.
+
+```bash
+ldp maintain config/orders.json --system
+ldp maintain config/orders.json --system --apply
+ldp maintain config/orders.json --system --keep-days 30 --apply
+```
+
+The first command is a dry run. For each table it says how many rows would go, how many files hold them and the first and
+the last day that they cover, and it changes nothing. `--apply` makes the changes, and `--json` prints the reports as one
+object. The catalog is the one of the `iceberg` sink of the config, or the one of its Iceberg target or source when it has no
+such sink, and the tables are in the namespace of the sink, which is `_ldp` unless the sink names another. A table that is not
+there is skipped, and the command creates no table.
+
+It does three things to each table, in this order.
+
+1. It deletes the rows older than `--keep-days` days, which is 90 unless you give another number. The days are whole UTC
+   days. A row goes when it is before the start of the day that holds the moment N days back, so at least N days stay and at
+   most one day more. Every `_ldp` table is partitioned by `day(ts)`, so the delete drops whole data files from the table and
+   rewrites none.
+2. It expires the snapshots committed more than `--expire` days ago, which is 7 unless you give another number, and it keeps
+   the last `--retain-last` snapshots of the table, which is 20 unless you give another number. The snapshots of a table that
+   gets a commit every 15 minutes are what make its metadata large.
+3. It finds the orphan files, which are the files under the table that no snapshot names and that are older than
+   `--orphan-age-hours`, 72 unless you give another number, and with `--apply` it deletes them. This step is what brings files
+   off the disk, because a delete and an expiry change the table and nothing else.
+
+Given `--expire` alone it does the first two, and given `--orphans` alone it does the first and the third, as `ldp maintain`
+does for a table. It can run while `ldp monitor` does. A delete or an expiry that meets a commit made at the same moment plans
+again, up to 3 times, and a file that is younger than `--orphan-age-hours` is never an orphan.
+
+The files of the days that went do not leave the disk at the delete. Dropping a file from a table does not remove it, and
+three things keep it. The snapshots from before the delete name it, and the snapshot of the delete names it as a deleted
+entry, so it stays until they expire. Then the last 50 metadata versions of the table still name those snapshots, so it
+stays for 50 more commits, which is `--keep-metadata-versions`. Only after that is it an orphan. With a weekly run and
+`ldp monitor` every 15 minutes, 50 commits take half a day, so a file leaves at the first run after its snapshots have
+expired, which is two or three weekly runs after the delete. The table is smaller from the delete on, and the disk follows.
+A dry run cannot show the files that a later run will free, and it can list one snapshot fewer than a real run expires,
+because the delete is a snapshot of its own.
+
+| Exit | Meaning |
+|---|---|
+| 0 | the tables were trimmed, or the dry run was printed |
+| 1 | `ldp` itself failed, such as a config that has no Iceberg catalog, or a file could not be deleted |
+
+Rows older than the cutoff are gone from `ldp runs`, from `ldp status` and from the baselines of the monitors. The volume
+change needs 3 earlier runs of a pipeline in `_ldp.runs`, as [the volume monitor](#volume) says, so a `--keep-days` that
+holds fewer than 4 runs of the slowest pipeline leaves its `volume.change` at `unknown`. The last line of
+[the status screen](#the-status-screen) says how far back the history goes, so a trim shows there.
+
+```python
+from local_data_platform.maintenance.cli import run_system_maintenance
+
+report = run_system_maintenance("config/orders.json", keep_days=90)
+for name, table in report["tables"].items():
+    if table["exists"]:
+        print(name, table["delete"]["rows_deleted"], "rows are before", report["cutoff"])
+```
+
+`run_system_maintenance` is a dry run until it gets `apply=True`, and it returns what `--json` prints.
+
 ## The status screen
 
 `ldp status` shows every pipeline of a folder on one screen, so that ten pipelines on a laptop take one command to look at
