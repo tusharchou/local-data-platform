@@ -17,6 +17,7 @@ A modern, modular, and developer-friendly platform for local data engineering, a
 - [Warehousing](warehousing.md): from Excel and CSV exports to dbt-tested Iceberg tables, with churn and time travel.
 - [Orchestration](orchestration.md) runs the restaurant's nightly drops by window, with workflow files, backfills, retries, a laptop scheduler and Airflow.
 - [Gold layer](gold.md) publishes the restaurant's gold tables with an owner, a meaning and a gate, cuts releases, defines metrics and hands the tables to people as a page, an Excel file and a DuckDB file.
+- [Monitoring](monitoring.md) watches the restaurant's orders against an SLA, tells a person once when a monitor changes state and again when it recovers, shows every pipeline on one screen, and looks every 15 minutes from cron or launchd.
 - [v0.1.1 hardening contract](design/v0_1_1.md): what each module does.
 - [Roadmap](roadmap.md) lists the milestones from 0.1.5 to 0.2.0 and what each one adds.
 
@@ -64,7 +65,7 @@ from new `ldp` subcommands (`ldp catalog test`, `ldp schema`, `ldp plan`, `ldp r
 | [Spark (experimental)](spark.md) | The Scala Spark job and the PySpark engine on the same catalog |
 
 Most have a demo. These are `make demo-robotics`, `make demo-agent`, `make demo-warehouse`,
-`make demo-orchestration`, `make demo-gold`, `make demo-spark` and `make demo-rest`. `make demo-all` runs them all.
+`make demo-orchestration`, `make demo-gold`, `make demo-monitor`, `make demo-spark` and `make demo-rest`. `make demo-all` runs them all.
 `demo-warehouse` and `demo-gold` need the `dbt` and `excel` extras, and the two JVM demos need
 [scala-cli](https://scala-cli.virtuslab.org).
 

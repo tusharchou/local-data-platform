@@ -16,7 +16,7 @@ This is the `warehouse` layer. It is the first layer of an example that the late
 `--layer` runs one layer, and the layers that it needs first. Without the `dbt` or the `excel`
 extra, `run.py` says which one to install and exits with 1. The design is in [PRD.md](PRD.md), and the
 [warehousing guide](../../docs/warehousing.md) does the same steps by hand with the `ldp` commands. The second layer,
-`orchestration`, is [below](#the-orchestration-layer), and the third, `gold`, is [below that](#the-gold-layer). The [gold layer guide](../../docs/gold.md) does the steps of the third layer by hand.
+`orchestration`, is [below](#the-orchestration-layer), and the third, `gold`, is [below that](#the-gold-layer). The [gold layer guide](../../docs/gold.md) does the steps of the third layer by hand. The fourth, `monitoring`, is [after that](#the-monitoring-layer), and the [monitoring guide](../../docs/monitoring.md) does its steps by hand.
 
 ## What happens
 
@@ -352,6 +352,52 @@ orders table. A day that a gate holds back cuts no release, so the readers of th
 
 The [gold layer guide](../../docs/gold.md) does the same steps by hand with the `ldp` commands. It adds the contract of a gold table, a gate that holds a release back, the catalog, the metrics file, the files for people and an agent that reads only the gold tables.
 
+## The monitoring layer
+
+```bash
+python examples/restaurant/run.py --workdir ldp_demo/restaurant --layer monitoring   # or: make demo-monitor
+```
+
+The fourth layer watches the orders through five nights, the way a monitor on a laptop would. It needs no extra. The
+revenue step reads a gold table, so it runs when the `dbt` extra is installed and prints a skip line when it is not, and
+every other step runs on the raw orders. It takes about 15 seconds with dbt and about a second without it. The committed
+orders config stays as it is for the other layers, and the copy in the work folder gets the SLA, an `iceberg` and a
+`jsonl` sink, and a file that the alerts go to. Every normal night repeats the first 8 orders of the first week of
+August on a new date, so each number is easy to follow, and `--now` plays the clock. `python examples/restaurant/generate.py
+--out exports --monitoring` writes the same nights as files, for the guide.
+
+| Step | What the platform does | Where |
+|---|---|---|
+| 1. The SLA | The orders are late after 26 hours and too late after 48, short under 5 rows, a warning for any change of columns, and in error for a day of revenue under 1000 | `config/orders.json` of the work folder |
+| 2. A late table | The night of 3 August loads. `ldp monitor --now` 50 hours after its newest order reports a freshness error with exit status 2 and writes one alert | `.ldp/alerts.jsonl` |
+| 3. A short batch | 6 August has 3 orders where a normal night has 8. The freshness alert is resolved, and `volume.rows` is an error | |
+| 4. A new column | From 7 August the file has a `discount` column. The volume alert is resolved, and `schema` is a warning | |
+| 5. A revenue drop | 8 August has the right orders at a tenth of the amounts. The load is the right size, so only `metric.revenue.value` is an error. The schema warning is resolved | `config/metrics.json` |
+| 6. A fresh night | 9 August is normal again. The revenue alert is resolved, and a second look five minutes later sends nothing | |
+| 7. One screen | `ldp status` shows every pipeline, and `--html` writes the same screen as a page | `status.html` |
+
+With dbt it ends with this summary. Without dbt the metric column says `-`, the fourth look exits with 0, and there are 6
+alerts in place of 8.
+
+```text
+   look  at                    after                      exit  freshness  volume  schema  metric   alerts
+   ----  --------------------  -------------------------  ----  ---------  ------  ------  -------  ------
+      1  2026-08-05T21:34:26Z  a normal day                  2  error      ok      ok      unknown       1
+      2  2026-08-07T06:00:00Z  a short day                   2  ok         error   ok      ok            2
+      3  2026-08-08T06:00:00Z  a day with a new column       0  ok         ok      warn    ok            2
+      4  2026-08-09T06:00:00Z  a day with a revenue drop     2  ok         ok      ok      error         2
+      5  2026-08-10T06:00:00Z  a fresh day                   0  ok         ok      ok      ok            1
+      6  2026-08-10T06:05:00Z  a second look                 0  ok         ok      ok      ok            0
+```
+
+`ldp status` runs with `--now` in the past, so it leaves out the run events that the demo wrote when you ran it, and
+`last_run` is empty. With the clock and the data of a real night it shows them. Set `LDP_SLACK_WEBHOOK` to a Slack
+incoming webhook and the same alerts reach Slack too.
+
+The [monitoring guide](../../docs/monitoring.md) does the same steps by hand with the `ldp` commands. It adds the reference
+for each monitor, the history, the status screen, a cron and a launchd recipe that looks every 15 minutes, a Healthchecks.io
+heartbeat, and what a monitor on a laptop cannot do.
+
 ## Files
 
 | Path | What it is |
@@ -365,7 +411,7 @@ The [gold layer guide](../../docs/gold.md) does the same steps by hand with the 
 | `PRD.md` | The product requirements, and the tables of the example |
 
 The work folder gets `landing/`, `warehouse/`, `config/`, `dbt/`, `workflows/`, `drops/` and `out/`, `.ldp/` when a scheduler
-ticks, and a marker file. `run.py` clears those folders on each run, and refuses a folder that it did not create.
+ticks or a monitor sends an alert, `status.html` when the monitoring layer ends, and a marker file. `run.py` clears those folders on each run, and refuses a folder that it did not create.
 
 ## Tests
 
@@ -376,3 +422,5 @@ runs it) and checks the numbers above, a batch with a duplicate order, `ldp dbt 
 `dbt` job, and `tests/test_docs_orchestration.py` runs every command of the orchestration guide.
 `tests/test_restaurant_gold.py` runs the gold layer with dbt, and checks the blocked batch, the row counts, every gold
 gate, the release and the metrics against numbers that it works out in plain Python from the generated data.
+`tests/test_restaurant_monitoring.py` runs the monitoring layer offline, without dbt in every job and with dbt in the `dbt`
+job, and checks every alert it sends, and `tests/test_docs_monitoring.py` runs every command of the monitoring guide.

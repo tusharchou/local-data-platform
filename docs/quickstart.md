@@ -241,7 +241,8 @@ their own `ldp` subcommands (`ldp --help` lists them).
 
 - From a clone of the repo, try the other demos: `make demo-robotics`, `make demo-agent`, `make demo-warehouse`
   (a restaurant chain modelled with dbt, needs the `dbt` and `excel` extras), `make demo-orchestration` (the same
-  restaurant's nightly drops run as a workflow, with a backfill and a scheduler tick), and, with
+  restaurant's nightly drops run as a workflow, with a backfill and a scheduler tick), `make demo-monitor` (the
+  orders watched through a late table, a short batch, a new column and a revenue drop, with alerts), and, with
   [scala-cli](https://scala-cli.virtuslab.org) installed, `make demo-spark` and `make demo-rest`.
 - Run the real-world examples in
   [`examples/`](https://github.com/tusharchou/local-data-platform/tree/main/examples): NEAR
