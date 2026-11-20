@@ -359,8 +359,8 @@ def test_the_helpers_read_a_count_line_and_change_a_channel_in_a_drop(tmp_path):
     assert run.change_channel(drop, "dine_in") == ("O1", "drive_thru")
 
 
-def test_an_unknown_layer_names_the_three_layers(tmp_path):
-    with pytest.raises(ValueError, match=r"the layers are \['warehouse', 'orchestration', 'gold'\]"):
+def test_an_unknown_layer_names_the_four_layers(tmp_path):
+    with pytest.raises(ValueError, match=r"the layers are \['warehouse', 'orchestration', 'gold', 'monitoring'\]"):
         run.run_restaurant(tmp_path / "work", layer="bronze", quiet=True)
 
 

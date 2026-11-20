@@ -475,7 +475,7 @@ def test_a_failing_ldp_step_ends_the_example_with_a_message_and_exit_1(tmp_path,
 
 def test_an_unknown_layer_is_refused(tmp_path):
     with pytest.raises(ValueError, match=r"unknown layer 'bronze'; the layers are "
-                                         r"\['warehouse', 'orchestration', 'gold'\]"):
+                                         r"\['warehouse', 'orchestration', 'gold', 'monitoring'\]"):
         run.run_restaurant(tmp_path / "work", layer="bronze", quiet=True)
     with pytest.raises(SystemExit):
         run.main(["--layer", "bronze"])

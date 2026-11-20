@@ -15,6 +15,14 @@ The orders arrive the way a restaurant system exports them, in dated batches:
 |  | schedule a load for each day. A line carries the ``order_ts`` of its order, so a window can pick a day's lines |
 | the first week of August | the same 30 orders as one file, which the gold layer loads, and a faulty version of that |
 |  | file, with a negative amount, a restaurant that does not exist and an order that is there twice |
+| five days of the monitoring story | a normal day of 8 orders, a short day of 3, a day with a new ``discount`` |
+|  | column, a day whose amounts are a tenth of what they should be, and a fresh normal day |
+
+The days of the monitoring story are not the days of the dataset. The dataset has between 1 and 7 orders a day, which is
+too uneven for a monitor to tell a short day from a quiet one, so each of these days repeats the same 8 orders, the
+first 8 of the first week of August, under new ids and on a new date. A day is then the same size every time, and the
+options of :func:`write_monitoring_day` change only what a story needs: how many orders it keeps, what the amounts are
+scaled to, and whether the file has a ``discount`` column.
 
 Each order has an ``updated_at``, the time the restaurant system last changed it, which tells the versions of an
 order apart. A model can load only what is new by taking an order it has no row for, or one that is newer than the
@@ -45,6 +53,12 @@ CHANNELS = (("dine_in", 0.5), ("takeaway", 0.25), ("delivery", 0.25))
 STATIC_FILES = ("restaurants.xlsx", "menu_items.csv", "customers.csv", "reviews.csv")
 UNKNOWN_RESTAURANT = "R99"
 """The restaurant of the order in the faulty batch that belongs to no restaurant."""
+MONITORING_ORDERS = 8
+"""How many orders a normal day of the monitoring story has: the first 8 orders of the first week of August."""
+DISCOUNT_COLUMN = "discount"
+"""The column that the restaurant system starts to export on the day with a new column."""
+DELIVERY_DISCOUNT = 0.1
+"""The discount of an order that was delivered. An order that was not has none."""
 
 RESTAURANTS = (
     ("R01", "Dosa Corner", "Bengaluru", "South Indian", dt.datetime(2023, 6, 1, 9, 0)),
@@ -85,6 +99,38 @@ class Fault:
     detail: str
 
 
+@dataclass(frozen=True)
+class MonitoringDay:
+    """A day of the monitoring story, and what is different about it.
+
+    Attributes:
+        day: The date of the orders.
+        story: What the day is for, in a few words.
+        orders: How many of the 8 orders of a normal day the day keeps. A day that keeps fewer is a short day.
+        amount_scale: What the amounts of the orders and of their lines are multiplied by, so a day whose amounts are a
+            tenth of what they should be has 0.1.
+        discount: Whether the file has a ``discount`` column, as the restaurant system sends it from the day that
+            it adds one.
+    """
+
+    day: dt.date
+    story: str
+    orders: int = MONITORING_ORDERS
+    amount_scale: float = 1.0
+    discount: bool = False
+
+
+MONITORING_DAYS = (
+    MonitoringDay(dt.date(2026, 8, 3), "a normal day"),
+    MonitoringDay(dt.date(2026, 8, 6), "a short day", orders=3),
+    MonitoringDay(dt.date(2026, 8, 7), "a day with a new column", discount=True),
+    MonitoringDay(dt.date(2026, 8, 8), "a day with a revenue drop", amount_scale=0.1, discount=True),
+    MonitoringDay(dt.date(2026, 8, 9), "a fresh day", discount=True),
+)
+"""The days of the monitoring story, in the order that they arrive. The nights of 4 and 5 August have no file, which is
+what makes the table late. A day keeps the ``discount`` column once the restaurant system has added it."""
+
+
 @dataclass
 class Dataset:
     """Every table of the example, as lists of dicts, built by :func:`generate`."""
@@ -120,6 +166,46 @@ class Dataset:
         """The lines of the orders of :meth:`week_orders`."""
         ids = {order["order_id"] for order in self.week_orders()}
         return [line for line in self.order_lines if line["order_id"] in ids]
+
+    def monitoring_orders(self, day: dt.date, orders: int = MONITORING_ORDERS,
+                          amount_scale: float = 1.0) -> tuple[list[dict], list[dict]]:
+        """The orders of a day of the monitoring story, and their lines.
+
+        The day repeats the first ``orders`` of the first 8 orders of the first week of August, which are real orders
+        of real customers and restaurants of the dataset, so the models and the checks that read them are satisfied.
+        Each gets a new id, ``M`` and the month, the day and its number, such as ``M080301``, and its time of day is on
+        ``day``. The amounts of the orders and the unit prices of their lines are multiplied by ``amount_scale``.
+
+        Args:
+            day: The date of the orders.
+            orders: How many of the 8 orders to keep, from 1.
+            amount_scale: What the amounts are multiplied by.
+
+        Returns:
+            The orders and their lines, as the rows of :data:`ORDER_COLUMNS` and :data:`LINE_COLUMNS`.
+
+        Raises:
+            ValueError: If ``orders`` is not from 1 to 8, or ``amount_scale`` is not above 0.
+        """
+        if not 1 <= orders <= MONITORING_ORDERS:
+            raise ValueError(f"a day keeps from 1 to {MONITORING_ORDERS} orders, got {orders}")
+        if not amount_scale > 0:
+            raise ValueError(f"amount_scale must be above 0, got {amount_scale}")
+        template = self.week_orders()[:MONITORING_ORDERS][:orders]
+        lines_of: dict[str, list[dict]] = {}
+        for line in self.week_order_lines():
+            lines_of.setdefault(line["order_id"], []).append(line)
+        rows, lines = [], []
+        for number, order in enumerate(template, start=1):
+            order_id = f"M{day:%m%d}{number:02d}"
+            placed = dt.datetime.combine(day, order["order_ts"].time())
+            rows.append({"order_id": order_id, "restaurant_id": order["restaurant_id"],
+                         "customer_id": order["customer_id"], "order_ts": placed, "channel": order["channel"],
+                         "total_amount": round(order["total_amount"] * amount_scale, 2),
+                         "updated_at": placed + (order["updated_at"] - order["order_ts"])})
+            lines += [{**line, "order_id": order_id, "unit_price": round(line["unit_price"] * amount_scale, 2)}
+                      for line in lines_of[order["order_id"]]]
+        return rows, lines
 
     def faulty_week(self) -> tuple[list[dict], list["Fault"]]:
         """The orders of :meth:`week_orders` as a restaurant system sends them on a bad day, and what is wrong.
@@ -448,6 +534,49 @@ def write_faulty_week(folder: str | Path, dataset: Dataset,
     return path, faults
 
 
+def write_monitoring_day(folder: str | Path, dataset: Dataset, day: "MonitoringDay | dt.date",
+                         orders_name: str = "orders.csv", lines_name: str = "order_lines.csv") -> tuple[Path, Path]:
+    """Write one day of the monitoring story as an orders file and an order lines file.
+
+    A normal day has 8 orders. A short day keeps fewer of them, a day whose amounts are a tenth of what they should be
+    has them scaled, and a day with a new column has ``discount`` after the other columns, which is 0.10 for an order
+    that was delivered and 0.00 for one that was not.
+
+    Args:
+        folder: Where the files go.
+        dataset: What :func:`generate` returned.
+        day: A :class:`MonitoringDay`, or a date, which is a normal day.
+        orders_name: The orders file. The monitoring layer lands every day as ``orders.csv``.
+        lines_name: The order lines file.
+
+    Raises:
+        ValueError: As :meth:`Dataset.monitoring_orders`.
+    """
+    story = day if isinstance(day, MonitoringDay) else MonitoringDay(day, "a normal day")
+    orders, lines = dataset.monitoring_orders(story.day, story.orders, story.amount_scale)
+    formats = {"order_ts": _stamp, "updated_at": _stamp, "total_amount": _money}
+    columns = ORDER_COLUMNS
+    if story.discount:
+        for order in orders:
+            order[DISCOUNT_COLUMN] = DELIVERY_DISCOUNT if order["channel"] == "delivery" else 0.0
+        columns, formats = (*ORDER_COLUMNS, DISCOUNT_COLUMN), {**formats, DISCOUNT_COLUMN: _money}
+    folder = Path(folder)
+    return (_write_csv(folder / orders_name, columns, orders, formats),
+            _write_csv(folder / lines_name, LINE_COLUMNS, lines, {"unit_price": _money}))
+
+
+def write_monitoring_days(folder: str | Path, dataset: Dataset) -> list[Path]:
+    """Write every day of :data:`MONITORING_DAYS` as ``monitor_orders_<day>.csv`` and ``monitor_order_lines_<day>.csv``.
+
+    The names differ from those of the drops, because three of these days are also days of the drops, with other orders.
+    """
+    written: list[Path] = []
+    for story in MONITORING_DAYS:
+        written += write_monitoring_day(folder, dataset, story, f"monitor_orders_{story.day.isoformat()}.csv",
+                                        f"monitor_order_lines_{story.day.isoformat()}.csv")
+    return written
+
+
 def write_all(folder: str | Path, dataset: Dataset) -> list[Path]:
     """Write the static tables, the two batches, and the drop of each day.
 
@@ -467,8 +596,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Write the synthetic restaurant chain's tables and order batches.")
     parser.add_argument("--out", required=True, help="the folder for the files")
     parser.add_argument("--seed", type=int, default=SEED, help=f"random seed (default {SEED})")
+    parser.add_argument("--monitoring", action="store_true",
+                        help="write the four small tables and the days of the monitoring story, and not the batches "
+                             "and the drops. The restaurants are an Excel workbook, as in the other layers")
     args = parser.parse_args(argv)
     dataset = generate(args.seed)
+    if args.monitoring:
+        written = [*write_static(args.out, dataset), *write_monitoring_days(args.out, dataset)]
+        print(f"Wrote {len(written)} files to {args.out}: the four small tables and {len(MONITORING_DAYS)} days of "
+              f"orders for the monitoring story, {MONITORING_ORDERS} orders on a normal day")
+        return 0
     written = write_all(args.out, dataset)
     print(f"Wrote {len(written)} files to {args.out}: {len(dataset.restaurants)} restaurants, "
           f"{len(dataset.customers)} customers, {len(dataset.orders)} orders in {len(dataset.batches())} batches, "

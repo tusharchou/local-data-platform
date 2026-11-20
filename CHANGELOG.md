@@ -6,7 +6,64 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
-Work towards 0.1.5 Monitoring, see `docs/roadmap.md`.
+Work towards 0.1.5 Monitoring, see `docs/roadmap.md`. A table can say how fresh, how big and how stable it should be,
+and which business number must stay above a floor. `ldp monitor` checks it between runs, an alert goes to Slack, a
+webhook or a file when a monitor changes state and again when it recovers, and `ldp status` shows every pipeline on one
+screen. Nothing needs a server, and a laptop can run it from cron or launchd. The guide is `docs/monitoring.md`, and
+`make demo-monitor` runs the example.
+
+### Added
+
+- SLA settings (#158). A config can say how fresh, how big and how stable its table should be in an optional
+  `metadata.sla` block, with a `freshness`, a `volume` and a `schema` section, and a `metrics` section that #162 adds.
+  A bad block is reported with its JSON path and the config does not load. `ldp schema` describes the block, `ldp plan`
+  prints it as one line, `Config.sla` returns it with its defaults applied, and the spec hash leaves it out, so editing
+  it changes nothing about a run.
+- `ldp monitor` and the freshness monitor (#159). `ldp monitor CONFIG` checks the SLA of a config, or of every dataset
+  config of a folder, and prints one line for each monitor. Freshness is the age of the table from the metadata of its
+  last commit, or from the newest value of `freshness.column`, which the data files carry as upper bounds, so no row is
+  scanned. Each look records its results in `_ldp.monitor_results` when the config has an `iceberg` sink, and in
+  `.ldp/monitor.jsonl` next to the config otherwise. The command writes to no table and creates no catalog.
+- The volume monitor (#160). `volume.rows` checks the rows of the latest published run against `min_rows` and
+  `max_rows`, and `volume.change` checks them against the median of the runs before it. The count of a run is its
+  `rows_written` in `_ldp.runs` or in the file of the `jsonl` sink, and a change needs 3 earlier runs.
+- The schema monitor (#161). It compares the columns of the table with the ones that the previous look kept, and the
+  columns of the source in the latest run with those of the run before it. It reports an added column, a removed column,
+  a wider type, another type and anything else that the fingerprint of the schema sees. `allow` keeps `added_column` and
+  `widened_type` fine, and `on_change` sets the status of any other change.
+- Metric monitors (#162). An entry of `metrics` names a metric of the `metrics.json` next to the config, or gives one
+  query that returns one number, and says at what `grain` to look at it. The monitor computes the latest complete period
+  from the current gold release and checks it against `min` and `max` and against the median of the periods before it. A
+  period with no rows, a NULL and too little history are `unknown`, and a metric that is not defined is an `error`.
+- Alerts (#163). A config lists channels in `metadata.observability.alerts`, which are a Slack incoming webhook, a JSON
+  webhook and a file, and one notifier, `local_data_platform.notify`, sends to them. `ldp monitor` sends an alert when a
+  monitor changes state, once for each change, and one when it recovers. A run that fails or that a quality check
+  blocks sends one too, and a `monitor.heartbeat` ping follows each look when a channel asks for it. `ldp alert test`
+  sends a test message to each channel. The URL of a channel is read from an environment variable that the config
+  names, and an alert has names, counts and times and never a row. The page is `docs/alerts.md`.
+- `ldp status` (#164). It prints one row for each pipeline of a config or a folder, the worst first, with its last run,
+  the age of its last success, its rows, what the four monitors say now, the checks that failed in the last 7 days and
+  its open alerts. It records no result and sends no alert. `--json` prints the rows, `--html FILE` writes one page that
+  needs no network, and `monitoring.status.rows` returns the rows to Python.
+- SLA status for agents (#165). `describe_table` of the MCP server gives the SLA verdict of a table, from the latest
+  results that `ldp monitor` stored, or from freshness worked out at that moment when it has none.
+- Retention for the history (#166). `ldp maintain CONFIG --system` trims `_ldp.runs`, `_ldp.quality_results`,
+  `_ldp.monitor_results` and `_ldp.audit`. It deletes the rows older than `--keep-days` days, which is 90 by default,
+  a whole UTC day at a time, then expires snapshots and finds orphan files, and it is a dry run unless `--apply` is
+  given.
+- The monitoring guide and `make demo-monitor` (#167). `docs/monitoring.md` is a chapter on the restaurant example
+  whose commands run in the test suite. It has a cron and a launchd recipe that looks every 15 minutes, a Healthchecks.io
+  heartbeat, and a plain account of what a monitor on a laptop cannot do. `make demo-monitor` runs
+  `examples/restaurant/run.py --layer monitoring`, which watches the orders through a late table, a short batch, a new
+  column and a revenue drop, resolves them with a fresh night and shows `ldp status`. `generate.py --monitoring` writes
+  the same nights as files, and `make demo-all` runs the demo.
+
+### Changed
+
+- Exit status 2 is the SLA breach, which `ldp monitor` reports when a monitor is in `error` (#159). It had been
+  reserved for this since 0.1.3.
+- `Config.from_json` keeps the file that it read in `source_path`, so that an alert can name the `ldp status` to run
+  (#163).
 
 ## [0.1.4] - 2026-10-28
 

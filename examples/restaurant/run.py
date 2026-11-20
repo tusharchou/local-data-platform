@@ -47,23 +47,49 @@ The ``gold`` layer turns the same tables into a data mart that people who are no
    ``config/metrics.json`` defines them.
 7. **For people.** An Excel file of the scorecard, one DuckDB file with every gold table, and a catalog page.
 
+The ``monitoring`` layer watches the orders the way a job that runs every morning would, and shows what each monitor
+says when something goes wrong and what the alerts say. It runs real ``ldp`` commands, and ``--now`` moves the clock of
+the monitors, so that nothing has to wait:
+
+1. **An SLA.** The orders config of the work folder gets ``metadata.sla``, the ``iceberg`` and ``jsonl`` sinks and a
+   file channel for alerts. A normal day is 8 orders. A table is late after 26 hours, too late after 48, short under 5
+   rows, and a day of revenue is too low under 1000.
+2. **A late table.** The night of 3 August is loaded, and nothing arrives for 4 and 5 August. ``ldp monitor`` with
+   ``--now`` 50 hours after the newest order reports a freshness error and exits with 2, and one alert is written to
+   ``.ldp/alerts.jsonl``.
+3. **A short batch.** The night of 6 August has 3 orders of 8. The table is fresh again, so the freshness alert is
+   resolved, and the volume monitor raises an error.
+4. **A new column.** 7 August has a ``discount`` column. The volume alert is resolved, and the schema monitor warns
+   once.
+5. **A revenue drop.** 8 August has all its orders at a tenth of their amounts. The metric monitor raises an error on
+   ``revenue``, which it reads from the gold tables. This step needs the ``dbt`` extra, and without it a skip line is
+   printed and the other steps run on the raw orders.
+6. **A fresh batch.** 9 August is normal, so the revenue alert is resolved, and a second ``ldp monitor`` has nothing to
+   send.
+7. **One screen.** ``ldp status`` and ``ldp status --html``.
+
+With ``LDP_SLACK_WEBHOOK`` set, the same alerts also go to that Slack webhook. Without it the layer is fully offline.
+
 Run it from anywhere::
 
     python examples/restaurant/run.py                              # workdir: examples/restaurant/data
     python examples/restaurant/run.py --workdir ldp_demo/restaurant --layer warehouse
     python examples/restaurant/run.py --workdir ldp_demo/restaurant --layer orchestration
     python examples/restaurant/run.py --workdir ldp_demo/restaurant --layer gold
+    python examples/restaurant/run.py --workdir ldp_demo/restaurant --layer monitoring
 
 The ``warehouse`` and ``gold`` layers need the ``dbt`` and ``excel`` extras:
 ``pip install "local-data-platform[dbt,excel]"``. Without them they say so and exit with 1. The ``orchestration`` layer
 needs neither. It loads the four small tables that it needs itself, and it runs the ``models`` and ``gold`` tasks when
-the ``dbt`` extra is installed and prints a skip line when it is not. ``--layer`` runs one layer and the layers that it
-needs first, which are none so far.
+the ``dbt`` extra is installed and prints a skip line when it is not. The ``monitoring`` layer needs neither either, and
+runs its revenue step when the ``dbt`` extra is installed. ``--layer`` runs one layer and the layers that it needs
+first, which are none so far.
 """
 
 import argparse
 import contextlib
 import csv
+import datetime as dt
 import importlib.util
 import io
 import json
@@ -85,6 +111,7 @@ from local_data_platform.exceptions import EngineNotFound
 from local_data_platform.format.iceberg.commit import commit_log
 from local_data_platform.gold import release as releases
 from local_data_platform.lake import open_lake
+from local_data_platform.monitoring.history import read_results
 from local_data_platform.pipeline.builders import iceberg_from_config
 from local_data_platform.pipeline.registry import create_pipeline
 
@@ -98,13 +125,14 @@ WORKDIR_FOLDERS = ("landing", "warehouse", "config", "dbt", "workflows", "drops"
 EXTRAS_HINT = 'pip install "local-data-platform[dbt,excel]"'
 DBT_HINT = 'pip install "local-data-platform[dbt]"'
 
-LAYERS = ("warehouse", "orchestration", "gold")
+LAYERS = ("warehouse", "orchestration", "gold", "monitoring")
 """The layers of the example, in order. Each milestone adds one."""
 
-LAYER_NEEDS = {"warehouse": (), "orchestration": (), "gold": ()}
+LAYER_NEEDS = {"warehouse": (), "orchestration": (), "gold": (), "monitoring": ()}
 """The layers that a layer runs first. None needs another: ``orchestration`` loads the four small tables it needs
-itself, so it runs without the dbt and excel extras that ``warehouse`` and ``gold`` need, and ``gold`` loads the raw
-tables itself, so that it shows the data mart and not the history of the warehouse."""
+itself, so it runs without the dbt and excel extras that ``warehouse`` and ``gold`` need, ``gold`` loads the raw
+tables itself, so that it shows the data mart and not the history of the warehouse, and ``monitoring`` loads the days
+of its own story."""
 
 RAW_LOADS = (("restaurants", "ExcelToIceberg", "overwrite"), ("customers", "CSVToIceberg", "overwrite"),
              ("menu_items", "CSVToIceberg", "overwrite"), ("reviews", "CSVToIceberg", "overwrite"),
@@ -303,19 +331,25 @@ class BuildFailed(RuntimeError):
     """``ldp dbt build`` exited with a failure, so nothing was published."""
 
 
-def dbt_build(workdir: Path) -> dict[str, Any]:
+def dbt_build(workdir: Path, select: tuple[str, ...] = ()) -> dict[str, Any]:
     """Run ``ldp dbt build`` on the example's project, and return what it did.
 
     dbt's own output is long, so it is captured, and a summary is returned: the models and the data tests that ran, how
     many passed, how long it took, and the models that were published, each with its write mode, its rows before and
     after, and its snapshot.
 
+    Args:
+        workdir: The work folder, which has the dbt project.
+        select: The dbt selection, such as ``("+gold_daily_sales",)``, for a build of part of the project. All of it
+            when empty.
+
     Raises:
         BuildFailed: If the build failed. Its message is what ``ldp`` printed.
     """
     project = workdir / "dbt"
     started = time.perf_counter()
-    done = subprocess.run([sys.executable, "-m", "local_data_platform.cli", "dbt", "build", str(project)],
+    selection = ["--select", *select] if select else []
+    done = subprocess.run([sys.executable, "-m", "local_data_platform.cli", "dbt", "build", str(project), *selection],
                           capture_output=True, text=True, check=False)
     seconds = round(time.perf_counter() - started, 1)
     if done.returncode != 0:
@@ -762,6 +796,259 @@ def run_gold(workdir: Path, dataset: Any, out: Narrator) -> dict[str, Any]:
     return summary
 
 
+# --------------------------------------------------------------------------- the monitoring layer
+
+UTC = dt.timezone.utc
+
+FRESHNESS = {"warn_after": {"count": 26, "period": "hour"}, "error_after": {"count": 48, "period": "hour"},
+             "column": "order_ts"}
+"""The freshness rule of the orders: late after 26 hours and too late after 48, by the newest ``order_ts``. The
+restaurant system exports every night, so a day without a file is 24 hours more."""
+
+ROWS_FLOOR = 5
+"""The fewest rows that a load of the orders may have. A normal night has 8 and a short one has 3."""
+
+REVENUE_FLOOR = 1000
+"""The least that a day of revenue may be. A normal day is 6330, the short day is 1950, and the day with a revenue drop
+is 633."""
+
+REVENUE_METRICS = ("revenue", "orders", "avg_ticket")
+"""The metrics of ``config/metrics.json`` that ``gold.gold_daily_sales`` answers. The folder holds the metrics file to
+the gold tables that exist, and the monitoring layer builds that one only."""
+
+ALERT_EVENTS = ["monitor.error", "monitor.warn", "monitor.resolved"]
+"""What the channels of the walkthrough are told: an error, a warning and a recovery. A warning is not sent by
+default."""
+
+ALERTS_PATH = "../.ldp/alerts.jsonl"
+"""The file channel, relative to the config folder, which puts it in ``<workdir>/.ldp``."""
+
+EVENTS_PATH = "../.ldp/events.jsonl"
+"""The ``jsonl`` sink, in the same folder."""
+
+SLACK_ENV = "LDP_SLACK_WEBHOOK"
+"""The environment variable that holds the Slack webhook, when there is one. A config never holds the URL."""
+
+DBT_SELECT = ("+gold_daily_sales", "stg_customers")
+"""What the walkthrough builds with dbt: the one gold table that the revenue reads, with the models it needs and the
+customers that its data tests check the orders against."""
+
+STALE_HOURS = 50
+"""How long after its newest order the table is looked at first, which is more than the 48 hours of its error."""
+
+LOOK_AT = dt.time(6, 0)
+"""The time of day, in UTC, of the look that follows a night's drop. It measures the day before."""
+
+LOOK_AGAIN = dt.timedelta(minutes=5)
+"""How long after the last look the second look is, which has nothing new to say."""
+
+MONITORS = ("freshness", "volume.rows", "schema", "metric.revenue.value")
+"""The results that the orders have, in the order that ``ldp monitor`` prints them."""
+
+
+def stamp(moment: dt.datetime) -> str:
+    """A moment as ``--now`` takes it: ISO 8601 in UTC to the second."""
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def monitoring_config(workdir: Path, *, revenue: bool) -> dict[str, Any]:
+    """Give the orders config of the work folder its SLA, its sinks and its channels, and return what was added.
+
+    The committed config stays as it is, so the other layers behave as before. The ``iceberg`` sink keeps the history
+    that the monitors read, the ``jsonl`` sink is the one the config had, and the file channel gets errors, warnings
+    and recoveries. With ``LDP_SLACK_WEBHOOK`` set, a Slack channel gets the same.
+
+    Args:
+        workdir: The work folder, whose ``config/orders.json`` is changed.
+        revenue: Whether the SLA also watches the revenue, which is read from a gold table that needs dbt.
+    """
+    path = workdir / "config" / "orders.json"
+    spec = json.loads(path.read_text())
+    sla: dict[str, Any] = {"freshness": FRESHNESS, "volume": {"min_rows": ROWS_FLOOR}, "schema": {"on_change": "warn"}}
+    if revenue:
+        sla["metrics"] = [{"metric": "revenue", "grain": "day", "min": REVENUE_FLOOR}]
+    channels: list[dict[str, Any]] = [{"type": "file", "path": ALERTS_PATH, "on": ALERT_EVENTS}]
+    if os.environ.get(SLACK_ENV):
+        channels.append({"type": "slack", "url_env": SLACK_ENV, "on": ALERT_EVENTS})
+    added = {"sla": sla, "observability": {"sinks": ["iceberg", {"type": "jsonl", "path": EVENTS_PATH}],
+                                           "alerts": channels}}
+    spec["metadata"].update(added)
+    path.write_text(json.dumps(spec, indent=2) + "\n")
+    return added
+
+
+def trim_metrics(config: Path) -> None:
+    """Keep the metrics file of the config folder to what ``gold.gold_daily_sales`` answers.
+
+    ``ldp gold build`` holds the metrics of a folder to the gold tables that exist, and this layer builds one.
+    """
+    path = config / "metrics.json"
+    spec = json.loads(path.read_text())
+    spec["semantic_models"] = [model for model in spec["semantic_models"] if model["name"] == "daily_sales"]
+    spec["metrics"] = [metric for metric in spec["metrics"] if metric["name"] in REVENUE_METRICS]
+    path.write_text(json.dumps(spec, indent=2) + "\n")
+
+
+def block_lines(added: dict[str, Any]) -> list[str]:
+    """The block that the orders config gained, one line for each of its sections, as it would sit in the file."""
+    lines = []
+    for key, value in added.items():
+        lines.append(f'"{key}": {{')
+        parts = list(value.items())
+        lines += [f'  "{name}": {json.dumps(part)}{"," if number < len(parts) else ""}'
+                  for number, (name, part) in enumerate(parts, start=1)]
+        lines.append("}" + ("," if key != list(added)[-1] else ""))
+    return lines
+
+
+def newest_order(dataset: Any, story: Any) -> dt.datetime:
+    """The newest ``order_ts`` of a day of the monitoring story, which is what its freshness is measured from."""
+    rows, _ = dataset.monitoring_orders(story.day, story.orders, story.amount_scale)
+    return max(row["order_ts"] for row in rows).replace(tzinfo=UTC)
+
+
+def alert_lines(path: Path) -> list[dict[str, Any]]:
+    """The alerts that the file channel has written, oldest first. None when the file is not there yet."""
+    if not path.is_file():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def refresh_gold(workdir: Path, out: Narrator) -> None:
+    """Load the lines of the night, build the gold table that the revenue reads, and cut a release of it."""
+    config = workdir / "config"
+    ingest(config, "order_lines")
+    build = dbt_build(workdir, DBT_SELECT)
+    out.say(f"   $ ldp dbt build {shown(workdir / 'dbt')} --select {' '.join(DBT_SELECT)}")
+    out.say(f"     {build['models']} models and {build['tests']} data tests: {build['passed']} of "
+            f"{build['models'] + build['tests']} passed, in {build['seconds']}s")
+    ldp(out, "gold", "build", config)
+
+
+def run_monitoring(workdir: Path, dataset: Any, out: Narrator) -> dict[str, Any]:
+    """Watch the orders through five nights, and say what each monitor and each alert does.
+
+    Returns:
+        The ``revenue`` step that ran or not, whether ``slack`` got the alerts too, a record of each of the ``looks``
+        (what it came after, its ``--now``, the exit status of ``ldp monitor``, what each monitor said, and the alerts
+        that it sent), every alert that the file channel got, the ``tables`` and the ``files`` that were written.
+    """
+    config, landing = workdir / "config", workdir / "landing"
+    orders, alerts = config / "orders.json", workdir / ".ldp" / "alerts.jsonl"
+    normal, short, column, drop, fresh = generate.MONITORING_DAYS
+    revenue = dbt_installed()
+    summary: dict[str, Any] = {"revenue": revenue, "slack": bool(os.environ.get(SLACK_ENV)), "looks": []}
+
+    def arrive(story: Any) -> None:
+        generate.write_monitoring_day(landing, dataset, story)
+        ldp(out, "run", orders)
+        if revenue:
+            refresh_gold(workdir, out)
+
+    def look(now: dt.datetime, after: str) -> dict[str, Any]:
+        before = len(alert_lines(alerts))
+        status, _ = ldp(out, "monitor", config, "--now", stamp(now), ok=(0, 2))
+        said = {result.monitor: result.status for result in read_results(Config.from_json(orders))
+                if result.evaluated_at == now}
+        sent = [{"event": alert["event"], "monitor": alert["monitor"]} for alert in alert_lines(alerts)[before:]]
+        record = {"after": after, "now": stamp(now), "exit": status, "statuses": said, "alerts": sent}
+        summary["looks"].append(record)
+        for alert in sent:
+            out.say(f"   alert: {alert['event']} {alert['monitor']}")
+        return record
+
+    def morning(story: Any) -> dt.datetime:
+        return dt.datetime.combine(story.day + dt.timedelta(days=1), LOOK_AT, tzinfo=UTC)
+
+    out.section("What a good orders table looks like: an SLA, a history and a channel for alerts")
+    added = monitoring_config(workdir, revenue=revenue)
+    out.say("   The orders config of the work folder gets four things: the SLA, the iceberg sink that keeps the")
+    out.say("   history the monitors read, the jsonl sink it had, and a file that the alerts go to. It gains this:")
+    for line in block_lines(added):
+        out.say(f"   {line}")
+    out.say("   A table is late after 26 hours and too late after 48, a load is short under 5 rows, a schema that")
+    out.say("   changes is a warning, and a day of revenue is too low under 1000. An alert says it once, when a")
+    out.say("   monitor changes state, and again when it recovers.")
+    if revenue:
+        trim_metrics(config)
+        out.say("   The revenue is the metric of config/metrics.json, read from the gold table gold_daily_sales. The")
+        out.say("   models that build it read four small tables, so they are loaded once:")
+        rows = load_dimensions(workdir, dataset)
+        out.table(rows)
+        summary["dimensions"] = {row["table"]: row["rows"] for row in rows}
+    else:
+        out.say("   The SLA has no entry for revenue, because the revenue is read from a gold table, and that")
+        out.say("   needs dbt.")
+
+    out.section("The night of 3 August arrives, and then nothing does")
+    out.say("   The restaurant system exports the orders of a day every night, 8 orders on a normal day. The file of")
+    out.say("   3 August lands, and the nights of 4 and 5 August bring nothing.")
+    arrive(normal)
+    stale = newest_order(dataset, normal) + dt.timedelta(hours=STALE_HOURS)
+    out.say(f"   The monitor looks at {stamp(stale)}, {STALE_HOURS} hours after the newest order. --now gives it that")
+    out.say("   time, and without it the monitor uses the clock.")
+    look(stale, normal.story)
+    out.say("   Exit status 2 says that a monitor is in error. It is a finding and not a failure of ldp, so a")
+    out.say("   scheduler does not retry it. The alert is in .ldp/alerts.jsonl, one line of JSON:")
+    out.table([{"event": alert["event"], "monitor": alert["monitor"], "status": alert["status"],
+                "previous_status": alert.get("previous_status"), "at": alert["at"]} for alert in alert_lines(alerts)])
+
+    out.section("A short batch: 3 orders where a normal night has 8")
+    out.say("   The night of 6 August arrives, and it is cut short. The look of the next morning finds the table fresh")
+    out.say("   again, so the freshness alert is resolved, and the load is under the 5 rows that min_rows asks for.")
+    arrive(short)
+    look(morning(short), short.story)
+
+    out.section("A new column: the export gains discount")
+    out.say("   From 7 August the file has a discount column. The load is normal in size, so the volume alert is")
+    out.say("   resolved. The schema monitor says that the table and the source gained a column. That is a warning")
+    out.say("   here, and a change is said once, by the look that first sees it.")
+    arrive(column)
+    look(morning(column), column.story)
+
+    out.section("A revenue drop: a normal night, at a tenth of the amounts")
+    if revenue:
+        out.say("   8 August has all its 8 orders, with every amount a tenth of what it should be, as if a price list")
+        out.say("   had been loaded with a decimal point in the wrong place. The load is the right size, so only the")
+        out.say("   revenue shows it. The metric monitor reads the revenue of the day before from the gold table, and")
+        out.say("   it is under 1000.")
+    else:
+        out.say(f"   Skipping the revenue step: dbt is not installed ({DBT_HINT}).")
+        out.say("   8 August loads as a normal night, and the schema monitor, which saw the new column the day before,")
+        out.say("   has nothing more to say.")
+    arrive(drop)
+    look(morning(drop), drop.story)
+
+    out.section("A fresh night, and a second look that has nothing to say")
+    if revenue:
+        out.say("   9 August is normal again. The revenue is back inside its limit, so its alert is resolved.")
+    else:
+        out.say("   9 August is normal again, and nothing changes state.")
+    arrive(fresh)
+    look(morning(fresh), fresh.story)
+    out.say("   The monitor looks again five minutes later. Nothing changed state, so it sends nothing.")
+    look(morning(fresh) + LOOK_AGAIN, "a second look")
+    if summary["slack"]:
+        out.say(f"   {SLACK_ENV} is set, so the same alerts were posted to that Slack webhook.")
+
+    out.section("One screen for every pipeline: ldp status")
+    at = morning(fresh) + 2 * LOOK_AGAIN
+    out.say("   ldp status shows every pipeline of the folder on one screen, the worst first. It records nothing and")
+    out.say("   sends no alert. The configs with no SLA say so.")
+    ldp(out, "status", config, "--now", stamp(at))
+    page = workdir / "status.html"
+    ldp(out, "status", config, "--now", stamp(at), "--html", page)
+    out.say("   last_run is empty because the runs of this walkthrough were written when you ran it, and --now says")
+    out.say("   that it is 10 August, so they are still to come. With the clock and the data of a real night they are")
+    out.say("   there.")
+
+    table = iceberg_from_config(Config.from_json(orders), "target")
+    summary["alerts"] = alert_lines(alerts)
+    summary["files"] = {"alerts": str(alerts), "status": str(page)}
+    summary["tables"] = {"raw.orders": {"rows": table.row_count(), "snapshots": len(table.snapshots())}}
+    return summary
+
+
 # --------------------------------------------------------------------------- the walkthrough
 
 
@@ -795,14 +1082,15 @@ def run_restaurant(workdir: str | Path = DEFAULT_WORKDIR, *, layer: str = "wareh
     dataset = generate.generate(seed)
     out.say({"orchestration": "Restaurant chain -> a workflow that runs every night",
              "gold": "Restaurant chain -> a data mart that people who are not engineers can use",
+             "monitoring": "Restaurant chain -> monitors that raise alerts, and one screen of health",
              "warehouse": "Restaurant chain -> Iceberg warehouse with dbt"}[layer] + f", in {shown(workdir)}")
     out.say(f"{len(dataset.restaurants)} restaurants, {len(dataset.customers)} customers, "
             f"{len(dataset.orders)} orders in {len(dataset.batches())} batches, January to August 2026 (seed {seed}). "
             f"This run: layer {layer}.")
     summary: dict[str, Any] = {"workdir": str(workdir), "layer": layer, "seed": seed}
     for name in layers:
-        summary[name] = {"warehouse": run_warehouse, "orchestration": run_orchestration,
-                         "gold": run_gold}[name](workdir, dataset, out)
+        summary[name] = {"warehouse": run_warehouse, "orchestration": run_orchestration, "gold": run_gold,
+                         "monitoring": run_monitoring}[name](workdir, dataset, out)
     summary["duration_s"] = round(time.perf_counter() - started, 1)
 
     out.section("Summary")
@@ -814,6 +1102,16 @@ def run_restaurant(workdir: str | Path = DEFAULT_WORKDIR, *, layer: str = "wareh
                     f"ldp backfill {shown(workdir / 'workflows' / 'daily_orders.json')} --from {generate.DROP_DAYS[0]} "
                     f"--to {generate.DROP_DAYS[4]} --dry-run",
                     f"ldp schedule install --print launchd {shown(workdir)}")
+    elif layer == "monitoring":
+        out.table([{"look": number, "at": look["now"], "after": look["after"], "exit": look["exit"],
+                    **{monitor.split(".")[0]: look["statuses"].get(monitor, "-") for monitor in MONITORS},
+                    "alerts": len(look["alerts"])} for number, look in enumerate(summary["monitoring"]["looks"], 1)])
+        out.say(f"   finished in {summary['duration_s']}s. Try these next:")
+        commands = (f"ldp status {shown(config)} --now {summary['monitoring']['looks'][-1]['now']}",
+                    f"ldp monitor {shown(config)} --now {summary['monitoring']['looks'][-1]['now']} --json",
+                    f"ldp alert test {shown(config / 'orders.json')}",
+                    f"ldp maintain {shown(config / 'orders.json')} --system",
+                    f"ldp mcp --config {shown(config)}")
     elif layer == "gold":
         out.table([{"table": name, **info} for name, info in summary["gold"]["tables"].items()])
         out.say(f"   finished in {summary['duration_s']}s. Try these next:")

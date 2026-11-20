@@ -10,8 +10,12 @@ import ast
 import datetime as dt
 import importlib
 import importlib.util
+import json
 import re
 import shutil
+import socket
+import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -23,6 +27,7 @@ import pytest
 from local_data_platform import Config
 from local_data_platform.format.iceberg import Iceberg
 from local_data_platform.spec import DEFAULT_KIND, kind_of_file
+from tests.support import load_example_module
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = REPO_ROOT / "examples"
@@ -206,6 +211,54 @@ def test_nyc_example_runs_offline_on_a_synthetic_month(tmp_path):
     assert exported.rows_written == 40
     csv = pa_csv.read_csv(example / "data" / "exports" / "nyc_yellow_taxi_rides.csv")
     assert csv.num_rows == 40
+
+
+def test_the_monitoring_layer_of_the_restaurant_example_runs_offline_and_raises_and_resolves_its_alerts(
+        tmp_path, monkeypatch, capsys):
+    """``run.py --layer monitoring`` without dbt: a late table, a short batch and a new column, with no connection."""
+    run = load_example_module("example_restaurant_run", EXAMPLES / "restaurant" / "run.py")
+    monkeypatch.setattr(run, "dbt_installed", lambda: False)
+    monkeypatch.delenv("LDP_SLACK_WEBHOOK", raising=False)
+
+    def refuse(self, address):
+        raise AssertionError(f"the example opened a connection to {address}")
+
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+
+    status = run.main(["--workdir", str(tmp_path / "ldp_demo" / "restaurant"), "--layer", "monitoring"])
+
+    out = capsys.readouterr().out
+    assert status == 0
+    alerts = tmp_path / "ldp_demo" / "restaurant" / ".ldp" / "alerts.jsonl"
+    events = [(line["event"], line["monitor"]) for line in map(json.loads, alerts.read_text().splitlines())]
+    assert events == [
+        ("monitor.error", "freshness"),
+        ("monitor.resolved", "freshness"), ("monitor.error", "volume.rows"),
+        ("monitor.resolved", "volume.rows"), ("monitor.warn", "schema"),
+        ("monitor.resolved", "schema")]
+    assert "Skipping the revenue step: dbt is not installed" in out
+    assert (tmp_path / "ldp_demo" / "restaurant" / "status.html").is_file()
+    assert out.count("Alerts sent to file") == 4, "the fresh night and the second look had nothing to send"
+
+
+@pytest.mark.dbt
+def test_the_revenue_step_of_the_monitoring_layer_reads_the_gold_table_and_raises_and_resolves_its_alert(
+        tmp_path, network_trap):
+    """The same script with dbt: the revenue of a day with a revenue drop is an error, and a fresh day resolves it."""
+    environment, connections = network_trap
+    work = tmp_path / "ldp_demo" / "restaurant"
+
+    done = subprocess.run([sys.executable, str(EXAMPLES / "restaurant" / "run.py"), "--workdir", str(work),
+                           "--layer", "monitoring"], capture_output=True, text=True, env=environment, cwd=tmp_path)
+
+    assert done.returncode == 0, done.stderr
+    assert connections == []  # not one request to a proxy, so dbt and ldp stayed offline
+    assert "revenue for day 2026-08-08 was 633, below the 1000 that min asks for" in done.stdout
+    assert "revenue for day 2026-08-09 was 6330, inside the limits" in done.stdout
+    events = [(line["event"], line["monitor"])
+              for line in map(json.loads, (work / ".ldp" / "alerts.jsonl").read_text().splitlines())]
+    assert {("monitor.error", "metric.revenue.value"), ("monitor.resolved", "metric.revenue.value")} <= set(events)
+    assert len(events) == 8
 
 
 @pytest.mark.parametrize(
