@@ -6,11 +6,15 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
-Work towards 0.1.5 Monitoring, see `docs/roadmap.md`. A table can say how fresh, how big and how stable it should be,
+Work towards 0.1.6 Business Intelligence Reporting Dashboarding, see `docs/roadmap.md`.
+
+## [0.1.5] - 2026-11-20
+
+Milestone 0.1.5 Monitoring, see `docs/roadmap.md`. A table can say how fresh, how big and how stable it should be,
 and which business number must stay above a floor. `ldp monitor` checks it between runs, an alert goes to Slack, a
 webhook or a file when a monitor changes state and again when it recovers, and `ldp status` shows every pipeline on one
 screen. Nothing needs a server, and a laptop can run it from cron or launchd. The guide is `docs/monitoring.md`, and
-`make demo-monitor` runs the example.
+`make demo-monitor` runs the example. The release tag for this version is `v0.1.5`.
 
 ### Added
 

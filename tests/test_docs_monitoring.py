@@ -262,7 +262,8 @@ def test_the_makefile_help_lists_demo_monitor_and_demo_all_runs_it():
 
 def test_the_changelog_lists_the_milestone():
     changelog = (REPO_ROOT / "CHANGELOG.md").read_text()
-    section = changelog.split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
+    # under Unreleased until the release pull request, and under its own version after it
+    section = changelog.split("Milestone 0.1.5 Monitoring", 1)[1].split("\n## [", 1)[0]
 
     for number in range(158, 168):  # the pull requests of the milestone
         assert f"#{number}" in section, number
