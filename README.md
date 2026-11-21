@@ -10,10 +10,14 @@ It's for learning how a lakehouse works, for building and testing pipelines loca
 for cloud infrastructure, and for giving agents and notebooks safe, reproducible access to the
 tables you build.
 
-> **Status.** This is version 0.1.4, the Self Serving Gold Layer milestone. It adds gold tables that
-> carry an owner, a meaning and a description of every column, `ldp gold build` and one release of all
-> the gold tables, `ldp gold list`, `show` and `docs` as a catalog, metrics defined once in
-> `metrics.json`, and Excel, CSV and DuckDB files for people (see [Gold layer](#gold-layer)), with a
+> **Status.** This is version 0.1.5, the Monitoring milestone. It adds an SLA in the config of a table,
+> `ldp monitor` with freshness, volume, schema and metric monitors, alerts to Slack, a webhook or a file
+> when a monitor changes state and when it recovers, `ldp status` as one screen for every pipeline, the
+> SLA verdict of a table for agents in `ldp mcp`, and `ldp maintain --system` to keep the `_ldp` history
+> small (see [Monitoring](#monitoring)), with a [guide](docs/monitoring.md). Version 0.1.4 added gold
+> tables that carry an owner, a meaning and a description of every column, `ldp gold build` and one
+> release of all the gold tables, `ldp gold list`, `show` and `docs` as a catalog, metrics defined once
+> in `metrics.json`, and Excel, CSV and DuckDB files for people (see [Gold layer](#gold-layer)), with a
 > [guide](docs/gold.md). Version 0.1.3 added windows and idempotency keys to `ldp run`, workflow files
 > with `ldp workflow plan` and `ldp workflow run`, `ldp backfill`, retries, `ldp schedule` for cron and
 > launchd, and an Airflow 3 operator (see [Orchestration](#orchestration)), with a
@@ -33,7 +37,7 @@ tables you build.
 `ldp` needs Python 3.12 or newer. Install it from PyPI, preferably in a virtual environment:
 
 ```bash
-pip install "local-data-platform[duckdb]>=0.1.4"
+pip install "local-data-platform[duckdb]>=0.1.5"
 
 ldp demo --workdir ldp_demo
 ```
@@ -1465,16 +1469,22 @@ in each release, and the [contributing guide](docs/contributing.md) to get invol
   than one place, and says to give each place its own folder of configs.
 - **A metrics query reads one table.** `ldp metrics query` and the `query_metric` tool refuse metrics of two tables in one
   question, so ask for them in separate queries.
+- **A monitor looks at one moment, on a machine that is running.** A table that was late and was fixed between two looks
+  never alerts, and nothing alerts while the laptop is asleep or off. A heartbeat to an outside service such as
+  Healthchecks.io is the only cover, and the [monitoring guide](docs/monitoring.md) says how to set it up.
+- **A change is measured against the median of the periods before it.** It needs 3 earlier values and has no sense of the
+  weekday, so a business that is busier at weekends needs a wide `max_change_pct`, or a `min` and a `max`.
+- **A local catalog keeps its history on one machine.** Two machines that look at the same table each keep a history of
+  their own, and each one alerts.
 
 ## Roadmap
 
 From 0.1.1 on, the package version equals the milestone number. Each milestone adds the next layer
-of a data platform, and every layer runs on a laptop first. 0.1.4 Self Serving Gold Layer is released, and these
+of a data platform, and every layer runs on a laptop first. 0.1.5 Monitoring is released, and these
 are the milestones after it:
 
 | Version | Milestone | What it adds |
 |---|---|---|
-| 0.1.5 | Monitoring | SLAs, freshness, volume, schema and metric monitors, alerts and `ldp status` |
 | 0.1.6 | Business Intelligence Reporting Dashboarding | Offline HTML reports, Slack delivery, a live dashboard and BI tool recipes |
 | 0.1.7 | Data Science Insights | Churn, retention, funnels, sessions, training sets and a notebook |
 | 0.1.8 | LLM | Catalog search and `ldp ask`, text to SQL that corrects itself |

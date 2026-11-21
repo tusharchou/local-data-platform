@@ -15,7 +15,7 @@ from .config import Config
 from .exceptions import EngineNotFound, PipelineNotFound, TableNotFound
 from .paths import resolve_path
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 
 Transaction = namedtuple("Transaction", ["query", "desc"])
 

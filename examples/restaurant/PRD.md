@@ -93,7 +93,7 @@ one layer. This table says which feature of the requirements above each mileston
 | 0.1.2 Warehousing | `warehouse` | The exports load into raw Iceberg tables, dbt models are tested and published as versioned tables, and churn is counted by month, with late orders and time travel | Data collection, data storage |
 | 0.1.3 Orchestration | `orchestration` | The nightly drops run as a workflow, with windows, a backfill that stops at a bad row and resumes, retries and a scheduler | Scheduling |
 | 0.1.4 Self Serving Gold Layer | `gold` | The data mart (#97). The gold tables have an owner, a meaning and a gate, they publish together as a release, and the metrics are defined once. A faulty batch is stopped before it is written, and the tables reach people as an Excel file, a DuckDB file and a catalog page. The scheduled refresh is the `gold` task of `workflows/daily_orders.json` | Validation, metadata management, key metrics |
-| 0.1.5 Monitoring | | Alerts when a table is late, short or changed in shape, and when sales drop without a reason | Anomaly alerts, pipeline health |
+| 0.1.5 Monitoring | `monitoring` | The orders table carries an SLA, and `ldp monitor` checks it between runs. A late table, a short batch, a new column and a day of low revenue each raise an alert, a fresh night resolves them, and `ldp status` shows every pipeline on one screen | Anomaly alerts, pipeline health |
 | 0.1.6 Business Intelligence Reporting Dashboarding | | Daily and weekly reports to Slack, and dashboards over the gold tables | Slack reports, dashboards |
 
 The anomaly alerts and the Slack reports are issues of their own, in 0.1.5 and 0.1.6, and they link #97.

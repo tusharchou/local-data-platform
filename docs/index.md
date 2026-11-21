@@ -19,7 +19,16 @@ A modern, modular, and developer-friendly platform for local data engineering, a
 - [Gold layer](gold.md) publishes the restaurant's gold tables with an owner, a meaning and a gate, cuts releases, defines metrics and hands the tables to people as a page, an Excel file and a DuckDB file.
 - [Monitoring](monitoring.md) watches the restaurant's orders against an SLA, tells a person once when a monitor changes state and again when it recovers, shows every pipeline on one screen, and looks every 15 minutes from cron or launchd.
 - [v0.1.1 hardening contract](design/v0_1_1.md): what each module does.
-- [Roadmap](roadmap.md) lists the milestones from 0.1.5 to 0.2.0 and what each one adds.
+- [Roadmap](roadmap.md) lists the milestones from 0.1.6 to 0.2.0 and what each one adds.
+
+## New in 0.1.5
+
+0.1.5 adds monitoring. A config says in `metadata.sla` how fresh, how big and how stable its table should be, and which
+business number must stay above a floor. `ldp monitor` checks the table against it between runs, an alert goes to Slack,
+a webhook or a file when a monitor changes state and again when it recovers, and `ldp status` shows every pipeline on one
+screen, as text or as one page. `ldp mcp` gives an agent the SLA verdict of a table, and `ldp maintain --system` keeps
+the history small. The [monitoring guide](monitoring.md) walks through all of it on the restaurant's orders, with a cron
+and a launchd recipe that looks every 15 minutes, and every command in it runs in the tests.
 
 ## New in 0.1.4
 
