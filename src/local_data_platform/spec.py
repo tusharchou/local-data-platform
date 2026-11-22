@@ -54,7 +54,7 @@ API_VERSION = "ldp/v1"
 DEFAULT_KIND = "Pipeline"
 """The kind of a file that has no ``kind``: a dataset config."""
 
-RESERVED_KINDS = {"Report": "0.1.6", "Profiles": "0.2.0"}
+RESERVED_KINDS = {"Profiles": "0.2.0"}
 """Kinds that later milestones register through :func:`register_kind`, and the version that does."""
 
 TOP_LEVEL_KEYS = ("apiVersion", "kind", "identifier", "who", "what", "where", "when", "how", "metadata")
@@ -1136,6 +1136,29 @@ def _describe_metrics(spec: Mapping[str, Any]) -> dict[str, Any]:
     return describe_metrics(spec)
 
 
+def _validate_report(spec: Mapping[str, Any]) -> list[ConfigError]:
+    """The problems of a report file, which is the kind ``Report``.
+
+    The checks are in :mod:`local_data_platform.report.spec`, which is imported when it is needed. They read no table
+    and no file.
+    """
+    from local_data_platform.report.spec import validate_report
+
+    return validate_report(spec)
+
+
+def _report_schema() -> dict[str, Any]:
+    from local_data_platform.report.spec import report_schema
+
+    return report_schema()
+
+
+def _describe_report(spec: Mapping[str, Any]) -> dict[str, Any]:
+    from local_data_platform.report.spec import describe_report
+
+    return describe_report(spec)
+
+
 # ---------------------------------------------------------------------- plan
 
 
@@ -1418,9 +1441,9 @@ def _print_plan(item: Mapping[str, Any]) -> None:
                  ("apiVersion", item["api_version"])]
         if "tasks" in item:
             lines.append(("tasks", ", ".join(item["tasks"])))
-        for key in ("semantic_models", "metrics"):
-            if key in item:
-                lines.append((key, ", ".join(item[key])))
+        for key in ("semantic_models", "metrics", "queries", "blocks", "parameters", "timezone"):
+            if item.get(key):
+                lines.append((key, item[key] if isinstance(item[key], str) else ", ".join(item[key])))
         width = max(len(name) for name, _ in lines)
         for name, value in lines:
             print(f"{name.ljust(width)}  {value}", file=sys.stdout)
@@ -1490,6 +1513,7 @@ def add_cli(subparsers: Any, parents: Sequence[argparse.ArgumentParser] = ()) ->
 register_kind(DEFAULT_KIND, validate=_validate_pipeline, json_schema=json_schema)
 register_kind("Workflow", validate=_validate_workflow, json_schema=_workflow_schema, describe=_describe_workflow)
 register_kind("Metrics", validate=_validate_metrics, json_schema=_metrics_schema, describe=_describe_metrics)
+register_kind("Report", validate=_validate_report, json_schema=_report_schema, describe=_describe_report)
 
 __all__ = [
     "API_VERSION",

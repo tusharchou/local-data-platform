@@ -25,10 +25,11 @@ succeeds once external access is off), so the statement guard in
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -117,6 +118,8 @@ class _Registration:
     arrow_name: str | None = None
     aliases: list[str] = field(default_factory=list)
     checked_at: float = 0.0
+    snapshot_id: int | None = None
+    held: bool = False
 
 
 class DuckDBSandbox:
@@ -132,15 +135,19 @@ class DuckDBSandbox:
             first time). Off by default, so the server never downloads anything.
         memory_limit: Optional DuckDB ``memory_limit``, such as ``"2GB"``.
         threads: Optional DuckDB thread count.
+        timezone: The session time zone, an IANA name such as ``"Asia/Kolkata"``. DuckDB reads the day of a timestamp
+            with a time zone, and compares a timestamp without one with a timestamp with one, in this zone, so a query
+            gives the same answer whatever the time zone of the machine. By default it is the machine's.
 
     Raises:
         EngineNotFound: If ``duckdb`` is not installed.
+        ValueError: If ``timezone`` is not a time zone that DuckDB knows.
         RuntimeError: If ``native=True`` and the extension cannot load, or the lockdown
             settings do not read back as set.
     """
 
     def __init__(self, tables: Sequence[ExposedTable], *, native: bool | None = None, install_extensions: bool = False,
-                 memory_limit: str | None = None, threads: int | None = None):
+                 memory_limit: str | None = None, threads: int | None = None, timezone: str | None = None):
         self._duckdb = import_duckdb()
         config = dict(_CONNECT_CONFIG)
         if memory_limit:
@@ -148,6 +155,13 @@ class DuckDBSandbox:
         if threads:
             config["threads"] = int(threads)
         self._con = self._duckdb.connect(":memory:", config=config)
+        self._timezone = timezone
+        if timezone:
+            try:
+                self._con.execute(f"SET TimeZone = {quote_literal(timezone)}")
+            except self._duckdb.Error as error:
+                self._con.close()
+                raise ValueError(f"unknown time zone {timezone!r}: {_first_line(error)}") from error
         self._lock = threading.RLock()
         self._active = False
         self._timed_out = False
@@ -208,6 +222,8 @@ class DuckDBSandbox:
     def _bind(self, registration: _Registration, iceberg_table: Any) -> None:
         """Point ``registration``'s view at ``iceberg_table``'s current snapshot."""
         metadata_location = iceberg_table.metadata_location
+        current = iceberg_table.current_snapshot()
+        registration.snapshot_id = current.snapshot_id if current is not None else None
         if self.native_available and self._can_scan_natively(registration, iceberg_table):
             try:
                 self._con.execute(f"CREATE OR REPLACE VIEW {registration.sql_name} AS "
@@ -268,6 +284,10 @@ class DuckDBSandbox:
         expected = {"enable_external_access": "false", "lock_configuration": "true",
                     "autoinstall_known_extensions": "false", "autoload_known_extensions": "false",
                     "allow_persistent_secrets": "false", "allowed_configs": "[]", "allowed_paths": "[]"}
+        if self._timezone:
+            settings["TimeZone"] = self._con.execute(
+                "SELECT value FROM duckdb_settings() WHERE name = 'TimeZone'").fetchone()[0]
+            expected["TimeZone"] = self._timezone
         wrong = {name: settings.get(name) for name, value in expected.items() if settings.get(name) != value}
         if wrong:
             self._con.close()
@@ -301,6 +321,15 @@ class DuckDBSandbox:
         """Unqualified view names that also point at the table (its bare name, when unique)."""
         registration = self._registrations.get(identifier)
         return list(registration.aliases) if registration else []
+
+    def snapshot_of(self, identifier: str) -> int | None:
+        """The snapshot that the view of a table reads now.
+
+        It is the one :meth:`read_as_of` set, else the latest one when the view was last bound. ``None`` for a table
+        that has no snapshot yet and for one that is not registered.
+        """
+        registration = self._registrations.get(identifier)
+        return registration.snapshot_id if registration else None
 
     @property
     def identifiers(self) -> list[str]:
@@ -367,6 +396,30 @@ class DuckDBSandbox:
                 del self._pinned[other]
             return name
 
+    def read_as_of(self, identifier: str, snapshot_id: int) -> None:
+        """Make a table read one of its snapshots, under its own name.
+
+        :meth:`pin` makes a view of its own, and the SQL has to name it. This points the view that SQL already names,
+        such as ``gold.sales`` and the bare ``sales``, at the snapshot, so that a report reads the release that it was
+        asked for without a word of it in its SQL. :meth:`refresh` leaves the table there, and a table can be held at
+        one snapshot, because the next call to :meth:`pin` for the table drops the view that this one reads.
+
+        Args:
+            identifier: A registered table.
+            snapshot_id: A snapshot of it.
+
+        Raises:
+            KeyError: If the table is not registered.
+            QueryFailed: If the table has no such snapshot.
+        """
+        with self._lock:
+            self._check_open()
+            registration = self._registrations[identifier]
+            pinned = self.pin(identifier, snapshot_id)
+            self._con.execute(f"CREATE OR REPLACE VIEW {registration.sql_name} AS SELECT * FROM {pinned}")
+            registration.snapshot_id = int(snapshot_id)
+            registration.held = True
+
     def columns(self, sql_name: str) -> dict[str, str]:
         """The DuckDB type of each column of a table or a pinned view, by lower case name.
 
@@ -383,6 +436,65 @@ class DuckDBSandbox:
                 raise KeyError(sql_name)
             rows = self._con.execute(f"DESCRIBE SELECT * FROM {sql_name}").fetchall()
         return {str(row[0]).lower(): str(row[1]) for row in rows}
+
+    def parameters(self, sql: str) -> tuple[str, ...]:
+        """The names of the parameters that ``sql`` uses, sorted, after the statement guard has passed it.
+
+        ``$window_start`` is ``window_start``. A positional ``?`` or ``$1`` is its number, as ``"1"``, so a caller that
+        only takes named parameters can tell them apart.
+
+        Raises:
+            QueryRejected: If the SQL fails the statement guard.
+        """
+        with self._lock:
+            self._check_open()
+            return tuple(sorted(check_sql(sql, self._con).named_parameters))
+
+    def tables_in(self, sql: str) -> list[str] | None:
+        """The registered tables that ``sql`` reads, as identifiers in registration order.
+
+        DuckDB serializes the query, and every base table in it, in a subquery or a CTE too, is looked up as the name
+        of a table or as the bare name that points at one. The name of a CTE is not a table, unless it is also the name
+        of one, and then the query counts as a read of the table, which is the safe way to be wrong.
+
+        Returns:
+            The identifiers, or ``None`` when DuckDB cannot serialize the query, so a caller that has to be careful
+            can take every table to be read.
+
+        Raises:
+            QueryRejected: If the SQL fails the statement guard.
+        """
+        with self._lock:
+            self._check_open()
+            check_sql(sql, self._con)
+            try:
+                tree = json.loads(self._con.execute("SELECT json_serialize_sql(?)", [sql]).fetchall()[0][0])
+            except (self._duckdb.Error, ValueError, IndexError):
+                return None
+        if not isinstance(tree, dict) or tree.get("error"):
+            return None
+        named: set[tuple[str, str]] = set()
+
+        def walk(node: Any) -> None:
+            if isinstance(node, dict):
+                if node.get("type") == "BASE_TABLE":
+                    named.add((str(node.get("schema_name") or ""), str(node.get("table_name") or "")))
+                for child in node.values():
+                    walk(child)
+            elif isinstance(node, list):
+                for child in node:
+                    walk(child)
+
+        walk(tree)
+        by_alias = {alias: identifier for identifier, item in self._registrations.items() for alias in item.aliases}
+        found: set[str] = set()
+        for schema, name in named:
+            identifier = f"{schema}.{name}" if schema else ""
+            if identifier not in self._registrations:
+                identifier = by_alias.get(name, "") if schema in ("", "main") else ""
+            if identifier:
+                found.add(identifier)
+        return [identifier for identifier in self._registrations if identifier in found]
 
     # ------------------------------------------------------------------ run
 
@@ -402,6 +514,8 @@ class DuckDBSandbox:
             self._check_open()
             pending = sorted(self._registrations.values(), key=lambda item: item.checked_at)
             for index, registration in enumerate(pending):
+                if registration.held:  # read_as_of put it at a snapshot, and a newer commit is not what it should read
+                    continue
                 if deadline is not None and time.monotonic() >= deadline:
                     return stale + [item.table.identifier for item in pending[index:]]
                 registration.checked_at = time.monotonic()
@@ -415,15 +529,18 @@ class DuckDBSandbox:
                     stale.append(registration.table.identifier)
         return stale
 
-    def query(self, sql: str, *, max_rows: int, timeout_s: float, params: Sequence[Any] | None = None) -> QueryResult:
+    def query(self, sql: str, *, max_rows: int, timeout_s: float,
+              params: Sequence[Any] | Mapping[str, Any] | None = None) -> QueryResult:
         """Guard, run and fetch one query.
 
         Args:
             sql: The agent's SQL; it must pass :func:`~local_data_platform.mcp_server.guard.check_sql`.
             max_rows: Return at most this many rows.
             timeout_s: Interrupt the query after this many seconds.
-            params: Values for the ``$1``, ``$2`` and ``?`` placeholders of ``sql``. A value that is bound is data,
-                and never becomes part of the SQL.
+            params: Values for the placeholders of ``sql``. A sequence fills ``$1``, ``$2`` and ``?``. A mapping fills
+                named ones such as ``$window_start``, and has to hold a value for each name that ``sql`` uses and for
+                no other, which :meth:`parameters` lists. A value that is bound is data, and never becomes part of the
+                SQL.
 
         Returns:
             A :class:`QueryResult`.
@@ -448,7 +565,7 @@ class DuckDBSandbox:
                              timeout_s=timeout_s)
 
     def _run(self, statement: Any, *, max_rows: int, timeout_s: float,
-             params: Sequence[Any] | None = None) -> QueryResult:
+             params: Sequence[Any] | Mapping[str, Any] | None = None) -> QueryResult:
         duckdb = self._duckdb
         timer = threading.Timer(timeout_s, self._interrupt)
         timer.daemon = True
@@ -459,7 +576,7 @@ class DuckDBSandbox:
         reader = None
         try:
             if params:
-                self._con.execute(statement, list(params))
+                self._con.execute(statement, dict(params) if isinstance(params, Mapping) else list(params))
             else:
                 self._con.execute(statement)
             batch_rows = max(1, min(max_rows + 1, _BATCH_ROWS))

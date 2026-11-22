@@ -1,5 +1,5 @@
-"""The kind of a file: ``Pipeline`` (the default), ``Workflow`` and ``Metrics``, the registry that holds them, and the
-code that reads a folder of JSON files and has to tell them apart."""
+"""The kind of a file: ``Pipeline`` (the default), ``Workflow``, ``Metrics`` and ``Report``, the registry that holds
+them, and the code that reads a folder of JSON files and has to tell them apart."""
 
 import argparse
 import copy
@@ -83,13 +83,13 @@ def fresh_registry(monkeypatch):
 # --------------------------------------------------------------------------- what a file says it is
 
 
-def test_a_file_without_a_kind_is_a_pipeline_and_the_kinds_are_pipeline_workflow_and_metrics():
+def test_a_file_without_a_kind_is_a_pipeline_and_the_kinds_are_pipeline_workflow_metrics_and_report():
     assert DEFAULT_KIND == "Pipeline"
     assert kind_of(PIPELINE) == "Pipeline"
     assert kind_of(_with(PIPELINE, kind="Pipeline")) == "Pipeline"
     assert kind_of(WORKFLOW) == "Workflow"
     assert kind_of(Config.from_dict(PIPELINE)) == "Pipeline"
-    assert registered_kinds() == ["Pipeline", "Workflow", "Metrics"]
+    assert registered_kinds() == ["Pipeline", "Workflow", "Metrics", "Report"]
 
 
 def test_a_pipeline_has_the_same_spec_hash_with_and_without_its_kind(tmp_path):
@@ -106,14 +106,14 @@ def test_a_kind_in_the_wrong_case_fails_and_names_the_right_spelling(written, ri
     data = _with(PIPELINE, kind=written)
 
     assert _messages(data) == [f"kind: unknown kind {written!r}; did you mean {right!r}? Kind names are written "
-                               f"exactly as in ['Pipeline', 'Workflow', 'Metrics']"]
+                               f"exactly as in ['Pipeline', 'Workflow', 'Metrics', 'Report']"]
     with pytest.raises(ConfigError, match=f"did you mean {right!r}"):
         kind_of(data)
 
 
 def test_an_unknown_kind_lists_the_kinds_and_a_kind_must_be_a_string():
     assert _messages(_with(PIPELINE, kind="Banana")) == ["kind: unknown kind 'Banana'; the kinds are "
-                                                         "['Pipeline', 'Workflow', 'Metrics']"]
+                                                         "['Pipeline', 'Workflow', 'Metrics', 'Report']"]
     assert _messages(_with(PIPELINE, kind=5)) == ["kind: kind must be a string, got 5"]
     assert _messages(_with(PIPELINE, kind=["Pipeline"])) == ["kind: kind must be a string, got ['Pipeline']"]
 
@@ -122,7 +122,7 @@ def test_an_unknown_kind_lists_the_kinds_and_a_kind_must_be_a_string():
 def test_a_kind_that_a_later_milestone_adds_says_which_version_adds_it(name, version):
     assert _messages(_with(PIPELINE, kind=name)) == [
         f"kind: kind {name!r} is reserved for {version} and is not available yet. The kinds are "
-        f"['Pipeline', 'Workflow', 'Metrics']"]
+        f"['Pipeline', 'Workflow', 'Metrics', 'Report']"]
     assert f"did you mean {name!r}? That kind is reserved for {version}" in _messages(
         _with(PIPELINE, kind=name.lower()))[0]
 
@@ -259,10 +259,10 @@ def test_ldp_schema_with_a_kind_that_is_wrong_fails_with_a_hint(capsys):
     with pytest.raises(ConfigError, match="did you mean 'Workflow'"):
         _cli(["schema", "--kind", "workflow"])
     with pytest.raises(ConfigError,
-                       match=r"unknown kind 'Banana'; the kinds are \['Pipeline', 'Workflow', 'Metrics'\]"):
+                       match=r"unknown kind 'Banana'; the kinds are \['Pipeline', 'Workflow', 'Metrics', 'Report'\]"):
         _cli(["schema", "--kind", "Banana"])
-    with pytest.raises(ConfigError, match="reserved for 0.1.6"):
-        _cli(["schema", "--kind", "Report"])
+    with pytest.raises(ConfigError, match="reserved for 0.2.0"):
+        _cli(["schema", "--kind", "Profiles"])
 
 
 def test_the_pipeline_schema_accepts_the_kind_and_the_workflow_schema_is_valid():
@@ -287,15 +287,15 @@ def test_a_kind_that_a_module_registers_is_validated_planned_and_printed_like_th
         seen.append(spec["kind"])
         return [ConfigError("title: is required")] if "title" not in spec else []
 
-    register_kind("Report", validate=validate, json_schema=lambda: {"title": "report schema"},
+    register_kind("Dashboard", validate=validate, json_schema=lambda: {"title": "dashboard schema"},
                   describe=lambda spec: {"title": spec["title"]})
 
-    assert registered_kinds() == ["Pipeline", "Workflow", "Metrics", "Report"]
-    assert _messages({"kind": "Report"}) == ["title: is required"] and seen == ["Report"]
-    assert plan(_write(tmp_path, "r.json", {"kind": "Report", "title": "Sales"}))["title"] == "Sales"
-    assert kind_schema("Report") == {"title": "report schema"}
-    assert "Report" in _messages(_with(PIPELINE, kind="Banana"))[0]
-    assert kind_of_file(_write(tmp_path, "report.json", {"kind": "Report"})) == "Report"
+    assert registered_kinds() == ["Pipeline", "Workflow", "Metrics", "Report", "Dashboard"]
+    assert _messages({"kind": "Dashboard"}) == ["title: is required"] and seen == ["Dashboard"]
+    assert plan(_write(tmp_path, "r.json", {"kind": "Dashboard", "title": "Sales"}))["title"] == "Sales"
+    assert kind_schema("Dashboard") == {"title": "dashboard schema"}
+    assert "Dashboard" in _messages(_with(PIPELINE, kind="Banana"))[0]
+    assert kind_of_file(_write(tmp_path, "dashboard.json", {"kind": "Dashboard"})) == "Dashboard"
 
 
 def test_a_registered_kind_is_no_longer_reserved(fresh_registry):

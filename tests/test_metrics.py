@@ -252,7 +252,7 @@ def test_ldp_schema_prints_the_schema_of_a_metrics_file(capsys):
 
 
 def test_the_metrics_kind_is_no_longer_reserved_and_a_wrong_case_says_the_right_spelling():
-    assert "Metrics" not in RESERVED_KINDS and "Report" in RESERVED_KINDS
+    assert "Metrics" not in RESERVED_KINDS and "Report" not in RESERVED_KINDS and "Profiles" in RESERVED_KINDS
     wrong = messages({**METRICS, "kind": "metrics"})[0]
     assert wrong.startswith("kind: unknown kind 'metrics'; did you mean 'Metrics'?")
 
