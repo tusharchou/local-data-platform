@@ -355,7 +355,8 @@ def test_a_workflow_that_is_not_valid_does_not_load_and_names_every_problem(tmp_
     ("{not json", "is not valid JSON"),
     ("[1, 2]", "must be a JSON object, got list"),
     ({"kind": "workflow", "identifier": "w", "tasks": []}, "did you mean 'Workflow'"),
-    ({"kind": "Report", "identifier": "w"}, "reserved for 0.1.6"),
+    ({"kind": "Report", "identifier": "w"}, "is a Report, not a workflow"),
+    ({"kind": "Profiles", "identifier": "w"}, "reserved for 0.2.0"),
 ])
 def test_read_workflow_says_why_a_file_cannot_be_used(tmp_path, content, expected):
     workflow, problems = read_workflow(_write(tmp_path / "w.json", content))

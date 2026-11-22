@@ -28,6 +28,7 @@ Commands::
     ldp monitor CONFIG_OR_FOLDER [--json] [--now ISO-8601]   (monitoring.cli)
     ldp status CONFIG_OR_FOLDER [--json] [--html FILE] [--now ISO-8601]   (monitoring.cli)
     ldp alert test CONFIG                  (notify)
+    ldp report check REPORT_OR_DIR [--window WINDOW] [--param NAME=VALUE] [--release RN | --live]   (report.cli)
 
 The commands in the second group are added by the ``add_cli`` function of the module named
 next to them (``docs/design/v0_1_1_platform.md`` C9).
@@ -97,6 +98,7 @@ MODULE_COMMANDS = (
     ("local_data_platform.metrics.cli", ("metrics",)),
     ("local_data_platform.monitoring.cli", ("monitor", "status")),
     ("local_data_platform.notify", ("alert",)),
+    ("local_data_platform.report.cli", ("report",)),
 )
 """``(module, commands)``: each module's ``add_cli(subparsers, parents=...)`` registers its commands."""
 
