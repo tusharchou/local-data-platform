@@ -1,5 +1,6 @@
 """Tests for the CSV and Parquet formats and the store re-exports."""
 
+import logging
 import os
 import stat
 import uuid
@@ -9,6 +10,7 @@ import pyarrow.csv
 import pyarrow.parquet
 import pytest
 
+from local_data_platform import urls
 from local_data_platform.exceptions import ConfigError
 from local_data_platform.format.csv import CSV
 from local_data_platform.format.parquet import Parquet
@@ -216,3 +218,213 @@ def test_store_iceberg_reexports_format_iceberg():
 
     assert StoreIceberg is Iceberg
     assert StoreWriteResult is WriteResult
+
+
+# ====================================================================== a CSV that is read over http
+#
+# The sheet of a shop, shared by link, is a CSV at an https address. Here the server is on 127.0.0.1, the one place that
+# plain http is allowed, so nothing leaves the machine. What only https can show is in tests/test_urls.py.
+
+SHEET = "day,dish,orders,revenue\n2026-07-01,pad thai,12,143.5\n2026-07-02,green curry,9,117.0\n"
+
+
+def test_csv_reads_an_address(web_server):
+    web_server.serve("/sales.csv", SHEET)
+
+    df = CSV("sales", f"{web_server.url}/sales.csv").get()
+
+    assert df.column_names == ["day", "dish", "orders", "revenue"]
+    assert df.schema.types == [pa.date32(), pa.string(), pa.int64(), pa.float64()]
+    assert df.to_pylist()[1]["dish"] == "green curry" and df.num_rows == 2
+
+
+def test_csv_reads_the_same_rows_from_an_address_and_from_a_file(web_server, tmp_path):
+    web_server.serve("/sales.csv", SHEET)
+    (tmp_path / "sales.csv").write_text(SHEET)
+
+    assert CSV("sales", f"{web_server.url}/sales.csv").get().equals(CSV("sales", str(tmp_path / "sales.csv")).get())
+
+
+def test_csv_reads_the_address_again_each_time_it_is_asked(web_server):
+    table = CSV("sales", f"{web_server.url}/sales.csv")
+    web_server.serve("/sales.csv", SHEET)
+    assert table.get().num_rows == 2
+
+    web_server.serve("/sales.csv", SHEET + "2026-07-03,tom yum,5,60.0\n")
+
+    assert table.get().num_rows == 3
+    assert len(web_server.seen) == 2
+
+
+def test_csv_does_not_read_an_address_when_it_is_made(web_server):
+    CSV("sales", f"{web_server.url}/sales.csv", timeout=5, max_bytes=1000)
+
+    assert web_server.seen == []
+
+
+def test_csv_keeps_the_address_and_its_limits(web_server):
+    address = f"{web_server.url}/sales.csv?format=csv&gid=3"
+
+    plain = CSV("sales", address)
+    limited = CSV("sales", address, timeout=2.5, max_bytes=1000)
+
+    assert plain.path == address and plain.format == "CSV" and plain.options == {}
+    assert (plain.timeout, plain.max_bytes) == (urls.DEFAULT_TIMEOUT_S, urls.DEFAULT_MAX_BYTES)
+    assert (limited.timeout, limited.max_bytes) == (2.5, 1000)
+
+
+def test_csv_of_a_file_has_no_limits(tmp_path):
+    table = CSV("sales", str(tmp_path / "sales.csv"))
+
+    assert table.timeout is None and table.max_bytes is None
+
+
+def test_csv_hands_its_limits_to_the_download(monkeypatch):
+    given = {}
+
+    def fetch(address, *, timeout, max_bytes):
+        given.update(address=address, timeout=timeout, max_bytes=max_bytes)
+        return SHEET.encode()
+
+    monkeypatch.setattr(urls, "fetch", fetch)
+
+    address = "https://docs.example.com/spreadsheets/d/ID/export?format=csv&gid=0"
+    df = CSV("sales", address, timeout=7, max_bytes=999).get()
+
+    assert given == {"address": address, "timeout": 7, "max_bytes": 999}
+    assert df.num_rows == 2
+
+
+def test_csv_repr_of_an_address_has_no_query(web_server):
+    table = CSV("sales", f"{web_server.url}/sales.csv?format=csv&token=SECRET-VALUE")
+
+    assert repr(table) == f"CSV(name='sales', path='{web_server.url}/sales.csv')"
+    assert repr(CSV("rides", "/tmp/rides.csv")).startswith("CSV(name='rides', path='/")
+
+
+def test_csv_put_to_an_address_is_refused_and_sends_nothing(web_server, sample_table):
+    table = CSV("sales", f"{web_server.url}/sales.csv?token=SECRET-VALUE")
+
+    with pytest.raises(ConfigError) as caught:
+        table.put(sample_table)
+
+    assert "reads" in str(caught.value) and "cannot be written" in str(caught.value)
+    assert "SECRET-VALUE" not in str(caught.value)
+    assert web_server.seen == []
+
+
+@pytest.mark.parametrize("address, words", [
+    ("http://example.com/sales.csv", "plain http"),
+    ("http://192.168.0.7/sales.csv", "plain http"),
+    ("https://user:pw@example.com/sales.csv", "user name or a password"),
+    ("https://example.com:99999/sales.csv", "is not valid"),
+    ("https:///sales.csv", "no host name"),
+    ("https://example.com/sales .csv", "control character"),
+])
+def test_csv_refuses_an_address_that_is_not_allowed(address, words):
+    with pytest.raises(ConfigError) as caught:
+        CSV("sales", address + "?token=SECRET-VALUE")
+
+    assert "CSV dataset 'sales' cannot read" in str(caught.value) and words in str(caught.value)
+    assert ", because the address " in str(caught.value)
+    assert "SECRET-VALUE" not in str(caught.value) and "pw@" not in str(caught.value)
+
+
+def test_csv_says_exactly_why_an_address_is_not_allowed():
+    with pytest.raises(ConfigError) as caught:
+        CSV("sales", "http://example.com/sales.csv?token=SECRET-VALUE")
+
+    assert str(caught.value) == ("CSV dataset 'sales' cannot read http://example.com/sales.csv, because the address "
+                                 "is plain http, which is only for 127.0.0.1 and localhost")
+
+
+def test_csv_logs_the_address_without_its_query(web_server, caplog):
+    web_server.serve("/sales.csv", SHEET)
+    caplog.set_level(logging.INFO)
+
+    CSV("sales", f"{web_server.url}/sales.csv?format=csv&token=SECRET-VALUE").get()
+
+    messages = [record.getMessage() for record in caplog.records if record.name.endswith("format.csv")]
+    assert messages == [f"Read 2 rows from CSV {web_server.url}/sales.csv"]
+
+
+@pytest.mark.parametrize("timeout", [0, -1, -0.5, True, False, "5", float("nan"), float("inf"), [5]])
+def test_csv_timeout_is_a_number_of_seconds_above_zero(timeout):
+    with pytest.raises(ConfigError, match="needs a timeout that is a number of seconds above 0"):
+        CSV("sales", "https://example.com/sales.csv", timeout=timeout)
+
+
+@pytest.mark.parametrize("max_bytes", [0, -1, 1.5, 1.0, True, False, "100", float("inf"), [5]])
+def test_csv_max_bytes_is_a_whole_number_of_bytes_above_zero(max_bytes):
+    with pytest.raises(ConfigError, match="needs a max_bytes that is a whole number of bytes above 0"):
+        CSV("sales", "https://example.com/sales.csv", max_bytes=max_bytes)
+
+
+@pytest.mark.parametrize("timeout, max_bytes", [(1, 1), (0.001, 10**12), (3600, 1)])
+def test_csv_takes_small_and_large_limits(timeout, max_bytes):
+    table = CSV("sales", "https://example.com/sales.csv", timeout=timeout, max_bytes=max_bytes)
+
+    assert (table.timeout, table.max_bytes) == (timeout, max_bytes)
+
+
+@pytest.mark.parametrize("options", [{"timeout": 5}, {"max_bytes": 100}, {"timeout": 5, "max_bytes": 100}])
+def test_csv_of_a_file_refuses_limits_that_are_for_an_address(tmp_path, options):
+    with pytest.raises(ConfigError, match="timeout or max_bytes, which are for an https:// path"):
+        CSV("sales", str(tmp_path / "sales.csv"), **options)
+
+
+@pytest.mark.parametrize("status, error", [(404, ConfigError), (403, ConfigError), (503, ConnectionError),
+                                           (429, ConnectionError)])
+def test_csv_get_of_an_address_that_answers_a_status_is_not_read(web_server, status, error):
+    web_server.serve("/sales.csv", "no", status=status)
+
+    with pytest.raises(error, match=f"answered HTTP {status}"):
+        CSV("sales", f"{web_server.url}/sales.csv").get()
+
+
+def test_csv_get_of_a_web_page_is_not_read_as_rows(web_server):
+    web_server.serve("/sales.csv", "<html><body>Sign in</body></html>", content_type="text/html; charset=utf-8")
+
+    with pytest.raises(ConfigError, match="answered with a web page, not a CSV file"):
+        CSV("sales", f"{web_server.url}/sales.csv").get()
+
+
+def test_csv_get_over_max_bytes_is_not_read(web_server):
+    web_server.serve("/sales.csv", SHEET)
+
+    with pytest.raises(ConfigError, match="has more than max_bytes, which is 20 bytes"):
+        CSV("sales", f"{web_server.url}/sales.csv", max_bytes=20).get()
+    assert CSV("sales", f"{web_server.url}/sales.csv", max_bytes=len(SHEET)).get().num_rows == 2
+
+
+def test_csv_get_that_is_too_slow_times_out(web_server):
+    web_server.serve("/sales.csv", SHEET, delay=1.0)
+
+    with pytest.raises(TimeoutError):
+        CSV("sales", f"{web_server.url}/sales.csv", timeout=0.2).get()
+
+
+def test_csv_get_of_an_empty_answer_fails_as_an_empty_file_does(web_server, tmp_path):
+    web_server.serve("/empty.csv", b"")
+    (tmp_path / "empty.csv").write_bytes(b"")
+
+    with pytest.raises(pa.ArrowInvalid, match="Empty CSV file") as from_file:
+        CSV("empty", str(tmp_path / "empty.csv")).get()
+    with pytest.raises(pa.ArrowInvalid, match="Empty CSV file") as from_address:
+        CSV("empty", f"{web_server.url}/empty.csv").get()
+
+    assert type(from_file.value) is type(from_address.value)
+
+
+def test_csv_get_reads_a_header_only_answer_as_no_rows(web_server):
+    web_server.serve("/head.csv", "day,dish\n")
+
+    df = CSV("sales", f"{web_server.url}/head.csv").get()
+
+    assert df.column_names == ["day", "dish"] and df.num_rows == 0
+
+
+def test_csv_get_drops_the_byte_order_mark_of_a_sheet_saved_by_excel(web_server):
+    web_server.serve("/sales.csv", b"\xef\xbb\xbfday,orders\n2026-07-01,12\n")
+
+    assert CSV("sales", f"{web_server.url}/sales.csv").get().column_names == ["day", "orders"]

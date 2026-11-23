@@ -220,6 +220,8 @@ their own `ldp` subcommands (`ldp --help` lists them).
   `create_catalog(spec).list_namespaces()`) checks the connection. See
   [Catalogs and object storage](catalogs.md).
 - **Object storage.** CSV, Parquet and JSON paths can be `s3://` or `gs://`.
+- **A web address.** A CSV source `path` can be an `https://` address, such as a Google Sheet that is shared by link.
+  See the recipe [A Google Sheet that stays in sync](recipes.md#a-google-sheet-that-stays-in-sync).
 - **Several writers.** Pass a `CommitContext` to `Iceberg.put(..., commit=)`, or to
   `Pipeline.run(commit=)`, for the staged publish protocol: a re-run with the same idempotency key
   writes nothing. See [Exactly-once writes](exactly_once.md).

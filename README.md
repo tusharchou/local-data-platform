@@ -273,7 +273,7 @@ and a `metadata` block:
 
 | Key | What it holds |
 |---|---|
-| `metadata.source` | `name`, `format` (`CSV`, `PARQUET`, `ICEBERG`, `JSON`, `DUCKDB` or `XLSX`), and a `path` (local, `s3://` or `gs://`, and it may have `{window_start:FORMAT}` placeholders, see [Windows](#windows)) or, for Iceberg, a `catalog`. A `DUCKDB` source also has one of `relation` (a table or view) and `sql` (one `SELECT` query), see [A DuckDB file as a source](#a-duckdb-file-as-a-source). An `XLSX` source may have `sheet` and `header_row`, see [An Excel sheet as a source](#an-excel-sheet-as-a-source) |
+| `metadata.source` | `name`, `format` (`CSV`, `PARQUET`, `ICEBERG`, `JSON`, `DUCKDB` or `XLSX`), and a `path` (local, `s3://` or `gs://`, and it may have `{window_start:FORMAT}` placeholders, see [Windows](#windows)) or, for Iceberg, a `catalog`. A `CSV` source `path` may also be an `https://` address, with `timeout` and `max_bytes`, see [A Google Sheet as a source](#a-google-sheet-as-a-source). A `DUCKDB` source also has one of `relation` (a table or view) and `sql` (one `SELECT` query), see [A DuckDB file as a source](#a-duckdb-file-as-a-source). An `XLSX` source may have `sheet` and `header_row`, see [An Excel sheet as a source](#an-excel-sheet-as-a-source) |
 | `metadata.target` | The same, plus for Iceberg `write_mode` (`append`, `overwrite` or `upsert`), `join_cols` for upserts, and `partition_by` |
 | `metadata.target.catalog` | `type` (`local` by default, `sql`, `rest` or `glue`) and that type's keys; see [Catalogs](#catalogs-and-object-storage) |
 | `metadata.quality` | `on_failure` (`fail` or `warn`) and a list of `checks`: `row_count`, `not_null`, `unique`, `accepted_values`, `range`, `freshness`, `schema`, and the temporal checks `monotonic`, `max_skew`, `rate_below` and `max_gap` |
@@ -561,6 +561,44 @@ sheet that does not exist, and an empty or repeated header cell fail with a mess
 sheet. It needs the `excel` extra, and `ldp plan` reports a missing file or a `.xls` path. The CSV is replaced
 atomically, so a folder that Google Drive syncs never holds a half-written file; see the recipe
 [Excel to CSV in a Google Drive folder](docs/recipes.md#excel-to-csv-in-a-google-drive-folder).
+
+### A Google Sheet as a source
+
+A `CSV` source `path` may be an `https://` address, so a Google Sheet that is shared by link stays in sync with an Iceberg
+table. The export address of a tab is a CSV, `upsert` on the key columns of the sheet updates the rows that changed and
+adds the new ones, and a `schedule` makes `ldp schedule tick` read the sheet again every day.
+
+```json
+{
+  "identifier": "sheet_sales",
+  "metadata": {
+    "source": {"name": "sales", "format": "CSV",
+               "path": "https://docs.google.com/spreadsheets/d/SHEET_ID/export?format=csv&gid=TAB_ID"},
+    "target": {"name": "sales", "format": "ICEBERG",
+               "catalog": {"identifier": "shop", "warehouse_path": "../warehouse"},
+               "write_mode": "upsert", "join_cols": ["day", "dish"]},
+    "schedule": "@daily"
+  }
+}
+```
+
+- The address has to be `https://`. Plain `http://` is only for `127.0.0.1` and `localhost`. It has no user name and no
+  password, and a token, a key, a signature or a password in its query is an inline secret, which `validate_spec` refuses,
+  so `ldp plan` and `ldp schedule tick` do not run the config. The file is read with no credentials, so the sheet has to
+  be shared with anyone who has the link, and a private sheet cannot be read.
+- `timeout` is the seconds that the whole download may take, 30 by default, and `max_bytes` is the most bytes that it may
+  have after it is decompressed, 50 MiB by default. Both go in the source block. At most 5 redirects are followed, each
+  to an `https://` address, so an answer cannot lead the download back to plain http or to a service on the same machine.
+- A web page is refused and is never read as rows. A sheet that is not shared answers with a sign-in page, and the run
+  fails and says what to do. A connection that fails, a timeout, an answer that breaks off and the HTTP statuses 408, 425,
+  429 and 5xx are tried again by `metadata.retries` and by the next tick. Another status, such as 403 or 404, a web page,
+  and a body over `max_bytes` fail the run and are not tried again within the tick.
+- Only a `CSV` source can be an address. An address cannot be a target, and `ldp plan` says so. The run events and the
+  lineage name the file by its host and its path and never by its query.
+
+A night in which nobody changed the sheet reads it and writes no rows, an edited cell is one row, and a row that is deleted
+from the sheet stays in the table, unless `write_mode` is `overwrite`. See the recipe
+[A Google Sheet that stays in sync](docs/recipes.md#a-google-sheet-that-stays-in-sync).
 
 ### Table contracts
 
@@ -1021,7 +1059,8 @@ its own.
   and `ldp report send` exits with 3. It exits with 1 when a destination did not get the report, and the others were sent
   as usual, so a second run sends only to the destination that failed. A send is one run, with `run.started`, a
   `report.delivered` for each destination, a `run.failed` for each one that failed, and `run.finished`, and `ldp runs
-  REPORT` lists it. It is the reporting half of the Google Sheets request, and a sheet that stays in sync arrives next.
+  REPORT` lists it. It is the reporting half of the Google Sheets request, and
+  [a sheet that stays in sync](#a-google-sheet-as-a-source) is the other half.
 
 A `title` is what the report is called, and the identifier by default. `delivery` is what `ldp report send` sends to, and
 `after` is part of the file and is checked for its shape. What it does arrives with the schedule of the 0.1.6 milestone. A
@@ -1173,6 +1212,8 @@ a GCS emulator. A URI with credentials in it (`s3://key:secret@bucket/...`) is r
 atomic: locally a temp file is renamed into place, and on an object store the data is uploaded only
 once it is complete, so readers see the old object or the new one. The S3 tests run against a local
 moto server; `gs://` reads and writes have no test against a GCS emulator yet.
+A `CSV` source can also be an `https://` address, which `local_data_platform.urls` reads, see
+[A Google Sheet as a source](#a-google-sheet-as-a-source).
 
 ## Exactly-once writes
 
@@ -1521,6 +1562,7 @@ Data moves between steps as `pyarrow.Table`s. The package lives in `src/local_da
 | `config`, `paths` | `Config` and path resolution relative to the config file |
 | `spec` | The `ldp/v1` JSON Schema, config validation, `spec_hash` and `idempotency_key` |
 | `fs` | Local and object-storage IO (`file://`, `s3://`, `gs://`) with atomic writes |
+| `urls` | The rules for an `https://` address and the download of a CSV source, with `timeout` and `max_bytes` |
 | `format` | `CSV`, `Parquet` and `Iceberg` tables (`get` / `put`), and `WriteResult` |
 | `format.iceberg.commit` | The staged publish protocol: `CommitContext`, `write_once`, `stage`, `publish`, `fence` |
 | `catalog` | `create_catalog` and the `local`, `sql`, `rest` and `glue` types; `LocalIcebergCatalog` |

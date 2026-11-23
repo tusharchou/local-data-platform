@@ -23,6 +23,7 @@ logger = get_logger(__name__)
 SECTIONS = ("source", "target")
 
 _FILE_KEYS = {"name", "format", "path"}
+_CSV_KEYS = _FILE_KEYS | {"timeout", "max_bytes"}
 _ICEBERG_SOURCE_KEYS = {"name", "format", "catalog"}
 _ICEBERG_TARGET_KEYS = _ICEBERG_SOURCE_KEYS | {"write_mode", "join_cols", "partition_by", "schema_evolution"}
 # ``path`` on an Iceberg block is a pre-0.1.1 leftover that Iceberg ignores.
@@ -72,10 +73,14 @@ def _require(block: dict[str, Any], key: str, section: str) -> Any:
 
 
 def csv_from_config(config: Config, section: str = "source") -> CSV:
-    """Build a :class:`~local_data_platform.format.csv.CSV` from ``{"name", "format": "CSV", "path"}``."""
-    block = config_block(config, section, "CSV", _FILE_KEYS)
+    """Build a :class:`~local_data_platform.format.csv.CSV` from ``{"name", "format": "CSV", "path"}``.
+
+    A source ``path`` may be an ``https://`` address. The block can then have ``timeout``, the seconds that the download
+    may take, and ``max_bytes``, the most bytes that it may have, see :mod:`local_data_platform.urls`.
+    """
+    block = config_block(config, section, "CSV", _CSV_KEYS)
     return CSV(name=_require(block, "name", section), path=_require(block, "path", section),
-               base_dir=config.base_dir)
+               base_dir=config.base_dir, timeout=block.get("timeout"), max_bytes=block.get("max_bytes"))
 
 
 def parquet_from_config(config: Config, section: str = "source") -> Parquet:

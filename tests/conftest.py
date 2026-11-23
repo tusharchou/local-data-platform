@@ -10,6 +10,8 @@ Fixtures:
         ``timestamp[ns, tz=Asia/Bangkok]`` column.
     catalog_config: An Iceberg catalog config dict whose warehouse is under ``tmp_path``.
     lineage_server: A local HTTP server that records the JSON that is posted to it.
+    web_server: A local HTTP server that answers ``GET`` with the replies that a test sets, such as a sheet that
+        is shared by link, and records every request.
 
 Tests marked ``dbt`` need the ``dbt`` extra (dbt-core and the dbt-duckdb adapter). They skip when
 dbt cannot be imported, so ``make test`` passes on a plain install, and the ``dbt`` CI job runs
@@ -23,6 +25,8 @@ import json
 import os
 import socket
 import threading
+import time
+from dataclasses import dataclass, field
 
 import pyarrow as pa
 import pytest
@@ -172,6 +176,111 @@ def lineage_server():
     yield f"http://127.0.0.1:{server.server_address[1]}", _LineageHandler
     server.shutdown()
     server.server_close()
+
+
+@dataclass
+class Reply:
+    """What ``WebServer`` answers for a path: the status, the headers and the body, and how it is sent."""
+
+    status: int = 200
+    body: bytes = b""
+    headers: dict = field(default_factory=dict)
+    content_type: str | None = "text/csv"
+    delay: float = 0.0
+    pause: float = 0.0
+    piece: int = 1
+    chunked: bool = False
+
+
+class WebServer:
+    """The server of the ``web_server`` fixture. ``url`` is its address, with no slash at the end.
+
+    ``serve(path, body)`` sets the reply for a path, and a later call for the same path replaces it, so a test can edit
+    a sheet between two ticks. A path with a query, such as ``/export?gid=1``, is the reply for that query, and a path
+    without one is the reply for any query. A path that nothing was set for answers 404. ``seen`` lists every request in
+    the order that it came, as ``(path with its query, headers)``.
+    """
+
+    def __init__(self) -> None:
+        self.replies: dict[str, Reply] = {}
+        self.once: dict[str, list[Reply]] = {}
+        self.seen: list[tuple[str, dict]] = []
+        owner = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 - http.server's naming
+                owner._answer(self)
+
+            def log_message(self, *args):
+                pass
+
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+        threading.Thread(target=self.httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+
+    def serve(self, path: str, body: bytes | str = b"", *, status: int = 200, headers: dict | None = None,
+              content_type: str | None = "text/csv", delay: float = 0.0, pause: float = 0.0, piece: int = 1,
+              chunked: bool = False) -> None:
+        """Answer ``GET path`` with ``status``, ``headers`` and ``body``.
+
+        ``content_type`` is the ``Content-Type`` header, or none when it is ``None``. ``delay`` is the seconds before
+        the answer starts, and with a ``pause`` the body goes out ``piece`` bytes at a time with that many seconds
+        between them, so a test can make a slow server. A ``Content-Length`` in ``headers`` is sent as it is. With
+        ``chunked`` the answer has no length and goes out in chunks of ``piece`` bytes, as a large export does.
+        """
+        text = body.encode("utf-8") if isinstance(body, str) else body
+        self.replies[path] = Reply(status, text, dict(headers or {}), content_type, delay, pause, piece, chunked)
+
+    def serve_once(self, path: str, body: bytes | str = b"", *, status: int = 200, **reply) -> None:
+        """Answer the next ``GET path`` with this reply, and later ones with what ``serve`` set. Calls queue up."""
+        text = body.encode("utf-8") if isinstance(body, str) else body
+        self.once.setdefault(path, []).append(Reply(status, text, **reply))
+
+    def _answer(self, handler) -> None:
+        self.seen.append((handler.path, dict(handler.headers)))
+        queued = self.once.get(handler.path) or self.once.get(handler.path.split("?")[0])
+        reply = (queued.pop(0) if queued else self.replies.get(handler.path)
+                 or self.replies.get(handler.path.split("?")[0]) or Reply(404, b"not found", content_type="text/plain"))
+        time.sleep(reply.delay)
+        headers = dict(reply.headers)
+        if reply.content_type is not None:
+            headers.setdefault("Content-Type", reply.content_type)
+        if reply.chunked:
+            headers["Transfer-Encoding"] = "chunked"
+        else:
+            headers.setdefault("Content-Length", str(len(reply.body)))
+        try:
+            handler.send_response(reply.status)
+            for name, value in headers.items():
+                handler.send_header(name, value)
+            handler.end_headers()
+            if reply.chunked:
+                for start in range(0, len(reply.body), reply.piece):
+                    part = reply.body[start:start + reply.piece]
+                    handler.wfile.write(b"%x\r\n%s\r\n" % (len(part), part))
+                handler.wfile.write(b"0\r\n\r\n")
+            elif reply.pause:
+                for start in range(0, len(reply.body), reply.piece):
+                    handler.wfile.write(reply.body[start:start + reply.piece])
+                    handler.wfile.flush()
+                    time.sleep(reply.pause)
+            else:
+                handler.wfile.write(reply.body)
+        except OSError:
+            pass  # the client left, as a test of a timeout makes it
+
+
+@pytest.fixture
+def web_server():
+    """A local HTTP server on 127.0.0.1 that answers ``GET`` with the replies that a test sets. Yields a ``WebServer``.
+
+    A CSV source that is read over http, the sheet of a shop that is shared by link, is served here, so a test reads
+    nothing outside the machine.
+    """
+    server = WebServer()
+    yield server
+    server.httpd.shutdown()
+    server.httpd.server_close()
 
 
 @pytest.fixture
