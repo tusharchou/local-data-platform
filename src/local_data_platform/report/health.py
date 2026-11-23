@@ -125,6 +125,15 @@ class TableHealth:
             "problem": self.problem}
 
 
+def stale_text(tables: Sequence[TableHealth]) -> str:
+    """Tables in one line, such as ``1 table is stale, gold.a``, or an empty text when there is none."""
+    names = [item.table for item in tables]
+    if not names:
+        return ""
+    many = len(names) != 1
+    return f"{len(names)} table{'s' if many else ''} {'are' if many else 'is'} stale, {', '.join(names)}"
+
+
 @dataclass(frozen=True)
 class Health:
     """The health of every table that a report read, at the moment that it was built.
@@ -161,12 +170,8 @@ class Health:
                 "tables": [item.to_dict() for item in self.tables]}
 
     def summary(self) -> str:
-        """The stale tables in one line, such as ``2 tables are stale, gold.a and gold.b``, or an empty text."""
-        names = [item.table for item in self.stale]
-        if not names:
-            return ""
-        many = len(names) != 1
-        return f"{len(names)} table{'s' if many else ''} {'are' if many else 'is'} stale, {', '.join(names)}"
+        """The stale tables in one line, such as ``2 tables are stale, gold.a, gold.b``, or an empty text."""
+        return stale_text(self.stale)
 
 
 class ReportHeld(DataQualityError):
@@ -188,6 +193,10 @@ class ReportHeld(DataQualityError):
                  f"{'are' if count != 1 else 'is'} stale and metadata.freshness says block"]
         lines += [f"  - {item.table}: {' and '.join(item.reasons)}" for item in self.tables]
         super().__init__("\n".join(lines))
+
+    def summary(self) -> str:
+        """The stale tables in one line, as :meth:`Health.summary` writes them."""
+        return stale_text(self.tables)
 
 
 # --------------------------------------------------------------------------- judging a table
@@ -476,4 +485,5 @@ __all__ = [
     "news_of",
     "news_text",
     "panel",
+    "stale_text",
 ]

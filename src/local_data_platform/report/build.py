@@ -95,14 +95,18 @@ class Build:
     health: Health
 
 
-def render(run: ReportRun, fmt: str, built_at: dt.datetime) -> str:
+def render(run: ReportRun, fmt: str, built_at: dt.datetime, home: str | None = None) -> str:
     """The document of a run in a format.
+
+    ``home`` is the link to the index of a site that an HTML page starts with, see
+    :func:`~local_data_platform.report.render_html.render_html`. Markdown and JSON have no page to link from, so they
+    ignore it.
 
     Raises:
         ConfigError: If the format is not one of :data:`FORMATS`.
     """
     if fmt == "html":
-        return render_html(run, built_at=built_at)
+        return render_html(run, built_at=built_at, home=home)
     if fmt == "md":
         return render_md(run, built_at=built_at)
     if fmt == "json":
@@ -169,7 +173,8 @@ def _window_text(run: ReportRun) -> str | None:
 def build_report(report: Report, window: Any = None, *, out: str | Path | None = None, fmt: str = "html",
                  params: Mapping[str, Any] | None = None, release: str | None = None, live: bool = False,
                  row_cap: int | None = None, timeout_s: float | None = None, now: dt.datetime | None = None,
-                 sink: events.EventSink | None = None, clock: Callable[[], dt.datetime] | None = None) -> Build:
+                 sink: events.EventSink | None = None, clock: Callable[[], dt.datetime] | None = None,
+                 home: str | None = None) -> Build:
     """Run a report and write it, and record the build as run events.
 
     Args:
@@ -186,6 +191,8 @@ def build_report(report: Report, window: Any = None, *, out: str | Path | None =
         now: The current time, for the window shortcuts.
         sink: Where the events go, instead of the sinks of the report.
         clock: The clock of the build and of its events. The real one by default.
+        home: A link to the index of a site, as the page reaches it, which an HTML page shows as ``All reports``.
+            :func:`~local_data_platform.report.site.build_site` gives it. Markdown and JSON ignore it.
 
     Returns:
         The :class:`Build`.
@@ -218,7 +225,7 @@ def build_report(report: Report, window: Any = None, *, out: str | Path | None =
         if run.health.held:
             raise ReportHeld(report.identifier, run.health.stale)
         stage = "render"
-        document = render(run, fmt, built_at)
+        document = render(run, fmt, built_at, home)
         data = document.encode("utf-8")
         stage = "write"
         if target is not None:

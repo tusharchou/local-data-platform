@@ -3,8 +3,8 @@
 ``ldp report check REPORT_OR_DIR [--window WINDOW] [--param NAME=VALUE] [--release RN | --live] [--row-cap N] [--timeout
 SECONDS] [--json]`` reads a report file, or every report file of a folder, finds its tables, runs every query and every
 metric block, and says what each did. ``ldp report build REPORT --out PATH [--format html|md|json]`` takes the same
-options, runs the queries and writes the report. ``cli.py`` wires this in with :func:`add_cli`. Heavy imports happen
-inside the command.
+options, runs the queries and writes the report, and given a folder it builds every report of it into a site that
+``--out`` names. ``cli.py`` wires this in with :func:`add_cli`. Heavy imports happen inside the command.
 """
 
 import argparse
@@ -15,6 +15,7 @@ from typing import Any
 
 EXIT_OK = 0
 EXIT_ERROR = 1
+EXIT_GATE = 3
 
 
 def _positive_int(text: str) -> int:
@@ -86,7 +87,7 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
     check.set_defaults(handler=_cmd_check)
 
     build = actions.add_parser(
-        "build", parents=parents, help="run a report and write it as a page, Markdown or JSON",
+        "build", parents=parents, help="run a report and write it as a page, Markdown or JSON, or a folder as a site",
         description="Build REPORT, a report file. It runs every query and every metric block as ldp report check does, "
                     "and when all of them ran and every block can be shown it writes the report to --out. The default "
                     "format is one HTML page with its charts drawn inline, which opens from a folder with no network. "
@@ -97,18 +98,27 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
                     "pipelines. When metadata.freshness has on_stale warn, a banner names the stale tables. When it "
                     "has on_stale block and a table is stale, nothing is written. When the report has "
                     "metadata.observability the build is recorded as run events, and ldp runs REPORT lists the "
-                    "builds.",
+                    "builds. Given a folder, REPORT is every report file of it, and --out is the folder of a site. "
+                    "Each report is written to OUT/IDENTIFIER/WINDOW_START.html and to OUT/IDENTIFIER/latest.html, "
+                    "and OUT/index.html has a card for each report with its title, what it is for, its window, the "
+                    "time it was built and a badge for the health of its data, fresh, stale, not checked, held or "
+                    "failed. Every link is relative, so the site opens from a folder, a shared drive, a bucket or "
+                    "any static host. A report that fails or is held back is a card that says why, the others still "
+                    "build, and nothing is deleted.",
         epilog="Exit status is 0 when the report was written, 1 when a problem stopped it, and 3 when the freshness "
-               "gate of the report held it back. Example: "
+               "gate of the report held it back. For a folder it is 1 when any report failed, else 3 when any was "
+               "held back. Example: "
                "ldp report build ldp_demo/restaurant/reports/daily_sales.json --window 2026-07-31/2026-08-01 "
-               "--out site/daily.html")
-    build.add_argument("report", metavar="REPORT", help="a report file")
+               "--out site/daily.html. A folder as a site: "
+               "ldp report build ldp_demo/restaurant/reports --window yesterday --out site/")
+    build.add_argument("report", metavar="REPORT", help="a report file, or a folder that has report files")
     build.add_argument("--out", metavar="PATH",
                        help="where to write the report, a path, file://, s3:// or gs:// address, or - for standard "
-                            "output. It is needed, so that no file is written by surprise")
-    build.add_argument("--format", choices=("html", "md", "json"), default="html",
+                            "output. For a folder it is the folder of the site. It is needed, so that no file is "
+                            "written by surprise")
+    build.add_argument("--format", choices=("html", "md", "json"),
                        help="html, a page of its own (the default), md, Markdown with the charts as tables, or json, "
-                            "the rows and what each block shows")
+                            "the rows and what each block shows. A folder is built as html only")
     _run_options(build)
     build.set_defaults(handler=_cmd_build)
     return report
@@ -220,10 +230,11 @@ def _cmd_build(args: argparse.Namespace) -> int:
         raise ConfigError("ldp report build needs --out, so that no file is written by surprise. Use --out - for "
                           "standard output")
     if _is_folder(args.report):
-        raise ConfigError(f"ldp report build takes a report file, and {args.report} is a folder")
+        return _build_site(args)
     report = load_report(args.report)
-    built = build_report(report, args.window, out=args.out, fmt=args.format, params=_params(args.params) or None,
-                         release=args.release, live=args.live, row_cap=args.row_cap, timeout_s=args.timeout)
+    built = build_report(report, args.window, out=args.out, fmt=args.format or "html",
+                         params=_params(args.params) or None, release=args.release, live=args.live,
+                         row_cap=args.row_cap, timeout_s=args.timeout)
     where = "standard output" if args.out == STDOUT else args.out
     queries = _plural(len(built.run.queries), "query", "queries")
     summary = (f"{report.identifier} ({report.file.name if report.file else '-'}): built {where} as {built.format}, "
@@ -237,6 +248,45 @@ def _cmd_build(args: argparse.Namespace) -> int:
     if built.health.stale:  # the page has a banner for it, and a person who only reads the terminal sees this
         print(f"warning: {built.health.summary()}", file=sys.stderr)
     return EXIT_OK
+
+
+def _site_line(entry: Any) -> str:
+    """What became of one report of a folder, as one line."""
+    from local_data_platform.report.site import BUILT, HELD, LATEST
+
+    label = f"{entry.identifier} ({entry.file.name})" if entry.identifier else entry.file.name
+    if entry.status == BUILT:
+        built = entry.build
+        queries = _plural(len(built.run.queries), "query", "queries")
+        return (f"{label}: built {built.output} and {LATEST}, {built.bytes:,} bytes, {queries} and "
+                f"{_plural(len(built.report.blocks), 'block')}, in {built.duration_ms:.0f} ms")
+    return f"{label}: held back, {entry.stale}" if entry.status == HELD else f"{label}: not built"
+
+
+def _build_site(args: argparse.Namespace) -> int:
+    """``ldp report build`` of a folder: a page for each report and an index, with one line for each report."""
+    from local_data_platform.exceptions import ConfigError
+    from local_data_platform.report.build import STDOUT
+    from local_data_platform.report.site import build_site
+
+    if args.format not in (None, "html"):
+        raise ConfigError(f"a folder is built as a site of HTML pages, so --format {args.format} is only for a "
+                          "report file")
+    if args.out == STDOUT:
+        raise ConfigError("a folder is built as a site of files, so --out is the folder of the site, and not - for "
+                          "standard output")
+    site = build_site(args.report, args.out, args.window, params=_params(args.params) or None, release=args.release,
+                      live=args.live, row_cap=args.row_cap, timeout_s=args.timeout)
+    for entry in site.entries:
+        print(_site_line(entry))
+        if entry.error:
+            print(entry.error, file=sys.stderr)
+        elif entry.stale:  # the card and the page say it too, and a person who only reads the terminal sees this
+            print(f"warning: {entry.identifier}: {entry.stale}", file=sys.stderr)
+    counts = [("built", len(site.built)), ("held back", len(site.held)), ("not built", len(site.failed))]
+    tail = ", ".join(f"{number} {word}" for word, number in counts if number)
+    print(f"{site.index}: {_plural(len(site.entries), 'report')}, {tail}")
+    return EXIT_ERROR if site.failed else EXIT_GATE if site.held else EXIT_OK
 
 
 def _is_folder(path: str) -> bool:

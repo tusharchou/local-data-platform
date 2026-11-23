@@ -35,6 +35,7 @@ from local_data_platform.report.health import (
     news_of,
     news_text,
     panel,
+    stale_text,
 )
 from local_data_platform.report.render_json import render_json
 from local_data_platform.report.render_md import render_md
@@ -233,6 +234,16 @@ def test_a_health_says_in_one_line_which_tables_are_stale():
     assert Health(BUILT_AT, GATE, (one, TableHealth(table="gold.c"), two)).summary() == (
         "2 tables are stale, gold.a, gold.b")
     assert Health(BUILT_AT, GATE, (TableHealth(table="gold.c"),)).summary() == ""
+
+
+def test_the_tables_of_a_report_that_was_held_are_said_in_the_same_line_as_those_of_a_health():
+    first = TableHealth(table="gold.a", stale=True, reasons=("old",))
+    second = TableHealth(table="gold.b", stale=True, reasons=("older",))
+
+    assert ReportHeld("daily", (first,)).summary() == "1 table is stale, gold.a"
+    assert ReportHeld("daily", (first, second)).summary() == "2 tables are stale, gold.a, gold.b"
+    assert ReportHeld("daily", (first, second)).summary() == stale_text((first, second))
+    assert stale_text(()) == "" and stale_text([first]) == Health(BUILT_AT, GATE, (first,)).summary()
 
 
 def test_a_report_that_is_held_is_a_data_gate_that_names_every_stale_table_with_its_reasons():

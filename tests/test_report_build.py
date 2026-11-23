@@ -953,7 +953,7 @@ def test_a_build_that_cannot_render_says_so_at_the_render_stage_and_writes_nothi
     cut(lake)
     sink = MemorySink()
 
-    def broken(run, fmt, built_at):
+    def broken(run, fmt, built_at, home=None):
         raise ValueError("the page broke")
 
     monkeypatch.setattr(report_build, "render", broken)
@@ -1115,15 +1115,13 @@ def test_a_dash_for_out_prints_the_document_to_standard_output_and_the_summary_t
     assert sorted(item.name for item in lake.iterdir()) == ["config", "reports"]
 
 
-def test_the_command_needs_out_and_takes_a_report_file_and_not_a_folder(lake, capsys):
+def test_the_command_needs_out_and_a_report_file_that_is_there(lake, capsys):
     cut(lake)
     path = write(lake / "reports" / "daily.json", spec_of())
 
     assert main(["report", "build", str(path), "--window", LAKE_WINDOW]) == 1
     assert "ldp report build needs --out, so that no file is written by surprise. Use --out - for standard output" in (
         capsys.readouterr().err)
-    assert main(["report", "build", str(lake / "reports"), "--out", str(lake / "x.html")]) == 1
-    assert f"takes a report file, and {lake / 'reports'} is a folder" in capsys.readouterr().err
     assert main(["report", "build", str(lake / "missing.json"), "--out", str(lake / "x.html")]) == 1
     assert "missing.json" in capsys.readouterr().err and not (lake / "x.html").exists()
 

@@ -43,7 +43,9 @@ run.started ─► run.extracted ─► quality.evaluated ─┬─► run.publi
   exits with 3. The events go to the sinks in the
   `metadata.observability` of the report file, and `ldp runs REPORT` lists the builds with the window and the file of
   each. No event has a row of data. The OpenLineage sink sends a `START` and a `COMPLETE` or `FAIL` for the build, as a
-  job that has the name of the report and no dataset.
+  job that has the name of the report and no dataset. A folder of reports built as a site is one run for each report,
+  in the sinks of that report, and the `output` of its `report.rendered` is the page that is named for the window, and
+  not `latest.html`, which is a copy of it.
 
 Each event is a `RunEvent`:
 
