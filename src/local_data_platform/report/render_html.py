@@ -32,13 +32,18 @@ BUILT_FORMAT = MOMENT_FORMAT
 """How the moment of the build is written, always in UTC, as the last fact of the footer."""
 
 
+def window_label(window: tuple[dt.datetime, dt.datetime] | None, timezone: str) -> str | None:
+    """A window of two UTC instants as two wall-clock times in a time zone, or ``None`` when there is no window."""
+    if window is None:
+        return None
+    zone = get_timezone(timezone)
+    start, end = (moment.astimezone(zone).strftime("%Y-%m-%d %H:%M") for moment in window)
+    return f"{start} to {end}, {timezone}"
+
+
 def window_text(run: ReportRun) -> str | None:
     """The window of a run as two wall-clock times in the time zone of the report, or ``None`` when there is none."""
-    if run.window is None:
-        return None
-    zone = get_timezone(run.report.timezone)
-    start, end = (moment.astimezone(zone).strftime("%Y-%m-%d %H:%M") for moment in run.window)
-    return f"{start} to {end}, {run.report.timezone}"
+    return window_label(run.window, run.report.timezone)
 
 
 def read_text(read: TableRead) -> str:
@@ -112,21 +117,24 @@ def _footer(run: ReportRun, built_at: dt.datetime) -> html.Raw:
     return html.h("dl", html.Raw("\n"), html.join(*lines), html.Raw("\n"), class_="facts")
 
 
-def render_html(run: ReportRun, *, built_at: dt.datetime | None = None) -> str:
+def render_html(run: ReportRun, *, built_at: dt.datetime | None = None, home: str | None = None) -> str:
     """The page of a run, as text that starts with the doctype.
 
     Args:
         run: A run whose blocks were resolved, which is what ``run_queries`` gives when it has no problem.
         built_at: The moment of the build. The clock by default.
+        home: A link to the index of the site that the page belongs to, as the page reaches it, such as
+            ``../index.html``. The page then starts with a link to it called ``All reports``.
     """
     report = run.report
     moment = built_at if built_at is not None else dt.datetime.now(dt.timezone.utc)
     when = window_text(run)
+    back = html.h("p", html.h("a", "All reports", href=home)) if home else None
     chips = html.h("p", html.chip(f"Window {when}"), class_="chips") if when else None
     stale = banner(run.health) if run.health is not None else None
     health = panel(run.health) if run.health is not None else None
-    return html.page(report.title, chips, stale, *_body(run.views), health, subtitle=report.what or "",
+    return html.page(report.title, back, chips, stale, *_body(run.views), health, subtitle=report.what or "",
                      description=report.what or f"The report {report.identifier}.", footer=_footer(run, moment))
 
 
-__all__ = ["BUILT_FORMAT", "read_text", "render_html", "utc_text", "window_text"]
+__all__ = ["BUILT_FORMAT", "read_text", "render_html", "utc_text", "window_label", "window_text"]

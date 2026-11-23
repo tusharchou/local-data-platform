@@ -11,7 +11,8 @@ report agrees with ``ldp metrics query`` and with the exports of the gold layer:
     run.tables["by_restaurant"]          # a pyarrow.Table
 
 The modules are ``spec`` (the definitions, their checks without a table, the SQL files and the JSON Schema), ``engine``
-(running the queries) and ``cli`` (``ldp report``).
+(running the queries), ``build`` (writing a report as a page, Markdown or JSON), ``health`` (the data health panel and
+the freshness gate), ``site`` (a folder of reports built into one site) and ``cli`` (``ldp report``).
 
 The names below are loaded when they are first used, so that ``local_data_platform.spec``, which hands the ``Report``
 kind to :mod:`~local_data_platform.report.spec`, does not import pyarrow or DuckDB.

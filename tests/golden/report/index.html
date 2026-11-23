@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src &#x27;none&#x27;; style-src &#x27;sha256-CSS&#x27;; img-src data:; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;">
+<meta name="color-scheme" content="light dark">
+<meta name="generator" content="local-data-platform VERSION">
+<meta name="description" content="The latest build of each report of a folder, with the health of its data.">
+<title>Reports</title>
+<style>CSS</style>
+</head>
+<body>
+<header class="top"><div class="wrap"><h1>Reports</h1><p class="sub">5 reports</p></div></header>
+<main class="wrap"><p class="chips"><span class="chip ok">1 fresh</span><span class="chip warn">1 stale</span><span class="chip">1 not checked</span><span class="chip bad">1 held</span><span class="chip bad">1 failed</span></p>
+<div class="reports"><section class="card" aria-labelledby="report-1-h"><h2 id="report-1-h"><a href="daily_sales/latest.html">Daily sales</a></h2>
+<p class="chips"><span class="chip ok">fresh</span></p>
+<p class="sub">Orders and revenue of one day.</p>
+<dl class="facts"><dt>Window</dt><dd>2026-07-31 00:00 to 2026-08-01 00:00, Asia/Kolkata</dd><dt>Built</dt><dd>2026-08-02 06:30:15 UTC</dd></dl></section>
+<section class="card" aria-labelledby="report-2-h"><h2 id="report-2-h"><a href="weekly_orders/latest.html">Weekly orders</a></h2>
+<p class="chips"><span class="chip warn">stale</span></p>
+<p class="sub">Orders of the week, by city.</p>
+<dl class="facts"><dt>Window</dt><dd>2026-07-31 00:00 to 2026-08-01 00:00, Asia/Kolkata</dd><dt>Built</dt><dd>2026-08-02 06:30:15 UTC</dd></dl>
+<p class="note">1 table is stale, gold.gold_sales.</p></section>
+<section class="card" aria-labelledby="report-3-h"><h2 id="report-3-h"><a href="menu_items/latest.html">Menu items</a></h2>
+<p class="chips"><span class="chip">not checked</span></p>
+<dl class="facts"><dt>Window</dt><dd>none</dd><dt>Built</dt><dd>2026-08-02 06:31:15 UTC</dd></dl></section>
+<section class="card" aria-labelledby="report-4-h"><h2 id="report-4-h">Monthly revenue</h2>
+<p class="chips"><span class="chip bad">held</span></p>
+<p class="sub">Revenue of the month.</p>
+<dl class="facts"><dt>Window</dt><dd>2026-07-31 00:00 to 2026-08-01 00:00, Asia/Kolkata</dd><dt>Tried</dt><dd>2026-08-02 06:30:15 UTC</dd></dl>
+<pre>the report monthly_revenue was held, because 1 table is stale and metadata.freshness says block
+  - gold.gold_sales: its last run ended blocked_quality (failing not_null(city))</pre></section>
+<section class="card" aria-labelledby="report-5-h"><h2 id="report-5-h">broken.json</h2>
+<p class="chips"><span class="chip bad">failed</span></p>
+<dl class="facts"><dt>Tried</dt><dd>2026-08-02 06:30:15 UTC</dd></dl>
+<pre>broken.json has 2 problems:
+  - kind: broken.json is a Pipeline, and a report has &quot;kind&quot;: &quot;Report&quot;
+  - metadata.blocks[0].value: the query &#x27;totals&#x27; has no column &#x27;nope&#x27;</pre></section></div></main>
+<footer class="wrap muted">Built 2026-08-02 06:30:15 UTC by ldp report build. local-data-platform VERSION</footer>
+</body>
+</html>

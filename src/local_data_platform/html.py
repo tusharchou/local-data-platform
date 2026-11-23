@@ -83,6 +83,10 @@ background:var(--surface);color:var(--fg);font:inherit}
 [hidden]{display:none!important}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(12rem,1fr));gap:12px;margin:16px 0}
 .kpis .card{margin:0}
+.reports{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,20rem),1fr));gap:16px;margin:16px 0}
+.reports .card{margin:0}
+.reports h2{margin-bottom:4px}
+.reports pre{white-space:pre-wrap;overflow-wrap:anywhere}
 .kpi .label{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}
 .kpi .value{font-size:1.9rem;line-height:1.25;font-weight:650;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .kpi .delta{font-size:.85rem;color:var(--muted)}
