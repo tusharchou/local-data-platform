@@ -342,6 +342,16 @@ def test_the_eight_series_colours_are_defined_in_both_themes_and_differ_from_eac
         assert f".s{number}{{--c:var(--s{number})}}" in ldp_html.CSS
 
 
+def test_the_banner_is_in_the_warning_colours_of_both_themes_and_has_no_style_attribute():
+    css = ldp_html.CSS
+    rule = re.search(r"\.banner\{([^}]*)\}", css.replace("\\\n", "")).group(1)
+
+    assert "border:1px solid var(--warn)" in rule and "background:var(--warn-bg)" in rule
+    assert "color:var(--warn)" in rule
+    assert "--warn:" in css and "--warn-bg:" in css and css.count("--warn-bg:") == 2  # a value in each theme
+    assert "style=" not in str(h("div", "x", class_="banner", role="status"))
+
+
 def test_a_value_in_the_title_the_heading_the_subtitle_the_description_and_the_footer_is_escaped():
     text = page(HOSTILE, h("p", "x"), subtitle=HOSTILE, description=HOSTILE, footer=HOSTILE)
     parsed = Parsed(text)

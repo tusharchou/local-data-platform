@@ -72,10 +72,12 @@ EVENT_TYPES = (
     "table.maintained",
     "release.cut",
     "report.rendered",
+    "report.held",
 )
 """The event types LDP emits. Consumers must ignore types they don't know. ``release.cut`` says that a gold table is in
 a release, and one is emitted for each table of the release, with the table's own pipeline name. ``report.rendered``
-says that ``ldp report build`` wrote a report, between the ``run.started`` and the ``run.finished`` of the build."""
+says that ``ldp report build`` wrote a report, between the ``run.started`` and the ``run.finished`` of the build.
+``report.held`` says that the build wrote nothing, because the freshness gate of the report held it back."""
 
 RUN_STATUSES = ("published", "skipped_duplicate", "blocked_quality", "failed", "succeeded", "upstream_failed")
 """The ``status`` a ``run.finished`` event reports. A pipeline run is ``published``, ``skipped_duplicate``,
@@ -1365,8 +1367,11 @@ def summarize_runs(events: Iterable[RunEvent], *, final_attempts_only: bool = Fa
         ``workflow.finished`` events, has ``is_workflow`` true, the workflow's name as its ``pipeline`` and the
         status of the workflow. The ``release.cut`` event of a table in a gold release is a run of its own with the
         status ``released``, the ``snapshot_id`` of the table in the release and the name of the ``release``. The
-        build of a report, which has a ``report.rendered`` event, has ``is_report`` true, the report's identifier as its
-        ``pipeline``, and the ``window``, the ``output`` and the ``format`` of what it wrote.
+        build of a report, which has a ``report.rendered`` or a ``report.held`` event, has ``is_report`` true, the
+        report's identifier as its ``pipeline``, and the ``window``, the ``output`` and the ``format`` of what it wrote,
+        or of what it would have written. ``failing_checks`` is the names of the checks that failed, in the order that
+        they ran. A run that a data gate held back and that has no result of a check lists the names that the gate
+        gave.
     """
     runs: dict[tuple[str, int], dict[str, Any]] = {}
     for event in sorted(events, key=lambda item: (item.run_id, item.attempt, item.seq)):
@@ -1375,7 +1380,7 @@ def summarize_runs(events: Iterable[RunEvent], *, final_attempts_only: bool = Fa
             "started_at": event.ts, "status": "running", "rows_read": None, "rows_written": None,
             "snapshot_id": None, "idempotency_key": None, "duration_s": None, "checks": None,
             "workflow": None, "task_id": None, "workflow_run_id": None, "is_workflow": False, "release": None,
-            "is_report": False, "window": None, "output": None, "format": None,
+            "is_report": False, "window": None, "output": None, "format": None, "failing_checks": [],
         })
         payload = event.payload
         run["pipeline"] = run["pipeline"] or payload.get("pipeline")
@@ -1388,12 +1393,16 @@ def summarize_runs(events: Iterable[RunEvent], *, final_attempts_only: bool = Fa
             run["rows_read"] = payload.get("rows_read")
         elif event.type == "quality.evaluated":
             run["checks"] = _checks_text(payload)
+            run["failing_checks"] = [str(result.get("name")) for result in payload.get("results") or ()
+                                     if not result.get("passed", True)]
         elif event.type in ("run.published", "run.skipped_duplicate", "run.blocked_quality", "run.failed"):
             run["status"] = event.type.split(".", 1)[1]
             run["snapshot_id"] = payload.get("snapshot_id", run["snapshot_id"])
             if "rows_written" in payload:
                 run["rows_written"] = payload["rows_written"]
-        elif event.type == "report.rendered":
+            if event.type == "run.blocked_quality" and not run["failing_checks"]:
+                run["failing_checks"] = [str(name) for name in payload.get("failures") or ()]
+        elif event.type in ("report.rendered", "report.held"):
             run["is_report"] = True
             for name in ("window", "output", "format"):
                 run[name] = payload.get(name)
@@ -1799,6 +1808,9 @@ def _event_detail(event: RunEvent) -> str:
     if event.type == "report.rendered":
         return (f"format={payload.get('format')} output={payload.get('output')} bytes={payload.get('bytes')} "
                 f"queries={payload.get('queries')} rows={payload.get('rows')}")
+    if event.type == "report.held":
+        stale = [str(item.get("table")) for item in payload.get("tables") or ()]
+        return f"output={payload.get('output')} stale={', '.join(stale)}"
     if event.type == "workflow.started":
         return f"window={payload.get('window')} tasks={len(payload.get('tasks') or [])}"
     if event.type == "workflow.finished":

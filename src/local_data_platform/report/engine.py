@@ -57,16 +57,19 @@ class TableRead:
         release: The release that the table was read as, or ``None`` when it was read as it is now.
         snapshot_id: The snapshot that was read, or ``None`` for a table that has none yet.
         source: Which version, in words, such as ``release r3, cut 2026-10-20 08:07:55 UTC``.
+        pipeline: The identifier of the config that writes the table, or ``None`` when no config that was found does.
     """
 
     table: str
     release: str | None
     snapshot_id: int | None
     source: str
+    pipeline: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """The read as JSON-serialisable primitives."""
-        return {"table": self.table, "release": self.release, "snapshot_id": self.snapshot_id, "source": self.source}
+        return {"table": self.table, "release": self.release, "snapshot_id": self.snapshot_id, "source": self.source,
+                "pipeline": self.pipeline}
 
 
 @dataclass
@@ -133,6 +136,9 @@ class ReportRun:
         row_cap: The row cap that the queries ran with.
         views: What each block shows, from :func:`local_data_platform.report.view.resolve`, for the blocks that can
             be shown.
+        health: The data health of the tables that the queries read, from
+            :func:`local_data_platform.report.health.collect`, or ``None`` when it was not worked out. A build works it
+            out and ``ldp report check`` does not.
     """
 
     report: Report
@@ -147,6 +153,7 @@ class ReportRun:
     duration_ms: float = 0.0
     row_cap: int = 0
     views: list[Any] = field(default_factory=list)
+    health: Any = None
 
     @property
     def ok(self) -> bool:
@@ -367,7 +374,7 @@ def _read_versions(run: ReportRun, sandbox: DuckDBSandbox, tables: Sequence[Expo
         versions[identifier] = TableRead(
             table=identifier, release=chosen.name if snapshot is not None else None,
             snapshot_id=sandbox.snapshot_of(identifier),
-            source=describe_source(chosen, snapshot is not None, identifier, run.live))
+            source=describe_source(chosen, snapshot is not None, identifier, run.live), pipeline=exposed.pipeline)
     return versions
 
 

@@ -12,6 +12,11 @@ A build is a run of its own for the sinks in the ``metadata.observability`` of t
 ``report.rendered`` with what was written and which version of each table was read, and ``run.finished``. A build that
 fails emits ``run.failed`` and a ``run.finished`` of status ``failed`` instead. No event has a row of data.
 ``ldp runs REPORT`` lists the builds.
+
+Before it renders, a build asks :func:`local_data_platform.report.health.collect` about the health of the tables that
+the queries read, which is the panel that every report shows. When ``metadata.freshness`` says ``block`` and a table is
+stale, nothing is written. The build emits ``report.held`` and a ``run.finished`` of status ``blocked_quality``, and
+raises :class:`~local_data_platform.report.health.ReportHeld`, which ``ldp report build`` turns into exit status 3.
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ from local_data_platform import events, fs
 from local_data_platform.exceptions import ConfigError, LDPError
 from local_data_platform.paths import resolve_path
 from local_data_platform.report.engine import ReportRun, run_queries
+from local_data_platform.report.health import Health, ReportHeld, collect
 from local_data_platform.report.render_html import render_html
 from local_data_platform.report.render_json import render_json
 from local_data_platform.report.render_md import render_md
@@ -64,7 +70,7 @@ class Build:
 
     Attributes:
         report: The report.
-        run: The run that the document was made from, with its tables, its reads and its views.
+        run: The run that the document was made from, with its tables, its reads, its views and its health.
         format: ``html``, ``md`` or ``json``.
         document: The text that was written, or that would be written to standard output.
         output: Where it was written, as ``out`` was given, or ``None`` when ``out`` was not given or was ``-``.
@@ -73,6 +79,7 @@ class Build:
         built_at: The moment of the build.
         run_id: The id of the build among the run events.
         duration_ms: How long it took.
+        health: The health of the tables that the report read, which the document shows.
     """
 
     report: Report
@@ -85,6 +92,7 @@ class Build:
     built_at: dt.datetime
     run_id: str
     duration_ms: float
+    health: Health
 
 
 def render(run: ReportRun, fmt: str, built_at: dt.datetime) -> str:
@@ -153,6 +161,11 @@ def report_events(path: str | Path, run_id: str | None = None) -> tuple[list[eve
     return events.run_events(_EventsOf(report.identifier, report.base_dir, metadata), run_id=run_id)
 
 
+def _window_text(run: ReportRun) -> str | None:
+    """The window of a run as the two UTC instants that the events give, or ``None`` when it has none."""
+    return f"{format_instant(run.window[0])}/{format_instant(run.window[1])}" if run.window else None
+
+
 def build_report(report: Report, window: Any = None, *, out: str | Path | None = None, fmt: str = "html",
                  params: Mapping[str, Any] | None = None, release: str | None = None, live: bool = False,
                  row_cap: int | None = None, timeout_s: float | None = None, now: dt.datetime | None = None,
@@ -179,6 +192,8 @@ def build_report(report: Report, window: Any = None, *, out: str | Path | None =
 
     Raises:
         ReportBuildError: If a query did not run or a block cannot be shown. Nothing was written.
+        ReportHeld: If ``metadata.freshness`` says ``block`` and a table that the report read is stale. Nothing was
+            written.
         ConfigError: If the format, the window or a parameter is not valid.
         EngineNotFound: If ``duckdb`` is not installed.
     """
@@ -190,20 +205,36 @@ def build_report(report: Report, window: Any = None, *, out: str | Path | None =
                                 context={"pipeline": report.identifier, "report": report.identifier}, clock=tick)
     emitter.emit("run.started", {"task_kind": "report", "format": fmt, "release": release, "live": live,
                                  "spec": report.file.name if report.file else None})
+    target = None if out is None or str(out) == STDOUT else str(out)
     stage = "queries"
     try:
         run = run_queries(report, window, params=params, release=release, live=live, row_cap=row_cap,
                           timeout_s=timeout_s, now=now)
         if not run.ok:
             raise ReportBuildError(report.identifier, run.problems)
-        stage = "render"
+        stage = "health"
         built_at = tick()
+        run.health = collect(report, run.reads, built_at)
+        if run.health.held:
+            raise ReportHeld(report.identifier, run.health.stale)
+        stage = "render"
         document = render(run, fmt, built_at)
         data = document.encode("utf-8")
         stage = "write"
-        written = out is not None and str(out) != STDOUT
-        if written:
+        if target is not None:
             write_document(out, data)
+    except ReportHeld as held:
+        emitter.emit("report.held", {
+            "format": fmt, "output": target, "window": _window_text(run), "timezone": report.timezone,
+            "release": release, "live": live,
+            "rule": {"max_age_hours": report.freshness.max_age_hours, "on_stale": report.freshness.on_stale}
+            if report.freshness else None,
+            "tables": [{"table": item.table, "pipeline": item.pipeline, "reasons": list(item.reasons)}
+                       for item in held.tables]})
+        emitter.emit("run.finished", {"status": "blocked_quality",
+                                      "duration_s": round(time.perf_counter() - started, 3)})
+        emitter.flush()
+        raise
     except Exception as error:
         emitter.emit("run.failed", {"stage": stage, "error_type": type(error).__name__,
                                     "message": events.redact_text(str(error).splitlines()[0] if str(error) else ""),
@@ -214,19 +245,18 @@ def build_report(report: Report, window: Any = None, *, out: str | Path | None =
     digest = hashlib.sha256(data).hexdigest()
     rows = sum(item.rows for item in run.queries.values())
     emitter.emit("report.rendered", {
-        "format": fmt, "output": str(out) if written else None, "bytes": len(data), "sha256": digest,
-        "window": f"{format_instant(run.window[0])}/{format_instant(run.window[1])}" if run.window else None,
+        "format": fmt, "output": target, "bytes": len(data), "sha256": digest, "window": _window_text(run),
         "timezone": report.timezone, "release": release, "live": live, "queries": len(run.queries), "rows": rows,
-        "blocks": len(report.blocks),
+        "blocks": len(report.blocks), "stale": [item.table for item in run.health.stale],
         "tables": [{"table": read.table, "release": read.release, "snapshot_id": read.snapshot_id}
                    for read in run.reads.values()]})
     duration = time.perf_counter() - started
     emitter.emit("run.finished", {"status": "succeeded", "duration_s": round(duration, 3), "rows_read": rows})
     emitter.flush()
-    return Build(report=report, run=run, format=fmt, document=document, output=str(out) if written else None,
-                 bytes=len(data), sha256=digest, built_at=built_at, run_id=emitter.run_id,
-                 duration_ms=round(duration * 1000, 3))
+    return Build(report=report, run=run, format=fmt, document=document, output=target, bytes=len(data),
+                 sha256=digest, built_at=built_at, run_id=emitter.run_id, duration_ms=round(duration * 1000, 3),
+                 health=run.health)
 
 
-__all__ = ["Build", "FORMATS", "ReportBuildError", "STDOUT", "build_report", "render", "report_events", "report_sink",
-           "write_document"]
+__all__ = ["Build", "FORMATS", "ReportBuildError", "ReportHeld", "STDOUT", "build_report", "render", "report_events",
+           "report_sink", "write_document"]

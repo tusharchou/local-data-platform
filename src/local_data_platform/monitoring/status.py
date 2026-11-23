@@ -93,6 +93,8 @@ class Run:
         checks: The checks that passed over the checks that ran, such as ``3/4``, or ``None`` when none ran.
         duration_s: How long it took, or ``None``.
         snapshot_id: The snapshot that it wrote, or ``None``.
+        failing_checks: The names of the checks that failed, in the order that they ran. A run that a data gate held
+            back and that has no result of a check names what the gate said.
     """
 
     run_id: str
@@ -104,6 +106,7 @@ class Run:
     checks: str | None = None
     duration_s: float | None = None
     snapshot_id: int | None = None
+    failing_checks: tuple[str, ...] = ()
 
     @classmethod
     def of(cls, summary: Mapping[str, Any]) -> "Run":
@@ -111,18 +114,24 @@ class Run:
         return cls(run_id=summary["run_id"], attempt=summary["attempt"], status=summary["status"],
                    started_at=summary["started_at"], rows_read=summary["rows_read"],
                    rows_written=summary["rows_written"], checks=summary["checks"], duration_s=summary["duration_s"],
-                   snapshot_id=summary["snapshot_id"])
+                   snapshot_id=summary["snapshot_id"], failing_checks=tuple(summary.get("failing_checks") or ()))
 
     def age(self, now: dt.datetime) -> float:
         """Seconds from the start of the run to ``now``, and never below 0."""
         return _age(now, self.started_at)
+
+    @property
+    def finished_at(self) -> dt.datetime | None:
+        """The moment that the run ended, which is its start and its length, or ``None`` when it has no length yet."""
+        return None if self.duration_s is None else self.started_at + dt.timedelta(seconds=self.duration_s)
 
     def to_dict(self, now: dt.datetime) -> dict[str, Any]:
         """The run as JSON-serialisable primitives, with its age at ``now``."""
         return {"run_id": self.run_id, "attempt": self.attempt, "status": self.status,
                 "started_at": format_moment(self.started_at), "age_seconds": round(self.age(now), 3),
                 "rows_read": self.rows_read, "rows_written": self.rows_written, "checks": self.checks,
-                "duration_s": self.duration_s, "snapshot_id": self.snapshot_id}
+                "duration_s": self.duration_s, "snapshot_id": self.snapshot_id,
+                "failing_checks": list(self.failing_checks)}
 
 
 @dataclasses.dataclass(frozen=True)

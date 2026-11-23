@@ -328,6 +328,48 @@ def test_summarize_runs_folds_events_per_attempt_newest_first():
     assert running[0]["status"] == "running"
 
 
+def test_a_run_lists_the_names_of_the_checks_that_failed_in_the_order_that_they_ran():
+    quality = _event("quality.evaluated", 2, "r" * 8, payload={
+        "pipeline": "rides", "checks_run": 4, "checks_failed": 2, "results": [
+            {"name": "not_null(a)", "passed": True}, {"name": "unique(b)", "passed": False},
+            {"name": "range(c)", "passed": True}, {"name": "accepted(d)", "passed": False}]})
+
+    [run] = summarize_runs([_event("run.started", 0, "r" * 8, payload={"pipeline": "rides"}), quality])
+
+    assert run["checks"] == "2/4" and run["failing_checks"] == ["unique(b)", "accepted(d)"]
+
+
+def test_a_result_that_does_not_say_whether_it_passed_is_not_a_failing_check():
+    quality = _event("quality.evaluated", 2, "r" * 8, payload={
+        "checks_run": 2, "checks_failed": 0,
+        "results": [{"name": "not_null(a)"}, {"name": "unique(b)", "passed": None}]})
+
+    [run] = summarize_runs([quality])
+
+    assert run["failing_checks"] == ["unique(b)"]
+
+
+def test_a_run_that_passed_every_check_or_ran_none_has_no_failing_check():
+    [published] = summarize_runs(_run_events("a" * 8))
+    [bare] = summarize_runs(_run_events("b" * 8)[:2])
+    [empty] = summarize_runs([_event("quality.evaluated", 2, "c" * 8, payload={"checks_run": 0, "results": None})])
+
+    assert published["failing_checks"] == [] and bare["failing_checks"] == [] and empty["failing_checks"] == []
+
+
+def test_a_run_that_was_blocked_names_its_failing_checks_from_the_results_or_else_from_what_the_gate_said():
+    [with_results] = summarize_runs(_run_events("a" * 8, status="blocked_quality"))
+    gate = [_event("run.started", 0, "b" * 8, payload={"pipeline": "rides"}),
+            _event("run.blocked_quality", 1, "b" * 8, payload={"pipeline": "rides", "failures": ["contract", "x(y)"]})]
+    [from_gate] = summarize_runs(gate)
+    [both] = summarize_runs(gate + [_event("quality.evaluated", 0, "b" * 8, payload={
+        "pipeline": "rides", "checks_run": 1, "checks_failed": 1, "results": [{"name": "first(z)", "passed": False}]})])
+
+    assert with_results["failing_checks"] == ["not_null(ride_id)"] and with_results["status"] == "blocked_quality"
+    assert from_gate["failing_checks"] == ["contract", "x(y)"] and from_gate["status"] == "blocked_quality"
+    assert both["failing_checks"] == ["first(z)"]  # the results of the checks come first and are not replaced
+
+
 # ---------------------------------------------------------------------- OpenLineage
 
 # The parts of the OpenLineage 2-0-2 RunEvent schema a consumer relies on.
@@ -749,6 +791,23 @@ def test_the_openlineage_sink_sees_the_build_of_a_report_as_a_job_with_the_name_
     assert [item["eventType"] for item in broken] == ["START", "FAIL"]
     assert {item["job"]["name"] for item in done + broken} == {"daily"}
     assert all(item["inputs"] == [] and item["outputs"] == [] for item in done + broken)
+
+
+def test_a_report_that_was_held_back_is_a_report_run_that_ended_blocked_quality_and_names_where_it_would_have_gone():
+    sink = MemorySink()
+    emitter = RunEmitter(sink, events.uuid7(), context={"pipeline": "daily", "report": "daily"})
+    emitter.emit("run.started", {"task_kind": "report", "format": "html"})
+    emitter.emit("report.held", {"format": "html", "output": "site/daily.html",
+                                 "window": "2026-07-31T00:00:00Z/2026-08-01T00:00:00Z",
+                                 "tables": [{"table": "gold.a", "reasons": ["x"]}, {"table": "gold.b", "reasons": []}]})
+    emitter.emit("run.finished", {"status": "blocked_quality", "duration_s": 0.5})
+
+    [run] = summarize_runs(sink.events)
+
+    assert "report.held" in events.EVENT_TYPES and run["is_report"] is True and run["status"] == "blocked_quality"
+    assert (run["window"], run["output"], run["format"]) == (
+        "2026-07-31T00:00:00Z/2026-08-01T00:00:00Z", "site/daily.html", "html")
+    assert events._event_detail(sink.events[1]) == "output=site/daily.html stale=gold.a, gold.b"
 
 
 def test_the_detail_of_a_rendered_event_says_the_format_where_it_went_how_big_and_how_many_rows():

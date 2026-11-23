@@ -165,8 +165,33 @@ def test_a_run_has_an_age_that_is_never_below_zero_and_a_dict_that_json_can_carr
     assert run.to_dict(NOW) == {
         "run_id": "r1", "attempt": 2, "status": "published", "started_at": "2026-10-28T09:00:00Z",
         "age_seconds": 10800.0, "rows_read": 5, "rows_written": 4, "checks": "3/4", "duration_s": 1.25,
-        "snapshot_id": 7}
+        "snapshot_id": 7, "failing_checks": []}
     assert json.loads(json.dumps(run.to_dict(NOW)))["status"] == "published"
+
+
+def test_a_run_ends_when_its_length_says_and_has_no_end_before_it_has_a_length():
+    done = Run(run_id="r1", attempt=1, status="published", started_at=_hours_ago(3), duration_s=1.5)
+    open_ = Run(run_id="r2", attempt=1, status="running", started_at=_hours_ago(3))
+
+    assert done.finished_at == _hours_ago(3) + dt.timedelta(seconds=1.5) and open_.finished_at is None
+
+
+def test_a_run_that_took_no_time_ends_when_it_started():
+    run = Run(run_id="r1", attempt=1, status="published", started_at=_hours_ago(3), duration_s=0.0)
+
+    assert run.finished_at == _hours_ago(3)
+
+
+def test_a_run_made_from_a_summary_keeps_the_names_of_its_failing_checks_and_a_summary_without_them_has_none():
+    summary = {"run_id": "r1", "attempt": 1, "status": "blocked_quality", "started_at": _hours_ago(1),
+               "rows_read": 5, "rows_written": 0, "checks": "1/2", "duration_s": 0.5, "snapshot_id": None}
+
+    named = Run.of({**summary, "failing_checks": ["unique(id)", "range(amount)"]})
+    bare = Run.of(summary)
+
+    assert named.failing_checks == ("unique(id)", "range(amount)") and bare.failing_checks == ()
+    assert named.to_dict(NOW)["failing_checks"] == ["unique(id)", "range(amount)"]
+    assert Run.of({**summary, "failing_checks": None}).failing_checks == ()
 
 
 def test_the_health_values_are_the_order_of_the_rows_and_the_columns_are_the_ones_of_the_table():
@@ -189,7 +214,8 @@ def test_a_row_has_the_last_run_the_last_success_the_size_of_the_table_and_the_s
         "orders", "shop.orders", "ops team", NOW, "ok")
     assert row.file == str(path)
     assert row.last_run == Run(run_id="orders-run-002", attempt=1, status="published", started_at=_hours_ago(5),
-                               rows_read=130, rows_written=100, checks="2/3", duration_s=1.5, snapshot_id=1002)
+                               rows_read=130, rows_written=100, checks="2/3", duration_s=1.5, snapshot_id=1002,
+                               failing_checks=("range(amount)",))
     assert (row.last_run.age(NOW), row.last_success_age_seconds) == (5 * 3600, 5 * 3600)
     assert row.rows == 3 and row.last_commit_age_seconds is not None and row.last_commit_age_seconds >= 0
     assert (row.freshness, row.volume, row.schema, row.metrics) == ("ok", "ok", None, None)

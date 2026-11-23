@@ -15,7 +15,7 @@ import math
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from local_data_platform.report.render_html import utc_text
+from local_data_platform.report.formats import utc_text
 from local_data_platform.report.view import Chart, Grid, Kpi, Words
 
 if TYPE_CHECKING:
@@ -107,6 +107,7 @@ def document(run: ReportRun, *, built_at: dt.datetime | None = None) -> dict[str
         "release": run.release, "live": run.live,
         "parameters": {name: _value(value) for name, value in run.parameters.items()},
         "tables": [read.to_dict() for read in run.reads.values()],
+        "health": run.health.to_dict() if run.health is not None else None,
         "queries": {name: _query(item) for name, item in run.queries.items() if item.table is not None},
         "blocks": [_view(view) for view in run.views],
     }

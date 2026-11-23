@@ -39,8 +39,8 @@ Every command follows one exit-code table::
     0  success, including a run that published and a run that skipped a duplicate
     1  an error: a bad config, a usage error, a failed write
     2  an SLA breach, which ``ldp monitor`` reports when a monitor is in error
-    3  a data gate held the run back, such as a quality check that blocked a write, or a gold table whose
-       contract does not hold
+    3  a data gate held the run back, such as a quality check that blocked a write, a gold table whose
+       contract does not hold, or a report whose freshness says block and whose data is stale
 
 A scheduler retries a run that exits with 1, because the cause may pass, and never retries one that exits with 3,
 because the data has to change first.
