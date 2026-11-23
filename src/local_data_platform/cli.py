@@ -29,6 +29,7 @@ Commands::
     ldp status CONFIG_OR_FOLDER [--json] [--html FILE] [--now ISO-8601]   (monitoring.cli)
     ldp alert test CONFIG                  (notify)
     ldp report check REPORT_OR_DIR [--window WINDOW] [--param NAME=VALUE] [--release RN | --live]   (report.cli)
+    ldp report build REPORT --out PATH [--format html|md|json] [--window WINDOW] [--release RN | --live]   (report.cli)
 
 The commands in the second group are added by the ``add_cli`` function of the module named
 next to them (``docs/design/v0_1_1_platform.md`` C9).

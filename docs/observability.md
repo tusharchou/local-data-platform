@@ -36,13 +36,19 @@ run.started ─► run.extracted ─► quality.evaluated ─┬─► run.publi
   table with the status `released`. The OpenLineage sink leaves it alone. `describe_table` of `ldp mcp` and
   `ldp gold list` leave it out when they say what the latest run of a table was, so a released table still shows the
   status of its last build.
+- The build of a report, `ldp report build`, is a run of its own, with the identifier of the report as its pipeline name.
+  It emits `run.started`, then `report.rendered` when the file is written, and `run.finished`. A build that fails
+  emits `run.failed` and a `run.finished` with the status `failed`, and writes no file. The events go to the sinks in the
+  `metadata.observability` of the report file, and `ldp runs REPORT` lists the builds with the window and the file of
+  each. No event has a row of data. The OpenLineage sink sends a `START` and a `COMPLETE` or `FAIL` for the build, as a
+  job that has the name of the report and no dataset.
 
 Each event is a `RunEvent`:
 
 | Field | Meaning |
 |---|---|
 | `event_id` | A UUIDv7, unique per event |
-| `type` | One of the types above (`table.maintained` and `run.staged` are reserved), or `release.cut` |
+| `type` | One of the types above (`table.maintained` and `run.staged` are reserved), or `release.cut` or `report.rendered` |
 | `schema_version` | The envelope version, `1` |
 | `ts` | When it happened, in UTC |
 | `run_id` | The run's UUIDv7. `PipelineResult.run_id` is the same value |
@@ -67,6 +73,7 @@ depends on the type:
 | `run.failed` | `stage` (`search`, `extract`, `transform`, `validate`, `contract`, `write`), `error_type`, `message` |
 | `run.finished` | `status`, `duration_s`, `rows_read`, `rows_written`, `published_snapshot_id`, `idempotency_key`, `quality_passed`, and `contract_passed` (false) when the contract blocked the run. A task of a workflow that did not run a pipeline has `succeeded`, `failed` or `upstream_failed` as its `status`, and `upstream_failed` adds `blocked_by`, the ids of the tasks that did not succeed |
 | `release.cut` | `release` (such as `r3`), `namespace`, `snapshot_id` and `rows` of the table in the release, `dataset` and `dataset_version` (the pin), `status` (`built` or `checked`), `tables` (how many the release holds), and `window` for a release that a workflow cut |
+| `report.rendered` | `format` (`html`, `md` or `json`), `output` (where the file was written, or null when the document was printed or returned), `bytes` and `sha256` of the document, `window` (the start and the end as UTC instants), `timezone`, `release` and `live` as they were asked for, `queries`, `rows` and `blocks` (how many ran, were read and were shown), and `tables`, each with the `table`, the `release` and the `snapshot_id` that the build read. The `run.started` of a build has `task_kind` (`report`), `format`, `release`, `live` and `spec` (the file name), and its `run.failed` has the `stage` (`queries`, `render` or `write`) and `problems` (how many, when the report had problems) |
 | `workflow.started` | `workflow` and `pipeline` (the workflow's identifier), `workflow_run_id`, `window` (start and end), `schedule`, `tasks` (the `id`, `kind` and `depends_on` of each, in the order they run, and `max_attempts` for a task that is retried), `ldp_version`, and `replace` (true) when the run replaces the window, as `ldp backfill --replace` does |
 | `workflow.finished` | `status` (`succeeded`, `blocked_quality` when a data gate is the only problem, or `failed`), `duration_s`, `counts` (tasks per status), `tasks` (the status of each task) |
 

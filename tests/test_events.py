@@ -690,6 +690,73 @@ def test_ldp_runs_creates_nothing_when_nothing_was_recorded(tmp_path, capsys):
     assert sorted(p.name for p in (tmp_path / "project").iterdir()) == ["rides.json"]
 
 
+# ---------------------------------------------------------------------- the build of a report
+
+
+def _build_events(*, window="2026-07-31T00:00:00Z/2026-08-01T00:00:00Z", output="site/daily.html", failed=False):
+    sink = MemorySink()
+    emitter = RunEmitter(sink, events.uuid7(), context={"pipeline": "daily", "report": "daily"})
+    emitter.emit("run.started", {"task_kind": "report", "format": "html"})
+    if failed:
+        emitter.emit("run.failed", {"stage": "queries", "error_type": "ReportBuildError", "message": "it failed"})
+    else:
+        emitter.emit("report.rendered", {"format": "html", "output": output, "window": window, "bytes": 1234,
+                                         "queries": 2, "rows": 5})
+    emitter.emit("run.finished", {"status": "failed" if failed else "succeeded", "duration_s": 0.25, "rows_read": 5})
+    return sink.events
+
+
+def test_report_rendered_is_an_event_type_that_the_build_of_a_report_emits_between_start_and_finish():
+    assert "report.rendered" in events.EVENT_TYPES
+
+    assert [event.type for event in _build_events()] == ["run.started", "report.rendered", "run.finished"]
+
+
+def test_the_build_of_a_report_is_a_run_that_says_its_window_where_it_wrote_and_in_which_format():
+    [run] = summarize_runs(_build_events())
+
+    assert run["is_report"] is True and run["pipeline"] == "daily" and run["status"] == "succeeded"
+    assert (run["window"], run["output"], run["format"]) == (
+        "2026-07-31T00:00:00Z/2026-08-01T00:00:00Z", "site/daily.html", "html")
+    assert (run["rows_read"], run["duration_s"], run["is_workflow"], run["release"]) == (5, 0.25, False, None)
+
+
+def test_a_build_that_wrote_nothing_has_no_output_and_one_that_failed_is_not_marked_as_rendered():
+    [stdout] = summarize_runs(_build_events(output=None, window=None))
+    [failed] = summarize_runs(_build_events(failed=True))
+
+    assert stdout["is_report"] is True and stdout["output"] is None and stdout["window"] is None
+    assert failed["is_report"] is False and failed["status"] == "failed" and failed["output"] is None
+    assert failed["pipeline"] == "daily"
+
+
+def test_a_pipeline_run_is_not_a_report_and_has_no_window_or_output_of_a_build():
+    [run] = summarize_runs(_run_events())
+
+    assert run["is_report"] is False and (run["window"], run["output"], run["format"]) == (None, None, None)
+
+
+def test_the_openlineage_sink_sees_the_build_of_a_report_as_a_job_with_the_name_of_the_report_and_no_dataset(tmp_path):
+    for failed in (False, True):
+        sink = OpenLineageSink(tmp_path / f"lineage-{failed}.jsonl")
+        for event in _build_events(failed=failed):
+            sink.emit(event)
+
+    done = read_openlineage(tmp_path / "lineage-False.jsonl")
+    broken = read_openlineage(tmp_path / "lineage-True.jsonl")
+
+    assert [item["eventType"] for item in done] == ["START", "COMPLETE"]
+    assert [item["eventType"] for item in broken] == ["START", "FAIL"]
+    assert {item["job"]["name"] for item in done + broken} == {"daily"}
+    assert all(item["inputs"] == [] and item["outputs"] == [] for item in done + broken)
+
+
+def test_the_detail_of_a_rendered_event_says_the_format_where_it_went_how_big_and_how_many_rows():
+    rendered = _build_events()[1]
+
+    assert events._event_detail(rendered) == "format=html output=site/daily.html bytes=1234 queries=2 rows=5"
+
+
 # ---------------------------------------------------------------------- docs
 
 

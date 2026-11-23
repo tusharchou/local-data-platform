@@ -259,6 +259,7 @@ call:
 | `ldp metrics validate DIR [--json]` | Check every name and expression of the metrics against the schema of the gold tables, list every problem, and exit with 1 if there is one. No row is read, and `ldp gold build` runs the same check | `metrics.validate_folder(folder)` |
 | `ldp metrics query DIR METRICS [--by DIMS] [--grain GRAIN] [--filter DIM=VALUE] [--from DAY] [--to DAY] [--release RN\|--live] [--sql] [--out FILE] [--raw] [--json]` | Compute metrics from the current release of the gold tables, grouped and filtered, and print them in their format. `--sql` prints the SQL and runs nothing, and `--out` writes CSV, Parquet or JSONL | `metrics.query(folder, metrics, by=..., grain=..., filters=[...])` returns a `pyarrow.Table` |
 | `ldp report check REPORT [--window W] [--param NAME=VALUE] [--release RN\|--live] [--row-cap N] [--timeout S] [--json]` | Check a report file, or every report file of a folder, and run each of its queries and metric blocks once in a locked-down DuckDB on the gold tables of the current release. It lists the rows, the columns and the time of each, the version of each table that was read, and every problem by its JSON path, and exits with 1 if there is one. See [Define a report](#define-a-report) | `report.check_report(path, window)`, `report.run_queries(report, window)` |
+| `ldp report build REPORT --out PATH [--format html\|md\|json] [--window W] [--param NAME=VALUE] [--release RN\|--live] [--row-cap N] [--timeout S]` | Run a report as `ldp report check` does and write it as one self-contained HTML page, as Markdown, or as JSON. The page has the key figures, charts drawn inline as SVG, tables and texts, and a footer that names each table that was read with its release and snapshot, the window, the time zone and the time of the build. `--out` is a path, a `file://`, `s3://` or `gs://` address, or `-` for standard output. A report with a problem is not written, and the file that was there stays. A build is recorded as run events in the sinks of `metadata.observability`, and `ldp runs REPORT` lists the builds. See [Define a report](#define-a-report) | `report.build.build_report(report, window, out=path)` |
 | `ldp monitor CONFIG [--json] [--now TIME]` | Check the SLA of a config, or of every dataset config of a folder, and print one line for each monitor. The freshness monitor measures the age of a table from the metadata of its last commit, or from the newest value of `freshness.column`, and scans no rows. The volume monitor compares the rows of the latest run with `min_rows` and `max_rows`, and with the median of the runs before it, and the schema monitor compares the columns of the table, and of its source in the latest run, with the last evaluation. A metric monitor computes a metric of the metrics file, or one query, for the latest complete period of its grain, and compares it with `min` and `max` and with the median of the periods before it in the history of the monitors, see the [monitoring guide](docs/monitoring.md). The command writes to no table and creates no catalog. It records the results in `_ldp.monitor_results` when the config has an `iceberg` sink and its catalog exists, and in `.ldp/monitor.jsonl` next to the config otherwise. A config that lists channels in `metadata.observability.alerts` is told when a monitor changes state and when it recovers, see [Alerts](docs/alerts.md). The exit status is 0 when every monitor is `ok` or `warn`, 2 when one is `error` and 1 when `ldp` itself fails | `monitoring.evaluate(config, now=...)` returns a `MonitorResult` for each monitor, and `monitoring.history.record` and `read_results` write and read the history |
 | `ldp status CONFIG [--json] [--html FILE] [--now TIME]` | Print one row for each dataset config of a file or a folder, the worst first, with the last run and how long ago it started, how long ago a run succeeded, the rows of the table, what the freshness, volume, schema and metrics monitors say now, the checks that failed in the last 7 days and the open alerts. It evaluates the monitors in memory and records and sends nothing, reads each `_ldp` table once for the configs that share a catalog, and says how far back the history goes. The exit status is 0 unless `ldp` itself fails. `--json` prints the rows, and `--html FILE` also writes one self-contained page with the table, the monitors and the last 20 runs of each pipeline | `monitoring.status.rows(path, now=None)` returns a `StatusRow` for each config, and `monitoring.ledger.Ledger` reads the history of many configs with one read of each table |
 | `ldp alert test CONFIG` | Send one test message to each channel of `metadata.observability.alerts`, whatever its `on` says, and print which ones got it. It sends real messages. The exit status is 0 when every channel got it and 1 otherwise | `notify.notifier_for(config).test()` returns a `Delivery` for each channel, and `notify.NotifySink` is the event sink that alerts when a run fails or is blocked |
@@ -940,18 +941,36 @@ its own.
   `series` for the others), or computes a `metric` of the metrics files, with a `grain`, `by` dimensions and `filters`. A `table` shows a query with its `columns`,
   `formats` and `max_rows`, and a `text` has paragraphs with `{query.column}` placeholders. A number `format` is `integer`,
   `number:N`, `percent:N` or `currency:CODE`. A metric block reads the days that the window touches, in the time zone of the
-  report.
+  report. A `bar` or a `line` may set `max_points`, the rows of its query that it draws. A `bar` of a metric names one
+  dimension for its bars and may name a second that splits them into series, and a `line`, or a `bar` of periods, names at
+  most one, which splits it into series.
 - **Checked.** `ldp report check REPORT` validates the file, finds the tables, and runs every query and every metric block
   once. It prints the rows, the columns and the milliseconds of each, and the version of each table that was read. It lists
   every problem with the JSON path of what is wrong and exits with 1, and with 0 when all pass. Give it a folder to check
   every report in it. `ldp plan` validates a report file without a table, `ldp schema --kind Report` prints its JSON Schema,
   and `ldp mcp --config` leaves report files alone.
+- **Built.** `ldp report build REPORT --window W --out PATH` runs the report as `check` does and writes it. The default is
+  one HTML page on the page shell of `ldp gold docs`, so it loads nothing, opens from a folder, reads in the light and the
+  dark theme, fits the width of a phone and escapes every value. A `kpi` is a tile with its change from the column it
+  compares with, or from the period before. A `bar` and a `line` are drawn by `ldp` as inline SVG with a title for a screen
+  reader, at most eight series, and a table under the chart that repeats every value. A `table` is a table and a `text` is
+  paragraphs. A number is written by the same `format` in a tile, on the axis of a chart and in a table. A chart draws the
+  first `max_points` rows of its query (500 by default) and a table shows the first `max_rows`, and each says how many rows
+  it left out. The footer lists each table that the report read with its release and snapshot, and the window, the time
+  zone and the time of the build. `--format md` writes the same blocks as Markdown, with each chart as a table, and
+  `--format json` writes the rows of every query and what each block shows, for a program or an agent. `--out` is a path, a
+  `file://`, `s3://` or `gs://` address, or `-` for standard output. The file is written whole or not at all. A report with
+  a problem writes nothing and leaves the file that was there. Two builds over the same snapshots are the same bytes, except
+  for the line that has the time of the build.
+- **Recorded.** With `metadata.observability`, a build emits `run.started`, `report.rendered` and `run.finished` to its
+  sinks, and `run.failed` when it fails. The events say the format, where the file went, its size, the window, and the
+  release and snapshot of each table. They have no row of data. `ldp runs REPORT` lists the builds with the window and the
+  file of each, see [Run events](docs/observability.md).
 
-A `title` is what the report is called, and the identifier by default. `freshness`, `delivery`, `after` and
-`observability` are part of the file. They are checked for their shape now, and what
-they do arrives with the report build, the send and the schedule of the 0.1.6 milestone. A `delivery` entry names the
-environment variable that holds an address (`webhook_env`, `url_env`), and an address or a token written into the file is
-refused.
+A `title` is what the report is called, and the identifier by default. `freshness`, `delivery` and `after` are part of
+the file. They are checked for their shape now, and what they do arrives with the send and the schedule of the 0.1.6
+milestone. A `delivery` entry names the environment variable that holds an address (`webhook_env`, `url_env`), and an
+address or a token written into the file is refused.
 
 ### Open the gold tables in a spreadsheet or a BI tool
 
