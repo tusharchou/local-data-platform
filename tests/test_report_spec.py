@@ -642,6 +642,14 @@ def test_the_time_zone_the_limits_the_freshness_rule_and_what_it_waits_for_are_c
     ({"t": {"type": "file", "path": ""}}, "metadata.delivery.t.path: must be a non-empty string"),
     ({"t": {"type": "file", "path": "a.html", "public_url": " "}}, "metadata.delivery.t.public_url: must be a "
                                                                    "non-empty string"),
+    ({"t": {"type": "file", "path": "a.html", "public_url": "example.com/a"}},
+     "metadata.delivery.t.public_url: must be an address that starts with http:// or https:// and has no spaces"),
+    ({"t": {"type": "file", "path": "a.html", "public_url": "ftp://example.com/a"}},
+     "metadata.delivery.t.public_url: must be an address that starts with http:// or https:// and has no spaces"),
+    ({"t": {"type": "file", "path": "a.html", "public_url": "https://example.com/a b"}},
+     "metadata.delivery.t.public_url: must be an address that starts with http:// or https:// and has no spaces"),
+    ({"t": {"type": "file", "path": "a.html", "public_url": "javascript:alert(1)"}},
+     "metadata.delivery.t.public_url: must be an address that starts with http:// or https://"),
 ])
 def test_where_a_report_is_sent_is_a_name_with_a_type_and_the_environment_variable_that_holds_the_address(delivery,
                                                                                                           expected):
@@ -839,3 +847,11 @@ def test_the_modules_of_the_report_package_load_by_name():
     assert package.load_report is report_spec.load_report and "run_queries" in dir(package)
     with pytest.raises(AttributeError):
         package.not_there  # noqa: B018
+
+
+@pytest.mark.parametrize("address", ["https://example.com/daily", "http://intranet.example/reports/daily.html",
+                                     "https://example.com/r?a=1&b=2#top", "http://127.0.0.1:8000/x"])
+def test_the_public_address_of_a_file_is_an_http_or_https_address_with_no_space(address):
+    delivery = {"t": {"type": "file", "path": "a.html", "public_url": address}}
+
+    assert messages(with_metadata(delivery=delivery)) == []

@@ -113,15 +113,41 @@ def network_trap():
 class _LineageHandler(http.server.BaseHTTPRequestHandler):
     received: list = []
     status = 201
+    replies: list = []
+    content_types: list = []
+    raw: list = []
 
     def do_POST(self):  # noqa: N802 - http.server's naming
         body = self.rfile.read(int(self.headers["Content-Length"]))
-        type(self).received.append((self.path, self.headers.get("Authorization"), json.loads(body)))
-        self.send_response(type(self).status)
+        server = type(self)
+        server.received.append((self.path, self.headers.get("Authorization"), json.loads(body)))
+        server.content_types.append(self.headers.get("Content-Type"))
+        server.raw.append(body)
+        status, headers, text = server.replies.pop(0) if server.replies else (server.status, {}, "")
+        answer = text.encode("utf-8")
+        self.send_response(status)
+        for name, value in headers.items():
+            self.send_header(name, value)
+        self.send_header("Content-Length", str(len(answer)))
         self.end_headers()
+        self.wfile.write(answer)
 
     def log_message(self, *args):
         pass
+
+
+@pytest.fixture(autouse=True)
+def no_retry_wait(monkeypatch):
+    """The notifier sends a post again after HTTP 429 or a 5xx answer, and waits a second and more first. No test waits.
+
+    The fixture is on for every test and gives the list of the waits that the notifier asked for, in seconds, so a test
+    that cares can say how long it would have waited.
+    """
+    from local_data_platform import notify
+
+    waits: list[float] = []
+    monkeypatch.setattr(notify, "_sleep", waits.append)
+    return waits
 
 
 @pytest.fixture
@@ -129,13 +155,19 @@ def lineage_server():
     """A local HTTP server that takes any JSON ``POST``. Yields ``(url, handler)``.
 
     ``handler.received`` is a list of ``(path, Authorization header, parsed body)`` in the order that the requests came,
-    and ``handler.status`` is the status that the server answers with, 201 by default. The OpenLineage sink, the alert
-    channels and the report delivery of the later milestones post here, so a test sends nothing outside the machine.
+    and ``handler.status`` is the status that the server answers with, 201 by default. ``handler.replies`` is a list of
+    ``(status, headers, text)`` that the next requests are answered with, one for each, before ``handler.status``
+    takes over, so a test can answer 429 with a ``Retry-After`` and then 200. ``handler.content_types`` and
+    ``handler.raw`` say the ``Content-Type`` and the bytes of each request. The OpenLineage sink, the alert channels
+    and the report delivery post here, so a test sends nothing outside the machine.
     """
     _LineageHandler.received = []
     _LineageHandler.status = 201
+    _LineageHandler.replies = []
+    _LineageHandler.content_types = []
+    _LineageHandler.raw = []
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _LineageHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)  # a fast stop
     thread.start()
     yield f"http://127.0.0.1:{server.server_address[1]}", _LineageHandler
     server.shutdown()

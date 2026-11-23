@@ -26,6 +26,13 @@ which are counts, times and names. A channel that is down, a URL that is not set
 a warning in the log and a :class:`Delivery` that says why, and they never fail a run, and the reason never holds a
 URL.
 
+The same sender carries the deliveries of ``ldp report send`` (see :mod:`local_data_platform.report.deliver`), which
+posts a Slack message that has Block Kit blocks and the JSON of a report to a webhook, and writes the page of a report
+to a file. A post that gets HTTP 429 or a 5xx answer is sent again, up to ``retries`` times, which is :data:`RETRIES`
+for an alert, after a wait that doubles each time and that an answer can set with ``Retry-After``. Any other answer,
+and a failure to reach the URL, is final. A destination of a report refuses a URL that is not https, except
+``http://`` for 127.0.0.1 and localhost.
+
 This module needs only the standard library when it is imported. ``requests`` and the event code are imported when an
 alert is sent.
 """
@@ -33,10 +40,14 @@ alert is sent.
 import argparse
 import dataclasses
 import datetime as dt
+import email.utils
 import json
+import math
 import os
 import re
 import threading
+import time
+import urllib.parse
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -75,6 +86,27 @@ TIMEOUT_S = 10.0
 MAX_NAMES = 10
 """How many names of failed checks a run alert lists."""
 
+RETRIES = 3
+"""How many times a post is sent again after HTTP 429 or a 5xx answer, unless the destination says another number."""
+
+BACKOFF_S = 1.0
+"""The wait before the first retry, in seconds. Each wait is twice the one before, unless the answer sets it."""
+
+MAX_WAIT_S = 60.0
+"""The longest that a retry waits. An answer that asks for more than this is not retried."""
+
+LOCAL_HOSTS = ("127.0.0.1", "localhost")
+"""The only hosts that a channel that wants https may reach over plain ``http://``."""
+
+SLACK_MAX_BLOCKS = 50
+SLACK_MAX_SECTION = 3000
+SLACK_MAX_FIELDS = 10
+SLACK_MAX_FIELD = 2000
+SLACK_MAX_HEADER = 150
+SLACK_MAX_CONTEXT = 10
+"""What Slack allows in a message: blocks, characters of a section and of a field, fields in a section, characters of a
+header and elements of a context block. A message over a limit is refused with ``invalid_blocks``."""
+
 CHANNEL_KEYS = {
     "slack": ("type", "url_env", "on", "repeat_after_minutes"),
     "webhook": ("type", "url_env", "token_env", "on", "repeat_after_minutes"),
@@ -83,6 +115,8 @@ CHANNEL_KEYS = {
 """The keys of each type of channel."""
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+_SLACK_ERROR = re.compile(r"[a-z0-9_]{1,64}")
 _RUN_EVENTS = ("run.failed", "run.blocked_quality")
 _HEADLINES = {
     "run.failed": "run failed", "run.blocked_quality": "run blocked by a quality check",
@@ -183,6 +217,11 @@ class Channel:
         url_env: The environment variable that holds the URL of a ``slack`` or ``webhook`` channel.
         token_env: The environment variable that holds the bearer token of a ``webhook`` channel, or ``None``.
         path: The file of a ``file`` channel, relative to the folder of the config.
+        name: What a destination of a report is called, or ``None`` for a channel of alerts.
+        headers_env: The environment variable that holds a JSON object of the headers of a ``webhook``, or ``None``.
+        retries: How many times a post is sent again after HTTP 429 or a 5xx answer.
+        https_only: Whether the URL has to be https, with ``http://127.0.0.1`` and ``http://localhost`` as the only
+            exceptions.
     """
 
     kind: str
@@ -191,10 +230,17 @@ class Channel:
     url_env: str | None = None
     token_env: str | None = None
     path: str | None = None
+    name: str | None = None
+    headers_env: str | None = None
+    retries: int = RETRIES
+    https_only: bool = False
 
     @property
     def label(self) -> str:
-        """The channel in a few words that name no secret, such as ``slack LDP_SLACK_WEBHOOK``."""
+        """The channel in a few words that name no secret, such as ``slack LDP_SLACK_WEBHOOK``, or ``slack team`` for a
+        destination called ``team``."""
+        if self.name:
+            return f"{self.kind} {self.name}"
         return f"file {self.path or DEFAULT_FILE}" if self.kind == "file" else f"{self.kind} {self.url_env}"
 
     def wants(self, event: str) -> bool:
@@ -368,31 +414,195 @@ def alert_json_schema() -> dict[str, Any]:
 
 @dataclasses.dataclass(frozen=True)
 class Delivery:
-    """What happened when an alert was sent to a channel.
+    """What happened when an alert or a report was sent to a channel.
 
     Attributes:
         channel: The label of the channel.
         ok: Whether it was sent.
         reason: Why not, in a few words. It never holds a URL or the text of an exception.
+        attempts: How many times the post was made, which is 1 unless it was sent again.
     """
 
     channel: str
     ok: bool
     reason: str = ""
+    attempts: int = 1
 
 
-def _post(label: str, url: str, headers: Mapping[str, str], body: Mapping[str, Any]) -> Delivery:
+def url_problem(url: str) -> str | None:
+    """Why a URL may not be posted to by a channel that wants https, or ``None`` when it may.
+
+    A URL has to be ``https://``. Plain ``http://`` is only for 127.0.0.1 and localhost, which is where the tests and a
+    local stub listen. The reason never holds the URL.
+    """
+    try:
+        parts = urllib.parse.urlsplit(url.strip())
+        host = parts.hostname
+    except ValueError:
+        return "its URL is not a valid address"
+    if not host:
+        return "its URL is not a valid address"
+    if parts.scheme == "https" or (parts.scheme == "http" and host in LOCAL_HOSTS):
+        return None
+    if parts.scheme == "http":
+        return "its URL is plain http, which is only for 127.0.0.1 and localhost"
+    return "its URL does not start with https://"
+
+
+def _sleep(seconds: float) -> None:
+    """Wait before a retry. Tests replace it, so that no test waits."""
+    time.sleep(seconds)
+
+
+def _retry_after(value: str | None) -> float | None:
+    """The seconds that a ``Retry-After`` header asks for, as a number or a date, or ``None`` when it asks nothing."""
+    if not value or not value.strip():
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            when = email.utils.parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+        seconds = (when - dt.datetime.now(when.tzinfo or dt.timezone.utc)).total_seconds()
+    return max(0.0, seconds) if math.isfinite(seconds) else None
+
+
+def _wait_s(attempt: int, response: Any) -> float | None:
+    """How long to wait before the retry that follows attempt number ``attempt``, or ``None`` for no retry.
+
+    The answer can ask for a wait with ``Retry-After``, and it is honoured, so an answer that asks for more than
+    :data:`MAX_WAIT_S` ends the retries. Otherwise the wait is :data:`BACKOFF_S`, twice that, and so on.
+    """
+    headers = getattr(response, "headers", None) or {}
+    asked = _retry_after(headers.get("Retry-After"))
+    if asked is None:
+        asked = BACKOFF_S * 2 ** (attempt - 1)
+    return asked if asked <= MAX_WAIT_S else None
+
+
+def _answer_reason(code: int, response: Any, slack: bool) -> str:
+    """Why an answer was not good, as ``it answered HTTP 400``. Slack says what is wrong in the body, as one word such
+    as ``invalid_payload``, and that word is added. No other body is ever repeated."""
+    reason = f"it answered HTTP {code}"
+    if slack and 400 <= code < 500 and code != 429:
+        word = str(getattr(response, "text", "") or "").strip()
+        if _SLACK_ERROR.fullmatch(word):
+            reason += f" ({word})"
+    return reason
+
+
+def _post(label: str, url: str, headers: Mapping[str, str], body: Mapping[str, Any] | bytes, *,
+          retries: int = RETRIES, slack: bool = False) -> Delivery:
     import requests
 
+    data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode("utf-8")
+    attempts = 0
+    while True:
+        attempts += 1
+        try:
+            response = requests.post(url, data=data, timeout=TIMEOUT_S,
+                                     headers={**headers, "Content-Type": "application/json"})
+        except requests.Timeout:
+            return Delivery(label, False, f"it did not answer in {TIMEOUT_S:g} seconds", attempts)
+        except requests.RequestException as error:
+            return Delivery(label, False, f"it could not be reached ({type(error).__name__})", attempts)
+        code = response.status_code
+        if code < 300:
+            return Delivery(label, True, "", attempts)
+        if (code == 429 or 500 <= code <= 599) and attempts <= retries:
+            wait = _wait_s(attempts, response)
+            if wait is None:
+                return Delivery(label, False, f"it answered HTTP {code} and asked for a wait of more than "
+                                              f"{MAX_WAIT_S:g} seconds", attempts)
+            logger.debug("%s answered HTTP %s, so the post is sent again in %.1f seconds (attempt %d of %d)", label,
+                         code, wait, attempts + 1, retries + 1)
+            _sleep(wait)
+            continue
+        return Delivery(label, False, _answer_reason(code, response, slack), attempts)
+
+
+def _headers_of(name: str) -> tuple[dict[str, str], str | None]:
+    """The headers in the environment variable ``name``, a JSON object, and why they cannot be used, or ``None``.
+
+    The problem never holds a header value. A ``Content-Type`` is dropped, because a post is always JSON.
+    """
+    value = os.environ.get(name)
+    if not value:
+        return {}, f"the environment variable {name} is not set"
     try:
-        response = requests.post(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), timeout=TIMEOUT_S,
-                                 headers={"Content-Type": "application/json", **headers})
-    except requests.Timeout:
-        return Delivery(label, False, f"it did not answer in {TIMEOUT_S:g} seconds")
-    except requests.RequestException as error:
-        return Delivery(label, False, f"it could not be reached ({type(error).__name__})")
-    if response.status_code >= 300:
-        return Delivery(label, False, f"it answered HTTP {response.status_code}")
+        found = json.loads(value)
+    except ValueError:
+        found = None
+    if not isinstance(found, dict) or not found:
+        return {}, f"the environment variable {name} does not hold a JSON object of headers"
+    headers: dict[str, str] = {}
+    for key, item in found.items():
+        if not (isinstance(key, str) and _HEADER_NAME.fullmatch(key) and isinstance(item, str)
+                and not re.search(r"[\r\n\x00]", item)):
+            return {}, f"a header in the environment variable {name} is not a name and a text without line breaks"
+        if key.lower() != "content-type":
+            headers[key] = item
+    return headers, None
+
+
+def post(channel: Channel, body: Mapping[str, Any] | bytes) -> Delivery:
+    """Post one JSON body to a ``slack`` or ``webhook`` channel. It never raises, and the reason holds no URL.
+
+    The URL is in the environment variable that the channel names. A channel that wants https refuses another URL
+    before anything is sent. A post that gets HTTP 429 or a 5xx answer is sent again up to ``channel.retries`` times.
+
+    Args:
+        channel: Where to post.
+        body: A mapping, which is written as JSON, or the bytes of JSON that is already written.
+
+    Returns:
+        The :class:`Delivery`.
+    """
+    if channel.kind not in ("slack", "webhook"):
+        raise ValueError(f"post sends to a slack or a webhook channel, and this is a {channel.kind} channel")
+    url = os.environ.get(channel.url_env or "")
+    if not url:
+        return Delivery(channel.label, False, f"the environment variable {channel.url_env} is not set")
+    if channel.https_only:
+        problem = url_problem(url)
+        if problem is not None:
+            return Delivery(channel.label, False, problem)
+    headers: dict[str, str] = {}
+    if channel.kind == "webhook" and channel.token_env:
+        token = os.environ.get(channel.token_env)
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        else:
+            logger.warning("Alert channel %s: the environment variable %s is not set, so it is sent without a token",
+                           channel.label, channel.token_env)
+    if channel.kind == "webhook" and channel.headers_env:
+        extra, problem = _headers_of(channel.headers_env)
+        if problem is not None:
+            return Delivery(channel.label, False, problem)
+        headers.update(extra)
+    return _post(channel.label, url, headers, body, retries=channel.retries, slack=channel.kind == "slack")
+
+
+def write_file(label: str, location: str | Path, data: bytes, base_dir: str | Path | None = None) -> Delivery:
+    """Write a document, such as the page of a report, to a path or a ``file://``, ``s3://`` or ``gs://`` address.
+
+    The file is written whole or not at all, and it replaces the one that was there. It never raises.
+
+    Args:
+        label: The label of the destination.
+        location: Where to write. A relative path is relative to ``base_dir``.
+        data: The bytes.
+        base_dir: The folder that a relative path is relative to.
+    """
+    from local_data_platform import fs
+
+    try:
+        with fs.open_output_atomic(str(location), base_dir) as stream:
+            stream.write(data)
+    except Exception as error:  # noqa: BLE001 - a delivery says why it failed and never raises
+        return Delivery(label, False, f"the file could not be written ({type(error).__name__})")
     return Delivery(label, True)
 
 
@@ -417,19 +627,81 @@ def deliver(channel: Channel, alert: Alert, base_dir: str | Path | None = None) 
         except (OSError, ValueError) as error:
             return Delivery(channel.label, False, f"the file could not be written ({type(error).__name__})")
         return Delivery(channel.label, True)
-    url = os.environ.get(channel.url_env or "")
-    if not url:
-        return Delivery(channel.label, False, f"the environment variable {channel.url_env} is not set")
-    headers: dict[str, str] = {}
-    if channel.kind == "webhook" and channel.token_env:
-        token = os.environ.get(channel.token_env)
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        else:
-            logger.warning("Alert channel %s: the environment variable %s is not set, so it is sent without a token",
-                           channel.label, channel.token_env)
-    body: Mapping[str, Any] = {"text": alert.text()} if channel.kind == "slack" else alert.to_dict()
-    return _post(channel.label, url, headers, body)
+    return post(channel, {"text": alert.text()} if channel.kind == "slack" else alert.to_dict())
+
+
+# ---------------------------------------------------------------------- Slack messages
+
+
+def escape_mrkdwn(text: Any) -> str:
+    """Text that Slack shows as it is. Slack reads ``&``, ``<`` and ``>`` as markup, so a value that has ``<!channel>``
+    or a link in it would ping people or send them away, unless the three are written as entities."""
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def cut(text: str, limit: int) -> str:
+    """The text, or its first characters and ``...`` when it is longer than ``limit``, and never longer than that."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] if limit <= 3 else text[: limit - 3] + "..."
+
+
+def header_block(text: str) -> dict[str, Any]:
+    """A header block, which is plain text of at most :data:`SLACK_MAX_HEADER` characters. A longer text is cut."""
+    return {"type": "header", "text": {"type": "plain_text", "text": cut(text, SLACK_MAX_HEADER)}}
+
+
+def section_block(text: str | None = None, fields: Sequence[str] | None = None) -> dict[str, Any]:
+    """A section block with a text of mrkdwn, or with fields, or both. The caller escapes the text with
+    :func:`escape_mrkdwn`. :func:`slack_message` checks the limits."""
+    block: dict[str, Any] = {"type": "section"}
+    if text is not None:
+        block["text"] = {"type": "mrkdwn", "text": text}
+    if fields:
+        block["fields"] = [{"type": "mrkdwn", "text": field} for field in fields]
+    return block
+
+
+def context_block(*texts: str) -> dict[str, Any]:
+    """A context block, small text under the rest, with one element of mrkdwn for each text."""
+    return {"type": "context", "elements": [{"type": "mrkdwn", "text": text} for text in texts]}
+
+
+def slack_message(text: str, blocks: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """The body of a Slack message that has Block Kit blocks, after checking what Slack allows.
+
+    Args:
+        text: The text that a notification and a client that cannot show blocks use.
+        blocks: The blocks, from :func:`header_block`, :func:`section_block` and :func:`context_block`.
+
+    Returns:
+        ``{"text": text, "blocks": [...]}``.
+
+    Raises:
+        ValueError: If a limit of :data:`SLACK_MAX_BLOCKS` and the others is passed, which Slack would answer with
+            ``invalid_blocks``.
+    """
+    if not blocks or len(blocks) > SLACK_MAX_BLOCKS:
+        raise ValueError(f"a message has from 1 to {SLACK_MAX_BLOCKS} blocks, and this has {len(blocks)}")
+    for place, block in enumerate(blocks, 1):
+        kind = block.get("type")
+        shown = block.get("text", {}).get("text", "") if isinstance(block.get("text"), Mapping) else ""
+        if kind == "header" and len(shown) > SLACK_MAX_HEADER:
+            raise ValueError(f"block {place} is a header of {len(shown)} characters, and the limit is "
+                             f"{SLACK_MAX_HEADER}")
+        if kind == "section":
+            fields = block.get("fields") or []
+            if len(shown) > SLACK_MAX_SECTION:
+                raise ValueError(f"block {place} is a section of {len(shown)} characters, and the limit is "
+                                 f"{SLACK_MAX_SECTION}")
+            if len(fields) > SLACK_MAX_FIELDS or any(len(item["text"]) > SLACK_MAX_FIELD for item in fields):
+                raise ValueError(f"block {place} has more than {SLACK_MAX_FIELDS} fields or a field of more than "
+                                 f"{SLACK_MAX_FIELD} characters")
+        if kind == "context" and (len(block["elements"]) > SLACK_MAX_CONTEXT
+                                  or any(len(item["text"]) > SLACK_MAX_FIELD for item in block["elements"])):
+            raise ValueError(f"block {place} is a context of more than {SLACK_MAX_CONTEXT} elements or an element of "
+                             f"more than {SLACK_MAX_FIELD} characters")
+    return {"text": text, "blocks": list(blocks)}
 
 
 # ---------------------------------------------------------------------- the notifier
@@ -659,6 +931,7 @@ __all__ = [
     "ALERT_SCHEMA",
     "ALERT_VERSION",
     "Alert",
+    "BACKOFF_S",
     "CHANNEL_KEYS",
     "CHANNEL_TYPES",
     "Channel",
@@ -666,15 +939,33 @@ __all__ = [
     "DEFAULT_ON",
     "Delivery",
     "EVENTS",
+    "LOCAL_HOSTS",
+    "MAX_WAIT_S",
     "NotifySink",
     "Notifier",
+    "RETRIES",
+    "SLACK_MAX_BLOCKS",
+    "SLACK_MAX_CONTEXT",
+    "SLACK_MAX_FIELD",
+    "SLACK_MAX_FIELDS",
+    "SLACK_MAX_HEADER",
+    "SLACK_MAX_SECTION",
     "TEST_EVENT",
     "add_cli",
     "alert_json_schema",
     "alert_problems",
     "alerts_schema",
     "command_of",
+    "context_block",
+    "cut",
     "deliver",
+    "escape_mrkdwn",
+    "header_block",
     "notifier_for",
     "parse_alerts",
+    "post",
+    "section_block",
+    "slack_message",
+    "url_problem",
+    "write_file",
 ]

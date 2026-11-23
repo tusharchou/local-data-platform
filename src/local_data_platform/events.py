@@ -73,11 +73,15 @@ EVENT_TYPES = (
     "release.cut",
     "report.rendered",
     "report.held",
+    "report.delivered",
+    "report.skipped_duplicate",
 )
 """The event types LDP emits. Consumers must ignore types they don't know. ``release.cut`` says that a gold table is in
 a release, and one is emitted for each table of the release, with the table's own pipeline name. ``report.rendered``
 says that ``ldp report build`` wrote a report, between the ``run.started`` and the ``run.finished`` of the build.
-``report.held`` says that the build wrote nothing, because the freshness gate of the report held it back."""
+``report.held`` says that the build wrote nothing, because the freshness gate of the report held it back.
+``report.delivered`` says that ``ldp report send`` delivered a report to one destination, with the idempotency key of
+the delivery, and ``report.skipped_duplicate`` says that it did not, because the key was already delivered."""
 
 RUN_STATUSES = ("published", "skipped_duplicate", "blocked_quality", "failed", "succeeded", "upstream_failed")
 """The ``status`` a ``run.finished`` event reports. A pipeline run is ``published``, ``skipped_duplicate``,
@@ -1369,9 +1373,10 @@ def summarize_runs(events: Iterable[RunEvent], *, final_attempts_only: bool = Fa
         status ``released``, the ``snapshot_id`` of the table in the release and the name of the ``release``. The
         build of a report, which has a ``report.rendered`` or a ``report.held`` event, has ``is_report`` true, the
         report's identifier as its ``pipeline``, and the ``window``, the ``output`` and the ``format`` of what it wrote,
-        or of what it would have written. ``failing_checks`` is the names of the checks that failed, in the order that
-        they ran. A run that a data gate held back and that has no result of a check lists the names that the gate
-        gave.
+        or of what it would have written. The send of a report, which starts with the ``task_kind`` ``report_send``, is
+        a report run too. Its ``format`` is ``send`` and its ``output`` names the destinations. ``failing_checks`` is
+        the names of the checks that failed, in the order that they ran. A run that a data gate held back and that has
+        no result of a check lists the names that the gate gave.
     """
     runs: dict[tuple[str, int], dict[str, Any]] = {}
     for event in sorted(events, key=lambda item: (item.run_id, item.attempt, item.seq)):
@@ -1391,6 +1396,12 @@ def summarize_runs(events: Iterable[RunEvent], *, final_attempts_only: bool = Fa
             run[name] = run[name] or payload.get(name)
         if event.type == "run.extracted":
             run["rows_read"] = payload.get("rows_read")
+        elif event.type == "run.started" and payload.get("task_kind") == "report_send":
+            run["is_report"] = True
+            run["window"], run["output"], run["format"] = payload.get("window"), payload.get("output"), "send"
+        elif event.type in ("report.delivered", "report.skipped_duplicate"):
+            run["is_report"] = True
+            run["window"] = run["window"] or payload.get("window")
         elif event.type == "quality.evaluated":
             run["checks"] = _checks_text(payload)
             run["failing_checks"] = [str(result.get("name")) for result in payload.get("results") or ()
@@ -1811,6 +1822,12 @@ def _event_detail(event: RunEvent) -> str:
     if event.type == "report.held":
         stale = [str(item.get("table")) for item in payload.get("tables") or ()]
         return f"output={payload.get('output')} stale={', '.join(stale)}"
+    if event.type == "report.delivered":
+        return (f"destination={payload.get('destination')} type={payload.get('type')} "
+                f"attempts={payload.get('attempts')} key={_short(payload.get('idempotency_key'))}")
+    if event.type == "report.skipped_duplicate":
+        return (f"destination={payload.get('destination')} delivered_at={payload.get('delivered_at')} "
+                f"key={_short(payload.get('idempotency_key'))}")
     if event.type == "workflow.started":
         return f"window={payload.get('window')} tasks={len(payload.get('tasks') or [])}"
     if event.type == "workflow.finished":

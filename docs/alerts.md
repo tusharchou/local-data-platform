@@ -131,3 +131,9 @@ A channel that cannot be reached, that answers with an error status, whose envir
 be written is a warning in the log and nothing more. A run is not failed by it, a monitor keeps its exit status, and the
 results are recorded. The reason names the environment variable or the kind of failure and never holds the URL, so a log can
 be shared. A token that is not set is a warning too, and the alert is sent without it.
+
+A channel that answers HTTP 429 or a 5xx status is not given up on at once. The alert is sent again up to 3 times, after a wait
+of 1, 2 and 4 seconds, or after the `Retry-After` of the answer when it asks for no more than 60 seconds. Any other answer, and
+a URL that cannot be reached, is final. The same sender posts the reports of `ldp report send`, which also take the rule that a
+URL has to be `https://`, except `http://` for 127.0.0.1 and localhost, and that a destination can say how many `retries` it
+wants. A channel of alerts keeps taking any URL.

@@ -43,7 +43,13 @@ run.started ─► run.extracted ─► quality.evaluated ─┬─► run.publi
   exits with 3. The events go to the sinks in the
   `metadata.observability` of the report file, and `ldp runs REPORT` lists the builds with the window and the file of
   each. No event has a row of data. The OpenLineage sink sends a `START` and a `COMPLETE` or `FAIL` for the build, as a
-  job that has the name of the report and no dataset. A folder of reports built as a site is one run for each report,
+  job that has the name of the report and no dataset. The send of a report, `ldp report send`, is a run of its own with
+  the `task_kind` `report_send`. It emits `run.started`, a `report.delivered` or a `report.skipped_duplicate` for each
+  destination, a `run.failed` with the stage `deliver` and the destination for each one that did not get the report, and a
+  `run.finished` that says `succeeded`, `skipped_duplicate` when every destination had the report already, or `failed`. A
+  send that the freshness gate holds back emits `report.held` and finishes `blocked_quality`. Before it sends, it reads the
+  `report.delivered` events in the sinks of the report and skips each destination that has one for the key, so these events
+  are what makes a send happen once for each window. A folder of reports built as a site is one run for each report,
   in the sinks of that report, and the `output` of its `report.rendered` is the page that is named for the window, and
   not `latest.html`, which is a copy of it.
 
@@ -52,7 +58,7 @@ Each event is a `RunEvent`:
 | Field | Meaning |
 |---|---|
 | `event_id` | A UUIDv7, unique per event |
-| `type` | One of the types above (`table.maintained` and `run.staged` are reserved), or `release.cut`, `report.rendered` or `report.held` |
+| `type` | One of the types above (`table.maintained` and `run.staged` are reserved), or `release.cut`, `report.rendered`, `report.held`, `report.delivered` or `report.skipped_duplicate` |
 | `schema_version` | The envelope version, `1` |
 | `ts` | When it happened, in UTC |
 | `run_id` | The run's UUIDv7. `PipelineResult.run_id` is the same value |
@@ -79,6 +85,8 @@ depends on the type:
 | `release.cut` | `release` (such as `r3`), `namespace`, `snapshot_id` and `rows` of the table in the release, `dataset` and `dataset_version` (the pin), `status` (`built` or `checked`), `tables` (how many the release holds), and `window` for a release that a workflow cut |
 | `report.rendered` | `format` (`html`, `md` or `json`), `output` (where the file was written, or null when the document was printed or returned), `bytes` and `sha256` of the document, `window` (the start and the end as UTC instants), `timezone`, `release` and `live` as they were asked for, `queries`, `rows` and `blocks` (how many ran, were read and were shown), and `stale` (the names of the tables that the freshness gate called stale, which a gate that warns writes), and `tables`, each with the `table`, the `release` and the `snapshot_id` that the build read. The `run.started` of a build has `task_kind` (`report`), `format`, `release`, `live` and `spec` (the file name), and its `run.failed` has the `stage` (`queries`, `render` or `write`) and `problems` (how many, when the report had problems) |
 | `report.held` | `format`, `output` (the file that was not written), `window`, `timezone`, `release` and `live` as for `report.rendered`, `rule` (the `max_age_hours` and the `on_stale` of `metadata.freshness`), and `tables`, each with the `table`, the `pipeline` that writes it and the `reasons` that it is stale. The `run.finished` that follows has the status `blocked_quality`. A held build has no `report.rendered` event |
+| `report.delivered` | `destination` (its name in `metadata.delivery`), `type` (`slack`, `webhook` or `file`), `idempotency_key` (the hash of the report, the window and the destination), `window`, `timezone`, `attempts` (how many times the post was made), `bytes` of what was sent, `release` and `live`, `link` (the page that a Slack message links to, or null) and `tables` (the version of each table that was read). It never holds an address |
+| `report.skipped_duplicate` | `destination`, `type`, `idempotency_key` and `window` as for `report.delivered`, `delivered_at` (when the delivery was made) and `delivered_run_id` (the send that made it) |
 | `workflow.started` | `workflow` and `pipeline` (the workflow's identifier), `workflow_run_id`, `window` (start and end), `schedule`, `tasks` (the `id`, `kind` and `depends_on` of each, in the order they run, and `max_attempts` for a task that is retried), `ldp_version`, and `replace` (true) when the run replaces the window, as `ldp backfill --replace` does |
 | `workflow.finished` | `status` (`succeeded`, `blocked_quality` when a data gate is the only problem, or `failed`), `duration_s`, `counts` (tasks per status), `tasks` (the status of each task) |
 

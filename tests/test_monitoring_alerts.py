@@ -21,7 +21,7 @@ from local_data_platform.monitoring.alerts import (
 )
 from local_data_platform.monitoring.history import JSONL_PATH, read_jsonl, read_results
 from local_data_platform.monitoring.results import MonitorResult
-from local_data_platform.notify import Channel, Notifier
+from local_data_platform.notify import RETRIES, Channel, Notifier
 
 UTC = dt.timezone.utc
 T0 = dt.datetime(2026, 8, 3, 12, 0, 0, tzinfo=UTC)
@@ -549,9 +549,10 @@ def test_an_alert_that_failed_to_arrive_is_not_sent_again_at_the_next_look_unles
     _monitor(path, LOOK_ERROR, capsys)
     hooks.status = 200
     _monitor(path, "2026-08-07T00:30:00Z", capsys)
-    assert len(hooks.received) == 1, "the one alert of the change was lost, and nothing is sent for the same state"
+    tried = 1 + RETRIES  # the one alert of the change was sent again after each HTTP 500, and then lost
+    assert len(hooks.received) == tried, "nothing is sent for the same state when the alert did not arrive"
     _monitor(path, "2026-08-07T01:05:00Z", capsys)
-    assert [body.get("repeat") for _, _, body in hooks.received] == [None, True]
+    assert [body.get("repeat") for _, _, body in hooks.received] == [None] * tried + [True]
 
 
 def test_a_config_with_a_channel_that_is_not_valid_is_a_failure_with_the_path_and_is_not_looked_at(

@@ -4,7 +4,9 @@
 SECONDS] [--json]`` reads a report file, or every report file of a folder, finds its tables, runs every query and every
 metric block, and says what each did. ``ldp report build REPORT --out PATH [--format html|md|json]`` takes the same
 options, runs the queries and writes the report, and given a folder it builds every report of it into a site that
-``--out`` names. ``cli.py`` wires this in with :func:`add_cli`. Heavy imports happen inside the command.
+``--out`` names. ``ldp report send REPORT --window WINDOW [--dry-run] [--force]`` runs a report and sends it to the
+destinations of its ``metadata.delivery``. ``cli.py`` wires this in with :func:`add_cli`. Heavy imports happen inside
+the command.
 """
 
 import argparse
@@ -57,7 +59,8 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
     """
     parents = list(parents)
     report = subparsers.add_parser(
-        "report", parents=parents, help="define reports in files, check them against the gold tables, and build them",
+        "report", parents=parents,
+        help="define reports in files, check them against the gold tables, build them, and send them",
         description="A report file, with \"kind\": \"Report\", names the tables a report reads, the queries it runs "
                     "and the blocks it shows. The commands read report files, and run their queries on the gold tables "
                     "as the current release holds them.",
@@ -121,6 +124,31 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
                             "the rows and what each block shows. A folder is built as html only")
     _run_options(build)
     build.set_defaults(handler=_cmd_build)
+
+    send = actions.add_parser(
+        "send", parents=parents, help="send a report to the destinations of metadata.delivery",
+        description="Run REPORT, a report file, for --window as ldp report build does, and send it to each destination "
+                    "of metadata.delivery. A slack destination gets a message that has the title, the window, each key "
+                    "figure with its change, the first table, the data health and a link to the page when a file "
+                    "destination has a public_url. A webhook destination gets the JSON of ldp report build --format "
+                    "json. A file destination gets the page. The address of a slack or webhook destination is in the "
+                    "environment variable that the report names, and ldp never prints it. Each delivery has an "
+                    "idempotency key made from the report, the window and the destination, and a destination that got "
+                    "the report for the window is skipped, which says so and sends nothing, unless --force sends it "
+                    "again. A post that gets HTTP 429 or a 5xx answer is sent again up to the retries of the "
+                    "destination, which is 3 by default. When metadata.freshness has on_stale block and a table is "
+                    "stale, nothing is sent. --dry-run prints each payload and sends and records nothing.",
+        epilog="Exit status is 0 when every destination got the report or had it, 1 when a destination did not get it "
+               "or the report has a problem, and 3 when the freshness gate of the report held it back. Example: "
+               "ldp report send ldp_demo/restaurant/reports/daily_sales.json --window 2026-07-31/2026-08-01 --dry-run")
+    send.add_argument("report", metavar="REPORT", help="a report file that has metadata.delivery")
+    _run_options(send)
+    send.add_argument("--dry-run", action="store_true", dest="dry_run",
+                      help="print what each destination would get, and send and record nothing")
+    send.add_argument("--force", action="store_true",
+                      help="send to every destination, even one that got the report for this window, and record it "
+                           "again")
+    send.set_defaults(handler=_cmd_send)
     return report
 
 
@@ -248,6 +276,46 @@ def _cmd_build(args: argparse.Namespace) -> int:
     if built.health.stale:  # the page has a banner for it, and a person who only reads the terminal sees this
         print(f"warning: {built.health.summary()}", file=sys.stderr)
     return EXIT_OK
+
+
+def _send_line(outcome: Any) -> str:
+    """What became of one destination of a send, as one line."""
+    from local_data_platform.report.deliver import DELIVERED, FAILED, SKIPPED
+    from local_data_platform.report.formats import utc_text
+
+    label = f"{outcome.destination} ({outcome.type})"
+    tries = f" after {outcome.attempts} attempts" if outcome.attempts > 1 else ""
+    if outcome.status == DELIVERED:
+        return f"{label}: delivered{tries}"
+    if outcome.status == SKIPPED:
+        return (f"{label}: already delivered at {utc_text(outcome.delivered_at)}, so nothing was sent. "
+                "--force sends it again")
+    if outcome.status == FAILED:
+        return f"{label}: not delivered{tries}, because {outcome.reason}"
+    return f"{label}: would send {outcome.detail}"
+
+
+def _cmd_send(args: argparse.Namespace) -> int:
+    from local_data_platform.report.deliver import send_report
+    from local_data_platform.report.spec import load_report
+
+    report = load_report(args.report)
+    sent = send_report(report, args.window, params=_params(args.params) or None, release=args.release, live=args.live,
+                       row_cap=args.row_cap, timeout_s=args.timeout, dry_run=args.dry_run, force=args.force)
+    for outcome in sent.outcomes:
+        print(_send_line(outcome))
+        if outcome.payload:
+            print(outcome.payload)
+    would = len(sent.of("would_send"))
+    if sent.dry_run:
+        print(f"{report.identifier} {sent.window}: dry run, {would} would be sent and {len(sent.skipped)} already "
+              "delivered, and nothing was sent or recorded")
+    else:
+        counts = [("delivered", len(sent.delivered)), ("already delivered", len(sent.skipped)),
+                  ("not delivered", len(sent.failed))]
+        tail = ", ".join(f"{number} {word}" for word, number in counts if number)
+        print(f"{report.identifier} {sent.window}: {tail}")
+    return EXIT_ERROR if sent.failed else EXIT_OK
 
 
 def _site_line(entry: Any) -> str:
