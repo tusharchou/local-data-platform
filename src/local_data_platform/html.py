@@ -88,6 +88,11 @@ background:var(--surface);color:var(--fg);font:inherit}
 .kpi .delta{font-size:.85rem;color:var(--muted)}
 .kpi .delta.up,.kpi .delta.down{color:var(--fg)}
 .note{color:var(--muted);font-size:.85rem;margin:6px 0}
+.nowrap{white-space:nowrap}
+.banner{border:1px solid var(--warn);background:var(--warn-bg);color:var(--warn);border-radius:var(--radius);\
+padding:8px 16px;margin:16px 0}
+.banner p{margin:6px 0}
+.banner ul{margin:4px 0 8px;padding-left:1.2em}
 .legend{display:flex;flex-wrap:wrap;gap:4px 16px;list-style:none;padding:0;margin:4px 0 0}
 .swatch{display:inline-block;width:.8em;height:.8em;border-radius:2px;background:var(--c)}
 .s1{--c:var(--s1)}.s2{--c:var(--s2)}.s3{--c:var(--s3)}.s4{--c:var(--s4)}.s5{--c:var(--s5)}.s6{--c:var(--s6)}.s7{--c:var(--s7)}.s8{--c:var(--s8)}

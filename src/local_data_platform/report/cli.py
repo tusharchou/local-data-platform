@@ -92,10 +92,14 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
                     "format is one HTML page with its charts drawn inline, which opens from a folder with no network. "
                     "--format md writes Markdown and --format json writes the rows of the queries and what each block "
                     "shows. The file is written to a temporary name and renamed, and --out can be an s3:// or gs:// "
-                    "address. A report with a problem is not written, and the file that was there stays. When the "
-                    "report has metadata.observability the build is recorded as run events, and ldp runs REPORT lists "
-                    "the builds.",
-        epilog="Exit status is 0 when the report was written and 1 when a problem stopped it. Example: "
+                    "address. A report with a problem is not written, and the file that was there stays. Every "
+                    "report shows a data health panel, one row for each table that it read, from the status of the "
+                    "pipelines. When metadata.freshness has on_stale warn, a banner names the stale tables. When it "
+                    "has on_stale block and a table is stale, nothing is written. When the report has "
+                    "metadata.observability the build is recorded as run events, and ldp runs REPORT lists the "
+                    "builds.",
+        epilog="Exit status is 0 when the report was written, 1 when a problem stopped it, and 3 when the freshness "
+               "gate of the report held it back. Example: "
                "ldp report build ldp_demo/restaurant/reports/daily_sales.json --window 2026-07-31/2026-08-01 "
                "--out site/daily.html")
     build.add_argument("report", metavar="REPORT", help="a report file")
@@ -230,6 +234,8 @@ def _cmd_build(args: argparse.Namespace) -> int:
         print(summary, file=sys.stderr)
     else:
         print(summary)
+    if built.health.stale:  # the page has a banner for it, and a person who only reads the terminal sees this
+        print(f"warning: {built.health.summary()}", file=sys.stderr)
     return EXIT_OK
 
 

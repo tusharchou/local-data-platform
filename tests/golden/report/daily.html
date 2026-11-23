@@ -13,6 +13,8 @@
 <body>
 <header class="top"><div class="wrap"><h1>Daily sales</h1><p class="sub">Orders and revenue of one day, from the gold tables.</p></div></header>
 <main class="wrap"><p class="chips"><span class="chip">Window 2026-07-31 00:00 to 2026-08-01 00:00, Asia/Kolkata</span></p>
+<div class="banner" role="status"><p><strong>Stale data.</strong> Some of the tables behind this report are out of date or held back, so check the numbers that come from them.</p>
+<ul><li><code>gold.gold_sales</code> its last run ended blocked_quality (failing not_null(city))</li></ul></div>
 <div class="kpis"><div class="card kpi"><div class="label">Revenue</div>
 <div class="value">$1,234.50</div>
 <div class="delta up">+12.2% from $1,100.00</div></div>
@@ -79,7 +81,10 @@
 <p class="note">The table shows the first 3 of 5 rows. 2 rows are left out.</p></section>
 <section class="card words" aria-labelledby="text-6-h"><h2 id="text-6-h">Note</h2>
 <p>Orders &amp; revenue of &lt;Pune&gt; and Delhi. There were 87 orders in all.</p>
-<p>Numbers are from the gold tables.</p></section></main>
+<p>Numbers are from the gold tables.</p></section>
+<section class="card" aria-labelledby="health-h"><h2 id="health-h">Data health</h2>
+<p class="note">One row for each table that this report read, measured when it was built.</p>
+<div class="scroll"><table><thead><tr><th scope="col">Table</th><th scope="col">Last run</th><th scope="col">Status</th><th scope="col" class="num">Rows written</th><th scope="col">Finished</th><th scope="col">Checks</th><th scope="col">Freshness</th><th scope="col">Stale</th></tr></thead><tbody><tr><td><code>gold.gold_sales</code></td><td><span class="nowrap">2026-08-02</span> <span class="nowrap">05:30:15 UTC</span></td><td><span class="chip warn">blocked_quality</span></td><td class="num">0</td><td><span class="nowrap">2026-08-02</span> <span class="nowrap">05:30:17 UTC</span></td><td>4/5, failing not_null(city)</td><td><span class="chip ok">ok</span> last success <span class="nowrap">2026-08-02</span> <span class="nowrap">03:30:15 UTC</span></td><td><span class="chip bad">yes</span></td></tr><tr><td><code>gold.gold_customers</code></td><td>no pipeline</td><td>-</td><td class="num">-</td><td>-</td><td>-</td><td>-</td><td>no</td></tr></tbody></table></div></section></main>
 <footer class="wrap muted"><dl class="facts">
 <dt>Window</dt>
 <dd>2026-07-31 00:00 to 2026-08-01 00:00, Asia/Kolkata</dd>

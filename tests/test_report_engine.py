@@ -834,6 +834,16 @@ def test_a_column_that_a_block_names_and_its_query_lacks_is_a_problem_that_check
     assert "  - metadata.blocks[0].value: the query 'totals' has no column 'nope'" in capsys.readouterr().err
 
 
+def test_a_table_that_was_read_says_which_pipeline_writes_it_and_a_run_has_no_health_until_a_build_works_it_out(lake):
+    cut(lake)
+
+    run = run_queries(report_of(lake), WINDOW)
+
+    read = run.reads["gold.gold_sales"]
+    assert read.pipeline == "gold_sales" and read.to_dict()["pipeline"] == "gold_sales"
+    assert run.health is None and run.to_dict()["tables"][0]["pipeline"] == "gold_sales"
+
+
 def test_a_run_says_the_row_cap_it_had_and_gives_the_views_of_its_blocks(lake):
     cut(lake)
 

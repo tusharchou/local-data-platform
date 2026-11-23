@@ -30,6 +30,9 @@ from local_data_platform.report.spec import FORMAT_PATTERN
 MISSING = "-"
 """What is written for a value that is missing."""
 
+MOMENT_FORMAT = "%Y-%m-%d %H:%M:%S"
+"""How a moment is written, always in UTC, with `` UTC`` after it."""
+
 SYMBOLS = {
     "USD": "$", "EUR": "\u20ac", "GBP": "\u00a3", "INR": "\u20b9", "JPY": "\u00a5", "CNY": "\u00a5",
     "KRW": "\u20a9", "RUB": "\u20bd", "TRY": "\u20ba", "ILS": "\u20aa", "BRL": "R$", "CAD": "CA$", "AUD": "A$",
@@ -160,6 +163,11 @@ def plain(value: Any) -> str:
     return str(value)
 
 
+def utc_text(moment: dt.datetime) -> str:
+    """A moment as ``YYYY-MM-DD HH:MM:SS UTC``, whatever its time zone, with no part of a second."""
+    return moment.astimezone(dt.timezone.utc).strftime(MOMENT_FORMAT) + " UTC"
+
+
 def format_values(values: Sequence[Any], fmt: str | None = None) -> list[str]:
     """The values of one column written by one format, so that the column agrees with itself.
 
@@ -227,4 +235,5 @@ __all__ = [
     "metric_format",
     "parse_format",
     "plain",
+    "utc_text",
 ]

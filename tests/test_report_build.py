@@ -163,8 +163,9 @@ def test_the_page_has_its_blocks_in_the_order_of_the_file_and_a_row_of_tiles_for
               attrs.get("class") in ("kpis", "card kpi", "card", "card words")]
 
     assert layout == [("div", "kpis"), ("div", "card kpi"), ("div", "card kpi"), ("div", "card kpi"),
-                      ("section", "card"), ("section", "card"), ("section", "card"), ("section", "card words")]
-    assert parsed.headings == ["Revenue by city", "Revenue by day", "Top cuisines", "Note"]
+                      ("section", "card"), ("section", "card"), ("section", "card"), ("section", "card words"),
+                      ("section", "card")]  # the last is the data health panel
+    assert parsed.headings == ["Revenue by city", "Revenue by day", "Top cuisines", "Note", "Data health"]
 
 
 def test_the_key_figures_that_follow_each_other_are_one_row_and_a_block_between_them_makes_two():
@@ -193,11 +194,12 @@ def test_a_chart_has_its_drawing_a_legend_only_for_several_series_and_a_table_of
     parsed = Parsed(page_of())
 
     assert parsed.names().count("svg") == 2 and parsed.names().count("details") == 2
-    assert parsed.names().count("ul") == 2  # the legend of the line chart, and the tables read in the footer
+    # the legend of the line chart, the stale tables of the banner, and the tables read in the footer
+    assert parsed.names().count("ul") == 3
     legend = [attrs for tag, attrs in parsed.tags if attrs.get("class") == "legend"]
     assert len(legend) == 1
     sections = [attrs["aria-labelledby"] for tag, attrs in parsed.tags if tag == "section"]
-    assert sections == ["chart-3-h", "chart-4-h", "table-5-h", "text-6-h"]
+    assert sections == ["chart-3-h", "chart-4-h", "table-5-h", "text-6-h", "health-h"]
     text = page_of()
     for value in ("$520.25", "$410.00", "$304.25", "$480.00", "$350.50"):
         assert f'<td class="num">{value}</td>' in text
@@ -473,7 +475,7 @@ def test_the_json_document_has_the_report_the_window_the_tables_the_rows_and_eac
     data = json.loads(render_json(golden_run(), built_at=BUILT_AT))
 
     assert list(data) == ["ldp_report", "report", "window", "timezone", "built_at", "built", "release", "live",
-                          "parameters", "tables", "queries", "blocks"]
+                          "parameters", "tables", "health", "queries", "blocks"]
     assert data["ldp_report"] == DOCUMENT_VERSION == 1
     assert data["report"] == {"identifier": "daily_sales", "title": "Daily sales", "who": "owner@example.com",
                               "what": "Orders and revenue of one day, from the gold tables.", "where": None,
@@ -483,7 +485,7 @@ def test_the_json_document_has_the_report_the_window_the_tables_the_rows_and_eac
         "Asia/Kolkata", "2026-08-02T06:30:15Z", "2026-08-02 06:30:15 UTC", None, False)
     assert [item["table"] for item in data["tables"]] == ["gold.gold_sales", "gold.gold_customers"]
     assert data["tables"][0] == {"table": "gold.gold_sales", "release": "r3", "snapshot_id": 8420615207115790441,
-                                 "source": "release r3, cut 2026-08-02 06:00:00 UTC"}
+                                 "source": "release r3, cut 2026-08-02 06:00:00 UTC", "pipeline": "gold_sales"}
     assert [item["type"] for item in data["blocks"]] == ["kpi", "kpi", "kpi", "bar", "line", "table", "text"]
     assert [item["index"] for item in data["blocks"]] == list(range(7))
 
@@ -819,19 +821,22 @@ def test_a_live_build_says_it_read_the_tables_as_they_are_now(lake):
 
 def test_two_builds_over_the_same_snapshots_are_the_same_text_except_for_the_time_of_the_build(lake):
     cut(lake)
-    later = BUILT_AT + dt.timedelta(hours=5, minutes=3, seconds=9)
+    first = dt.datetime.now(UTC).replace(microsecond=0) + dt.timedelta(seconds=2)  # after the table was written
+    later = first + dt.timedelta(hours=5, minutes=3, seconds=9)
     texts = {}
     for fmt in FORMATS:
         texts[fmt] = [build_report(report_of(lake), LAKE_WINDOW, out=None, fmt=fmt, clock=lambda stamp=stamp: stamp,
-                                   sink=MemorySink()).document for stamp in (BUILT_AT, later)]
+                                   sink=MemorySink()).document for stamp in (first, later)]
 
-    changed = {fmt: [(a, b) for a, b in zip(first.splitlines(), second.splitlines()) if a != b]
-               for fmt, (first, second) in texts.items()}
-    assert all(len(first.splitlines()) == len(second.splitlines()) for first, second in texts.values())
-    assert changed["html"] == [("<dd>2026-08-02 06:30:15 UTC</dd>", "<dd>2026-08-02 11:33:24 UTC</dd>")]
-    assert changed["md"] == [("- **Built** 2026-08-02 06:30:15 UTC", "- **Built** 2026-08-02 11:33:24 UTC")]
-    assert changed["json"] == [('  "built_at": "2026-08-02T06:30:15Z",', '  "built_at": "2026-08-02T11:33:24Z",'),
-                               ('  "built": "2026-08-02 06:30:15 UTC",', '  "built": "2026-08-02 11:33:24 UTC",')]
+    changed = {fmt: [(a, b) for a, b in zip(one.splitlines(), two.splitlines()) if a != b]
+               for fmt, (one, two) in texts.items()}
+    one, two = utc_text(first), utc_text(later)
+    assert all(len(one.splitlines()) == len(two.splitlines()) for one, two in texts.values())
+    assert changed["html"] == [(f"<dd>{one}</dd>", f"<dd>{two}</dd>")]
+    assert changed["md"] == [(f"- **Built** {one}", f"- **Built** {two}")]
+    stamp = [(f'  "built_at": "{first:%Y-%m-%dT%H:%M:%S}Z",', f'  "built_at": "{later:%Y-%m-%dT%H:%M:%S}Z",'),
+             (f'  "built": "{one}",', f'  "built": "{two}",')]
+    assert changed["json"] == stamp
 
 
 def test_a_build_of_a_report_with_a_problem_writes_nothing_and_leaves_the_file_that_was_there(lake):

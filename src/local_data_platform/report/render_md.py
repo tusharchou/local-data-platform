@@ -12,7 +12,9 @@ import re
 from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, Any
 
-from local_data_platform.report.render_html import read_text, utc_text, window_text
+from local_data_platform.report.formats import utc_text
+from local_data_platform.report.health import BANNER_WORDS, Health, cells, columns
+from local_data_platform.report.render_html import read_text, window_text
 from local_data_platform.report.view import Chart, Grid, Kpi, Words
 
 if TYPE_CHECKING:
@@ -62,6 +64,26 @@ def _kpis(tiles: list[Kpi]) -> list[str]:
     return lines
 
 
+def _stale(health: Health) -> list[str]:
+    """The lines of the banner of a report that shows stale data with a warning."""
+    return [f"> **Stale data.** {BANNER_WORDS}", ">",
+            *[f"> - {code(item.table)} {md(' and '.join(item.reasons))}" for item in health.stale]]
+
+
+def _health(health: Health) -> list[list[str]]:
+    """The blocks of the data health panel. A table is named as code and every other value is made harmless."""
+    blocks = [["## Data health"], ["*One row for each table that this report read, measured when it was built.*"]]
+    if not health.tables:
+        return blocks + [[md("This report read no table, so there is no data to check.")]]
+    headers = columns(health)
+    lines = [_row(md(header) for header in headers),
+             _row("---:" if place == 3 else "---" for place in range(len(headers)))]
+    for item in health.tables:
+        texts = cells(item, health)
+        lines.append(_row([code(item.table), *[md(text) for text in texts[1:]]]))
+    return blocks + [lines]
+
+
 def render_md(run: ReportRun, *, built_at: dt.datetime | None = None) -> str:
     """The Markdown of a run.
 
@@ -77,6 +99,8 @@ def render_md(run: ReportRun, *, built_at: dt.datetime | None = None) -> str:
     when = window_text(run)
     if when:
         blocks.append([f"**Window** {md(when)}"])
+    if run.health is not None and run.health.banner:
+        blocks.append(_stale(run.health))
     tiles: list[Kpi] = []
 
     def flush() -> None:
@@ -103,6 +127,8 @@ def render_md(run: ReportRun, *, built_at: dt.datetime | None = None) -> str:
                 blocks.append([f"## {md(view.title)}"])
             blocks += [[md(paragraph)] for paragraph in view.paragraphs]
     flush()
+    if run.health is not None:
+        blocks += _health(run.health)
     reads = [f"  - {code(read.table)} {md(read_text(read))}" for read in run.reads.values()] or ["  - none"]
     blocks.append(["## How this report was made", "", f"- **Window** {md(when or 'none')}",
                    f"- **Time zone** {md(report.timezone)}", "- **Tables read**", *reads,

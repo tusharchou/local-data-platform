@@ -707,7 +707,7 @@ ldp status config --now 2026-08-10T06:20:00Z --html status.html
 wrote status.html, 9 pipelines, ... KB. Open it as a page. It needs no network.
 ```
 
-A program can read the same rows. `rows` returns a `StatusRow` for each config, the worst first, and it is what a panel or a gate in another tool calls. A config that cannot be read or evaluated is a row too, with the reason in `problem`.
+A program can read the same rows. `rows` returns a `StatusRow` for each config, the worst first, and it is what a panel or a gate in another tool calls. The data health panel of every report that `ldp report build` writes calls it, and so does the freshness gate of that command. A `Run` has the names of its failing checks and, once it ended, the moment that it finished. A config that cannot be read or evaluated is a row too, with the reason in `problem`.
 
 ```python
 from local_data_platform.monitoring.status import rows
@@ -922,7 +922,7 @@ Every `ldp` command follows one table, and the commands of this chapter use it f
 | 0 | Success, including a look at a table that is `ok`, `warn` or `unknown` | Nothing |
 | 1 | An error, such as a config that cannot be read, a catalog that is not there or a failed write | Retries it, because the cause may pass |
 | 2 | An SLA breach, which `ldp monitor` reports when a monitor is in error | Never retries it, because looking again finds the same table, and tells a person |
-| 3 | A data gate held a run back, such as a quality check that blocked a load, which `ldp run` reports | Never retries it, because the data has to change first, and tells a person |
+| 3 | A data gate held a run back, such as a quality check that blocked a load, which `ldp run` reports, or a report that `ldp report build` held back because its data is stale | Never retries it, because the data has to change first, and tells a person |
 
 `ldp monitor` uses 0, 1 and 2. `ldp status` and `ldp maintain --system` use 0 and 1. `ldp run` and the commands that build gold tables use 3 when a data gate holds a load back.
 

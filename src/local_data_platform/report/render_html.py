@@ -20,19 +20,16 @@ from typing import TYPE_CHECKING
 
 from local_data_platform import html
 from local_data_platform.orchestration.windows import get_timezone
+from local_data_platform.report.formats import MOMENT_FORMAT, utc_text
+from local_data_platform.report.health import banner, panel
 from local_data_platform.report.svg import chart_svg, legend
 from local_data_platform.report.view import Chart, Grid, Kpi, Words
 
 if TYPE_CHECKING:
     from local_data_platform.report.engine import ReportRun, TableRead
 
-BUILT_FORMAT = "%Y-%m-%d %H:%M:%S"
+BUILT_FORMAT = MOMENT_FORMAT
 """How the moment of the build is written, always in UTC, as the last fact of the footer."""
-
-
-def utc_text(moment: dt.datetime) -> str:
-    """A moment as ``YYYY-MM-DD HH:MM:SS UTC``."""
-    return moment.astimezone(dt.timezone.utc).strftime(BUILT_FORMAT) + " UTC"
 
 
 def window_text(run: ReportRun) -> str | None:
@@ -126,7 +123,9 @@ def render_html(run: ReportRun, *, built_at: dt.datetime | None = None) -> str:
     moment = built_at if built_at is not None else dt.datetime.now(dt.timezone.utc)
     when = window_text(run)
     chips = html.h("p", html.chip(f"Window {when}"), class_="chips") if when else None
-    return html.page(report.title, chips, *_body(run.views), subtitle=report.what or "",
+    stale = banner(run.health) if run.health is not None else None
+    health = panel(run.health) if run.health is not None else None
+    return html.page(report.title, chips, stale, *_body(run.views), health, subtitle=report.what or "",
                      description=report.what or f"The report {report.identifier}.", footer=_footer(run, moment))
 
 

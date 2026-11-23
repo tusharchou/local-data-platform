@@ -24,15 +24,66 @@
       "table": "gold.gold_sales",
       "release": "r3",
       "snapshot_id": 8420615207115790441,
-      "source": "release r3, cut 2026-08-02 06:00:00 UTC"
+      "source": "release r3, cut 2026-08-02 06:00:00 UTC",
+      "pipeline": "gold_sales"
     },
     {
       "table": "gold.gold_customers",
       "release": null,
       "snapshot_id": 3187645520913349012,
-      "source": "the tables as they are now, because release r3 does not hold gold.gold_customers"
+      "source": "the tables as they are now, because release r3 does not hold gold.gold_customers",
+      "pipeline": null
     }
   ],
+  "health": {
+    "rule": {
+      "max_age_hours": 26.0,
+      "on_stale": "warn"
+    },
+    "stale": [
+      "gold.gold_sales"
+    ],
+    "tables": [
+      {
+        "table": "gold.gold_sales",
+        "pipeline": "gold_sales",
+        "health": "ok",
+        "last_run": {
+          "run_id": "gold-sales-run-7",
+          "status": "blocked_quality",
+          "started_at": "2026-08-02T05:30:15Z",
+          "finished_at": "2026-08-02T05:30:17.500000Z",
+          "rows_written": 0,
+          "checks": "4/5",
+          "failing_checks": [
+            "not_null(city)"
+          ]
+        },
+        "freshness": "ok",
+        "news_at": "2026-08-02T03:30:15Z",
+        "news_from": "run",
+        "no_run_data": false,
+        "stale": true,
+        "reasons": [
+          "its last run ended blocked_quality (failing not_null(city))"
+        ],
+        "problem": null
+      },
+      {
+        "table": "gold.gold_customers",
+        "pipeline": null,
+        "health": null,
+        "last_run": null,
+        "freshness": null,
+        "news_at": null,
+        "news_from": null,
+        "no_run_data": true,
+        "stale": false,
+        "reasons": [],
+        "problem": null
+      }
+    ]
+  },
   "queries": {
     "totals": {
       "kind": "query",
