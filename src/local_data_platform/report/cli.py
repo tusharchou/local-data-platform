@@ -2,8 +2,9 @@
 
 ``ldp report check REPORT_OR_DIR [--window WINDOW] [--param NAME=VALUE] [--release RN | --live] [--row-cap N] [--timeout
 SECONDS] [--json]`` reads a report file, or every report file of a folder, finds its tables, runs every query and every
-metric block, and says what each did. ``cli.py`` wires this in with :func:`add_cli`. Heavy imports happen inside the
-command.
+metric block, and says what each did. ``ldp report build REPORT --out PATH [--format html|md|json]`` takes the same
+options, runs the queries and writes the report. ``cli.py`` wires this in with :func:`add_cli`. Heavy imports happen
+inside the command.
 """
 
 import argparse
@@ -55,7 +56,7 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
     """
     parents = list(parents)
     report = subparsers.add_parser(
-        "report", parents=parents, help="define reports in files, and check them against the gold tables",
+        "report", parents=parents, help="define reports in files, check them against the gold tables, and build them",
         description="A report file, with \"kind\": \"Report\", names the tables a report reads, the queries it runs "
                     "and the blocks it shows. The commands read report files, and run their queries on the gold tables "
                     "as the current release holds them.",
@@ -80,25 +81,53 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
         epilog="Exit status is 0 when every report is valid and every query ran, and 1 when something is wrong. "
                "Example: ldp report check ldp_demo/restaurant/reports --window 2026-07-31/2026-08-01")
     check.add_argument("report", metavar="REPORT", help="a report file, or a folder that has report files")
-    check.add_argument("--window", metavar="WINDOW",
-                       help="the window of the run, such as 2026-07-31/2026-08-01, which is read as UTC like the "
-                            "window of ldp run, or yesterday, last-week or last-month, counted in the time zone of the "
-                            "report. The queries see it as $window_start and $window_end, as wall-clock times of that "
-                            "zone. A query that uses them needs it")
-    check.add_argument("--param", action="append", default=[], type=_parameter, metavar="NAME=VALUE", dest="params",
-                       help="the value of a parameter that the report declares. Repeat it for more than one")
-    when = check.add_mutually_exclusive_group()
+    _run_options(check)
+    check.add_argument("--json", action="store_true", help="print the result as JSON")
+    check.set_defaults(handler=_cmd_check)
+
+    build = actions.add_parser(
+        "build", parents=parents, help="run a report and write it as a page, Markdown or JSON",
+        description="Build REPORT, a report file. It runs every query and every metric block as ldp report check does, "
+                    "and when all of them ran and every block can be shown it writes the report to --out. The default "
+                    "format is one HTML page with its charts drawn inline, which opens from a folder with no network. "
+                    "--format md writes Markdown and --format json writes the rows of the queries and what each block "
+                    "shows. The file is written to a temporary name and renamed, and --out can be an s3:// or gs:// "
+                    "address. A report with a problem is not written, and the file that was there stays. When the "
+                    "report has metadata.observability the build is recorded as run events, and ldp runs REPORT lists "
+                    "the builds.",
+        epilog="Exit status is 0 when the report was written and 1 when a problem stopped it. Example: "
+               "ldp report build ldp_demo/restaurant/reports/daily_sales.json --window 2026-07-31/2026-08-01 "
+               "--out site/daily.html")
+    build.add_argument("report", metavar="REPORT", help="a report file")
+    build.add_argument("--out", metavar="PATH",
+                       help="where to write the report, a path, file://, s3:// or gs:// address, or - for standard "
+                            "output. It is needed, so that no file is written by surprise")
+    build.add_argument("--format", choices=("html", "md", "json"), default="html",
+                       help="html, a page of its own (the default), md, Markdown with the charts as tables, or json, "
+                            "the rows and what each block shows")
+    _run_options(build)
+    build.set_defaults(handler=_cmd_build)
+    return report
+
+
+def _run_options(parser: argparse.ArgumentParser) -> None:
+    """The options of a command that runs the queries of a report, which are the window, the version and the limits."""
+    parser.add_argument("--window", metavar="WINDOW",
+                        help="the window of the run, such as 2026-07-31/2026-08-01, which is read as UTC like the "
+                             "window of ldp run, or yesterday, last-week or last-month, counted in the time zone of "
+                             "the report. The queries see it as $window_start and $window_end, as wall-clock times of "
+                             "that zone. A query that uses them needs it")
+    parser.add_argument("--param", action="append", default=[], type=_parameter, metavar="NAME=VALUE", dest="params",
+                        help="the value of a parameter that the report declares. Repeat it for more than one")
+    when = parser.add_mutually_exclusive_group()
     when.add_argument("--release", metavar="RELEASE",
                       help="read the tables as release RELEASE of ldp gold build names them, such as r2. The default "
                            "is the current release. A table that the release does not hold is read as it is now")
     when.add_argument("--live", action="store_true", help="read the tables as they are now, and no release")
-    check.add_argument("--row-cap", type=_positive_int, metavar="N", dest="row_cap",
-                       help="return at most this many rows from a query, instead of the row_cap of the report")
-    check.add_argument("--timeout", type=_positive_float, metavar="SECONDS", dest="timeout",
-                       help="stop a query after this many seconds, instead of the timeout_s of the report")
-    check.add_argument("--json", action="store_true", help="print the result as JSON")
-    check.set_defaults(handler=_cmd_check)
-    return report
+    parser.add_argument("--row-cap", type=_positive_int, metavar="N", dest="row_cap",
+                        help="return at most this many rows from a query, instead of the row_cap of the report")
+    parser.add_argument("--timeout", type=_positive_float, metavar="SECONDS", dest="timeout",
+                        help="stop a query after this many seconds, instead of the timeout_s of the report")
 
 
 def _plural(number: int, noun: str, many: str | None = None) -> str:
@@ -176,6 +205,32 @@ def _cmd_check(args: argparse.Namespace) -> int:
             for problem in item.problems:
                 print(f"  - {problem}", file=sys.stderr)
     return EXIT_OK if all(item.ok for item in checks) else EXIT_ERROR
+
+
+def _cmd_build(args: argparse.Namespace) -> int:
+    from local_data_platform.exceptions import ConfigError
+    from local_data_platform.report.build import STDOUT, build_report
+    from local_data_platform.report.spec import load_report
+
+    if not args.out:
+        raise ConfigError("ldp report build needs --out, so that no file is written by surprise. Use --out - for "
+                          "standard output")
+    if _is_folder(args.report):
+        raise ConfigError(f"ldp report build takes a report file, and {args.report} is a folder")
+    report = load_report(args.report)
+    built = build_report(report, args.window, out=args.out, fmt=args.format, params=_params(args.params) or None,
+                         release=args.release, live=args.live, row_cap=args.row_cap, timeout_s=args.timeout)
+    where = "standard output" if args.out == STDOUT else args.out
+    queries = _plural(len(built.run.queries), "query", "queries")
+    summary = (f"{report.identifier} ({report.file.name if report.file else '-'}): built {where} as {built.format}, "
+               f"{built.bytes:,} bytes, {queries} and {_plural(len(report.blocks), 'block')}, in "
+               f"{built.duration_ms:.0f} ms")
+    if args.out == STDOUT:
+        sys.stdout.write(built.document)
+        print(summary, file=sys.stderr)
+    else:
+        print(summary)
+    return EXIT_OK
 
 
 def _is_folder(path: str) -> bool:

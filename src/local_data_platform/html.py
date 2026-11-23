@@ -35,10 +35,12 @@ from local_data_platform import __version__
 CSS = """\
 :root{color-scheme:light dark;--bg:#f6f6f3;--surface:#ffffff;--fg:#1c1c1a;--muted:#5b5b56;--border:#d9d9d2;\
 --accent:#1d5fbf;--ok:#17692f;--ok-bg:#e3f3e8;--warn:#7d5200;--warn-bg:#fbefd0;--bad:#a6231b;--bad-bg:#fbe3e0;--code-bg:#eeeeea;--radius:8px;\
+--s1:#1d5fbf;--s2:#c4571a;--s3:#2a8f5b;--s4:#8a4fb8;--s5:#a77a00;--s6:#1f8aa0;--s7:#c2415d;--s8:#6b6f78;\
 --font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;\
 --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 @media (prefers-color-scheme:dark){:root{--bg:#131312;--surface:#1c1c1a;--fg:#ecece8;--muted:#a4a49d;--border:#363632;\
---accent:#80aaff;--ok:#74d48c;--ok-bg:#15301c;--warn:#f1c45e;--warn-bg:#392c0b;--bad:#ff8f86;--bad-bg:#3c1613;--code-bg:#262623}}
+--accent:#80aaff;--ok:#74d48c;--ok-bg:#15301c;--warn:#f1c45e;--warn-bg:#392c0b;--bad:#ff8f86;--bad-bg:#3c1613;--code-bg:#262623;\
+--s1:#80aaff;--s2:#ff9a5c;--s3:#6fd69a;--s4:#c79bf0;--s5:#e6c15a;--s6:#6ed0e6;--s7:#ff8aa6;--s8:#b4b9c2}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 var(--font)}
 .wrap{max-width:72rem;margin:0 auto;padding:0 16px}
@@ -79,6 +81,28 @@ background:var(--surface);color:var(--fg);font:inherit}
 .sr{position:absolute;left:-9999px}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 [hidden]{display:none!important}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(12rem,1fr));gap:12px;margin:16px 0}
+.kpis .card{margin:0}
+.kpi .label{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}
+.kpi .value{font-size:1.9rem;line-height:1.25;font-weight:650;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.kpi .delta{font-size:.85rem;color:var(--muted)}
+.kpi .delta.up,.kpi .delta.down{color:var(--fg)}
+.note{color:var(--muted);font-size:.85rem;margin:6px 0}
+.legend{display:flex;flex-wrap:wrap;gap:4px 16px;list-style:none;padding:0;margin:4px 0 0}
+.swatch{display:inline-block;width:.8em;height:.8em;border-radius:2px;background:var(--c)}
+.s1{--c:var(--s1)}.s2{--c:var(--s2)}.s3{--c:var(--s3)}.s4{--c:var(--s4)}.s5{--c:var(--s5)}.s6{--c:var(--s6)}.s7{--c:var(--s7)}.s8{--c:var(--s8)}
+svg.chart{display:block;width:100%;height:auto;margin:8px 0}
+.chart .grid{stroke:var(--border);stroke-width:1}
+.chart .axis{stroke:var(--muted);stroke-width:1}
+.chart text{fill:var(--muted);font:12px var(--font)}
+.chart .tick-x,.chart .value-label{text-anchor:middle}
+.chart .tick-y{text-anchor:end}
+.chart .value-label{fill:var(--fg)}
+.chart .bar{fill:var(--c)}
+.chart .line{fill:none;stroke:var(--c);stroke-width:2;stroke-linejoin:round}
+.chart .dot{fill:var(--c);stroke:var(--surface);stroke-width:1}
+.words p{max-width:60rem}
+footer dl.facts{margin:4px 0}
 @media (max-width:40rem){dl.facts{grid-template-columns:1fr}dl.facts dt{margin-top:6px}}
 @media print{body{background:#fff;color:#000}.search{display:none}.card{break-inside:avoid}}
 """
@@ -244,7 +268,8 @@ def _hash(text: str) -> str:
     return "'sha256-" + base64.b64encode(hashlib.sha256(text.encode("utf-8")).digest()).decode("ascii") + "'"
 
 
-def page(title: str, *body: Any, subtitle: str = "", description: str = "", script: str = "", footer: str = "") -> str:
+def page(title: str, *body: Any, subtitle: str = "", description: str = "", script: str = "",
+         footer: str | Raw = "") -> str:
     """A whole page.
 
     The page has a header with the title, the body in ``<main>`` and a footer, and nothing else. Its policy
@@ -256,7 +281,8 @@ def page(title: str, *body: Any, subtitle: str = "", description: str = "", scri
         subtitle: A line under the heading.
         description: What the page is, for the ``description`` meta tag.
         script: The text of the one inline script, such as :data:`FILTER_SCRIPT`. It is allowed by its hash.
-        footer: A line for the footer, before the name of this package and its version.
+        footer: A line for the footer, before the name of this package and its version. It may be :class:`Raw`, such
+            as a list of facts, and then the name of the package and its version are a line of their own under it.
 
     Returns:
         The page as text, starting with the doctype.
@@ -283,7 +309,8 @@ def page(title: str, *body: Any, subtitle: str = "", description: str = "", scri
         h("header", h("div", h("h1", title), h("p", subtitle, class_="sub") if subtitle else None, class_="wrap"),
           class_="top"),
         h("main", join(*body), class_="wrap"),
-        h("footer", f"{footer} {stamp}".strip(), class_="wrap muted"),
+        h("footer", footer, h("p", stamp), class_="wrap muted") if isinstance(footer, Raw)
+        else h("footer", f"{footer} {stamp}".strip(), class_="wrap muted"),
         Raw(f"<script>{script}</script>") if script else None)
     document = h("html", Raw("\n"), join(h("head", Raw("\n" + head + "\n")), h("body", Raw("\n" + shell + "\n"))),
                  Raw("\n"), lang="en")

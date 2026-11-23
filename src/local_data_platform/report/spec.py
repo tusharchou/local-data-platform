@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -85,8 +85,8 @@ BLOCK_TYPES = ("kpi", "bar", "line", "table", "text")
 
 BLOCK_KEYS = {
     "kpi": ("type", "title", "query", "value", "compare", "metric", "by", "grain", "filters", "format"),
-    "bar": ("type", "title", "query", "x", "y", "series", "metric", "by", "grain", "filters", "format"),
-    "line": ("type", "title", "query", "x", "y", "series", "metric", "by", "grain", "filters", "format"),
+    "bar": ("type", "title", "query", "x", "y", "series", "metric", "by", "grain", "filters", "format", "max_points"),
+    "line": ("type", "title", "query", "x", "y", "series", "metric", "by", "grain", "filters", "format", "max_points"),
     "table": ("type", "title", "query", "columns", "formats", "max_rows"),
     "text": ("type", "title", "text"),
 }
@@ -113,6 +113,11 @@ MAX_ROW_CAP = 1_000_000
 DEFAULT_TIMEOUT_S = 30.0
 MAX_TIMEOUT_S = 3600.0
 MAX_BLOCK_ROWS = 10_000
+DEFAULT_MAX_POINTS = 500
+"""How many rows of its query a chart draws. A chart of more rows draws the first ones and says how many it left out."""
+MAX_POINTS = 10_000
+MAX_SERIES = 8
+"""How many series a chart draws. A chart of more series draws the first ones and says how many it left out."""
 MAX_SQL_CHARS = 100_000
 
 NAME_PATTERN = r"[a-z][a-z0-9_]{0,62}"
@@ -201,6 +206,7 @@ class Block:
         columns: The columns of a ``table`` to show, in order, or ``None`` for all.
         formats: How the columns of a ``table`` are written, by column.
         max_rows: The rows of a ``table`` to show.
+        max_points: The rows of its query that a ``bar`` or ``line`` draws.
         text: The words of a ``text``, with ``{query.column}`` placeholders.
     """
 
@@ -221,6 +227,7 @@ class Block:
     columns: tuple[str, ...] | None = None
     formats: Mapping[str, str] = field(default_factory=dict)
     max_rows: int = 100
+    max_points: int = DEFAULT_MAX_POINTS
     text: str | None = None
 
     @property
@@ -372,9 +379,8 @@ def _name_problem(value: Any) -> str | None:
 
 def _check_format(problems: _Problems, where: str, value: Any) -> None:
     if not isinstance(value, str) or not _FORMAT.fullmatch(value):
-        problems.add(where, "must be integer, number, number:N or percent:N with N from 0 to 6, or currency:CODE with "
-                            "a "
-                            f"three letter code such as currency:USD, got {value!r}")
+        problems.add(where, "must be integer, number, number:N or percent:N with N from 0 to 6, or currency:CODE "
+                            f"with a three letter code such as currency:USD, got {value!r}")
 
 
 def _check_column(problems: _Problems, where: str, value: Any, *, required: bool = True) -> None:
@@ -557,6 +563,22 @@ def text_references(text: str) -> tuple[list[tuple[str, str]], list[str]]:
     return found, problems
 
 
+def fill_placeholders(text: str, lookup: Callable[[str, str], str]) -> str:
+    """The words of a ``text`` block with each ``{query.column}`` replaced by what ``lookup(query, column)`` gives.
+
+    ``{{`` and ``}}`` are written as one brace. The words have to be valid, as :func:`text_references` says, which
+    :func:`validate_report` has checked.
+    """
+    def replace(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if token in ("{{", "}}"):
+            return token[0]
+        reference = _REFERENCE.fullmatch(token[1:-1])
+        return lookup(reference.group(1), reference.group(2)) if reference else token
+
+    return _PLACEHOLDER.sub(replace, text)
+
+
 def _check_block(problems: _Problems, place: int, block: Any, queries: Sequence[str]) -> None:
     where = f"metadata.blocks[{place}]"
     if not isinstance(block, Mapping):
@@ -615,6 +637,9 @@ def _check_block(problems: _Problems, place: int, block: Any, queries: Sequence[
         return
     if "format" in block:
         _check_format(problems, f"{where}.format", block["format"])
+    if "max_points" in block and not (_whole(block["max_points"]) and 1 <= block["max_points"] <= MAX_POINTS):
+        problems.add(f"{where}.max_points", f"must be a whole number from 1 to {MAX_POINTS}, got "
+                                            f"{block['max_points']!r}")
     if named is not None:
         _check_query_name(problems, f"{where}.query", named, queries)
         for key in METRIC_FORM_KEYS:
@@ -637,6 +662,14 @@ def _check_block(problems: _Problems, place: int, block: Any, queries: Sequence[
             problems.add(f"{where}.by", "does not apply to a kpi, which shows one number")
         else:
             _check_names(problems, f"{where}.by", block["by"], "dimension")
+            dimensions = len(_names(block["by"]))
+            if kind == "bar" and "grain" not in block:
+                if dimensions > 2:
+                    problems.add(f"{where}.by", f"names {dimensions} dimensions, and a bar shows at most 2, one along "
+                                                "the axis and one that splits the bars into series")
+            elif dimensions > 1:
+                problems.add(f"{where}.by", f"names {dimensions} dimensions, and a {kind} that shows periods shows at "
+                                            "most 1, which splits it into series")
     if "filters" in block:
         _check_filters(problems, f"{where}.filters", block["filters"])
     if kind == "bar" and "by" not in block and "grain" not in block:
@@ -833,7 +866,8 @@ def build(spec: Mapping[str, Any], *, file: Path | None = None, base_dir: Path |
             series=item.get("series"), metric=_text(item.get("metric")), grain=item.get("grain"),
             by=_names(item.get("by")), filters=tuple(item.get("filters") or ()), format=item.get("format"),
             columns=tuple(item["columns"]) if "columns" in item else None, formats=dict(formats),
-            max_rows=item.get("max_rows", 100), text=item.get("text")))
+            max_rows=item.get("max_rows", 100), max_points=item.get("max_points", DEFAULT_MAX_POINTS),
+            text=item.get("text")))
     parameters = tuple(Parameter(name=name, type=item["type"], default=item.get("default"),
                                  description=_text(item.get("description")))
                        for name, item in (metadata.get("parameters") or {}).items())
@@ -993,6 +1027,8 @@ def report_schema() -> dict[str, Any]:
                 "description": "The name of an environment variable. The address or the token is never written here."}
     paths = {"type": "array", "minItems": 1, "items": text}
     filters = {"type": "array", "minItems": 1, "items": text}
+    max_points = {"type": "integer", "minimum": 1, "maximum": MAX_POINTS, "default": DEFAULT_MAX_POINTS,
+                  "description": "How many rows of the query the chart draws. It says how many it left out."}
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://local-data-platform.readthedocs.io/schemas/ldp-v1-report.json",
@@ -1105,14 +1141,14 @@ def report_schema() -> dict[str, Any]:
                      "oneOf": [{"required": ["query", "value"]}, {"required": ["metric"]}]},
                     {"properties": {"type": {"const": "bar"}, "title": text, "query": name, "x": column, "y": column,
                                     "series": column, "metric": text, "by": {"oneOf": [text, paths]},
-                                    "grain": {"enum": list(GRAINS)},
+                                    "grain": {"enum": list(GRAINS)}, "max_points": max_points,
                                     "filters": filters, "format": number_format},
                      "required": ["type"], "additionalProperties": False,
                      "oneOf": [{"required": ["query", "x", "y"]}, {"required": ["metric"], "anyOf": [
                          {"required": ["by"]}, {"required": ["grain"]}]}]},
                     {"properties": {"type": {"const": "line"}, "title": text, "query": name, "x": column, "y": column,
                                     "series": column, "metric": text, "by": {"oneOf": [text, paths]},
-                                    "grain": {"enum": list(GRAINS)},
+                                    "grain": {"enum": list(GRAINS)}, "max_points": max_points,
                                     "filters": filters, "format": number_format},
                      "required": ["type"], "additionalProperties": False,
                      "oneOf": [{"required": ["query", "x", "y"]}, {"required": ["metric", "grain"]}]},
@@ -1139,6 +1175,7 @@ __all__ = [
     "BLOCK_TYPES",
     "BUILTIN_PARAMETERS",
     "Block",
+    "DEFAULT_MAX_POINTS",
     "DEFAULT_ROW_CAP",
     "DEFAULT_TIMEOUT_S",
     "DEFAULT_TIMEZONE",
@@ -1147,6 +1184,8 @@ __all__ = [
     "Freshness",
     "GRAINS",
     "KIND",
+    "MAX_POINTS",
+    "MAX_SERIES",
     "METADATA_KEYS",
     "NAME_PATTERN",
     "PARAMETER_TYPES",
@@ -1157,6 +1196,7 @@ __all__ = [
     "TableSources",
     "build",
     "describe_report",
+    "fill_placeholders",
     "load_report",
     "named_queries",
     "read_report",

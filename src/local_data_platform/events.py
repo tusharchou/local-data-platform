@@ -71,9 +71,11 @@ EVENT_TYPES = (
     "workflow.finished",
     "table.maintained",
     "release.cut",
+    "report.rendered",
 )
 """The event types LDP emits. Consumers must ignore types they don't know. ``release.cut`` says that a gold table is in
-a release, and one is emitted for each table of the release, with the table's own pipeline name."""
+a release, and one is emitted for each table of the release, with the table's own pipeline name. ``report.rendered``
+says that ``ldp report build`` wrote a report, between the ``run.started`` and the ``run.finished`` of the build."""
 
 RUN_STATUSES = ("published", "skipped_duplicate", "blocked_quality", "failed", "succeeded", "upstream_failed")
 """The ``status`` a ``run.finished`` event reports. A pipeline run is ``published``, ``skipped_duplicate``,
@@ -1362,7 +1364,9 @@ def summarize_runs(events: Iterable[RunEvent], *, final_attempts_only: bool = Fa
         the ``workflow_run_id``, and the run of a workflow itself, which has ``workflow.started`` and
         ``workflow.finished`` events, has ``is_workflow`` true, the workflow's name as its ``pipeline`` and the
         status of the workflow. The ``release.cut`` event of a table in a gold release is a run of its own with the
-        status ``released``, the ``snapshot_id`` of the table in the release and the name of the ``release``.
+        status ``released``, the ``snapshot_id`` of the table in the release and the name of the ``release``. The
+        build of a report, which has a ``report.rendered`` event, has ``is_report`` true, the report's identifier as its
+        ``pipeline``, and the ``window``, the ``output`` and the ``format`` of what it wrote.
     """
     runs: dict[tuple[str, int], dict[str, Any]] = {}
     for event in sorted(events, key=lambda item: (item.run_id, item.attempt, item.seq)):
@@ -1371,6 +1375,7 @@ def summarize_runs(events: Iterable[RunEvent], *, final_attempts_only: bool = Fa
             "started_at": event.ts, "status": "running", "rows_read": None, "rows_written": None,
             "snapshot_id": None, "idempotency_key": None, "duration_s": None, "checks": None,
             "workflow": None, "task_id": None, "workflow_run_id": None, "is_workflow": False, "release": None,
+            "is_report": False, "window": None, "output": None, "format": None,
         })
         payload = event.payload
         run["pipeline"] = run["pipeline"] or payload.get("pipeline")
@@ -1388,6 +1393,10 @@ def summarize_runs(events: Iterable[RunEvent], *, final_attempts_only: bool = Fa
             run["snapshot_id"] = payload.get("snapshot_id", run["snapshot_id"])
             if "rows_written" in payload:
                 run["rows_written"] = payload["rows_written"]
+        elif event.type == "report.rendered":
+            run["is_report"] = True
+            for name in ("window", "output", "format"):
+                run[name] = payload.get(name)
         elif event.type == "release.cut":
             run["status"] = "released"
             run["release"] = payload.get("release")
@@ -1664,7 +1673,7 @@ def load_run_events(config_or_path: str | os.PathLike, *, jsonl: str | os.PathLi
     """Load the events ``ldp runs`` shows.
 
     Args:
-        config_or_path: A dataset config file, or a ``.jsonl`` events file.
+        config_or_path: A dataset config file, a report file, or a ``.jsonl`` events file.
         jsonl: Read this events file instead of what the config names.
         run_id: Only this run's events.
 
@@ -1681,6 +1690,13 @@ def load_run_events(config_or_path: str | os.PathLike, *, jsonl: str | os.PathLi
             return [], str(file)
         events = read_jsonl(file)
         return [e for e in events if run_id is None or e.run_id == run_id], str(file)
+
+    from local_data_platform.spec import kind_of_file
+
+    if kind_of_file(path) == "Report":  # the builds of a report, from the sinks of the report
+        from local_data_platform.report.build import report_events
+
+        return report_events(path, run_id=run_id)
 
     from local_data_platform.etl import load_config
 
@@ -1737,6 +1753,7 @@ def _cmd_runs(args: Any) -> int:
     shown = summarize_runs(events, final_attempts_only=not args.attempts)[: args.limit]
     in_workflows = any(run["workflow"] for run in shown)
     in_releases = any(run["release"] for run in shown)
+    in_reports = any(run["is_report"] for run in shown)
     for run in shown:
         row = {"run_id": run["run_id"], "attempt": run["attempt"], "pipeline": run["pipeline"]}
         if in_workflows:  # a ledger that holds workflow runs says which workflow and task each run is
@@ -1744,6 +1761,9 @@ def _cmd_runs(args: Any) -> int:
             row["task"] = "(workflow)" if run["is_workflow"] else run["task_id"]
         if in_releases:  # a run that cut a release says which one
             row["release"] = run["release"]
+        if in_reports:  # the build of a report says which window it covered and where it wrote
+            row["window"] = run["window"]
+            row["output"] = run["output"]
         row.update({
             "started_utc": run["started_at"].replace(tzinfo=None).isoformat(sep=" ", timespec="seconds"),
             "status": run["status"], "rows_read": run["rows_read"], "rows_written": run["rows_written"],
@@ -1776,6 +1796,9 @@ def _event_detail(event: RunEvent) -> str:
         return f"status={payload.get('status')} duration_s={payload.get('duration_s')}"
     if event.type == "release.cut":
         return f"release={payload.get('release')} snapshot={payload.get('snapshot_id')} rows={payload.get('rows')}"
+    if event.type == "report.rendered":
+        return (f"format={payload.get('format')} output={payload.get('output')} bytes={payload.get('bytes')} "
+                f"queries={payload.get('queries')} rows={payload.get('rows')}")
     if event.type == "workflow.started":
         return f"window={payload.get('window')} tasks={len(payload.get('tasks') or [])}"
     if event.type == "workflow.finished":

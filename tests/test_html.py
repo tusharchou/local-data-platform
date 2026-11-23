@@ -244,6 +244,25 @@ def test_a_page_is_one_html_document_with_a_header_a_main_and_a_footer():
     assert "3 tables" in "".join(parsed.text) and "Hello" in "".join(parsed.text)
 
 
+def test_a_footer_of_markup_stays_markup_and_the_name_of_the_package_is_a_line_under_it():
+    facts_list = facts([("Built", "today"), ("Rows", 3)])
+
+    text = render(footer=facts_list)
+    parsed = Parsed(text)
+
+    footer = text.split("<footer")[1]
+    assert str(facts_list) in footer and "&lt;dl" not in footer  # the markup of the footer is not escaped again
+    assert [tag for tag, _ in parsed.tags if tag in ("dl", "dt", "dd", "p")] == ["p", "dl", "dt", "dd", "dt", "dd", "p"]
+    assert footer.endswith(f"</dl><p>local-data-platform {ldp_html.__version__}</p></footer>\n</body>\n</html>\n")
+
+
+def test_a_footer_of_text_is_escaped_and_is_one_line_with_the_name_of_the_package():
+    text = render(footer="<b>x</b> & y")
+
+    assert f"&lt;b&gt;x&lt;/b&gt; &amp; y local-data-platform {ldp_html.__version__}</footer>" in text
+    assert "<b>x</b>" not in text
+
+
 def test_a_page_without_the_optional_parts_leaves_them_out():
     parsed = Parsed(render())
 
@@ -307,6 +326,20 @@ def test_the_stylesheet_has_light_tokens_and_dark_tokens_for_the_same_names():
     assert colours <= names(light)
     assert names(dark) <= names(light) and colours <= names(dark)
     assert "color-scheme:light dark" in ldp_html.CSS
+
+
+def test_the_eight_series_colours_are_defined_in_both_themes_and_differ_from_each_other():
+    light = re.search(r":root\{(.*?)\}\n@media", ldp_html.CSS, re.S).group(1)
+    dark = re.search(r"prefers-color-scheme:dark\)\{:root\{(.*?)\}\}", ldp_html.CSS, re.S).group(1)
+
+    def series(block: str) -> dict[str, str]:
+        return dict(re.findall(r"--(s[1-8]):(#[0-9a-f]{6})[;}]?", block))
+
+    assert sorted(series(light)) == sorted(series(dark)) == [f"s{number}" for number in range(1, 9)]
+    assert len(set(series(light).values())) == 8 and len(set(series(dark).values())) == 8
+    assert all(series(light)[name] != series(dark)[name] for name in series(light))
+    for number in range(1, 9):
+        assert f".s{number}{{--c:var(--s{number})}}" in ldp_html.CSS
 
 
 def test_a_value_in_the_title_the_heading_the_subtitle_the_description_and_the_footer_is_escaped():

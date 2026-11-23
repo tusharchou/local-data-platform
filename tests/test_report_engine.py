@@ -814,6 +814,52 @@ def test_ldp_report_check_lists_every_problem_by_its_path_and_exits_with_1(lake,
     assert any(line.split()[:3] == ["bad", "query", "NO"] for line in captured.out.splitlines())
 
 
+def test_a_column_that_a_block_names_and_its_query_lacks_is_a_problem_that_check_finds_and_the_other_blocks_still_run(
+        lake, capsys):
+    cut(lake)
+    blocks = [{"type": "kpi", "query": "totals", "value": "nope"},
+              {"type": "bar", "query": "by_city", "x": "city", "y": "orders"},
+              {"type": "table", "query": "by_city", "columns": ["city", "zzz"]},
+              {"type": "text", "text": "Orders were {totals.orders} and {totals.nope}."}]
+    path = write_good(lake, blocks=blocks)
+
+    check = check_report(path, WINDOW)
+
+    assert check.problems == [
+        "metadata.blocks[0].value: the query 'totals' has no column 'nope'. Its columns are ['orders', 'revenue']",
+        "metadata.blocks[2].columns[1]: the query 'by_city' has no column 'zzz'. Its columns are ['city', 'orders']",
+        "metadata.blocks[3].text: the query 'totals' has no column 'nope'. Its columns are ['orders', 'revenue']"]
+    assert [type(view).__name__ for view in check.run.views] == ["Chart"] and check.run.views[0].block.index == 1
+    assert main(["report", "check", str(path), "--window", WINDOW]) == 1
+    assert "  - metadata.blocks[0].value: the query 'totals' has no column 'nope'" in capsys.readouterr().err
+
+
+def test_a_run_says_the_row_cap_it_had_and_gives_the_views_of_its_blocks(lake):
+    cut(lake)
+
+    run = run_queries(report_of(lake), WINDOW, row_cap=7)
+
+    assert run.row_cap == 7 and run.ok
+    assert [type(view).__name__ for view in run.views] == ["Kpi", "Chart", "Kpi", "Chart"]
+    assert run_queries(report_of(lake, row_cap=11), WINDOW).row_cap == 11
+
+
+def test_a_metric_block_says_how_each_of_its_columns_is_written_and_what_it_is(lake):
+    cut(lake)
+
+    run = run_queries(report_of(lake), WINDOW)
+
+    item = run.queries["blocks[2]"]
+    assert item.kind == "metric" and item.formats == {"revenue": "number:2"}
+    assert [(column["name"], column["kind"]) for column in item.columns_info] == [
+        ("day", "time"), ("revenue", "metric")]
+    by_city = run.queries["blocks[3]"]  # a metric with no format of its own is a number
+    assert by_city.formats == {"orders": "number"}
+    assert [(column["name"], column["kind"], column["format"]) for column in by_city.columns_info] == [
+        ("day", "time", None), ("city", "dimension", None), ("orders", "metric", "number")]
+    assert run.queries["totals"].formats == {} and run.queries["totals"].columns_info == ()
+
+
 def test_ldp_report_check_of_a_file_that_is_not_valid_exits_with_1_and_prints_only_the_problems(lake, capsys):
     path = write_good(lake, row_cap=0, timeout_s=0)
 

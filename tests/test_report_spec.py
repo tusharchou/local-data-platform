@@ -231,6 +231,10 @@ def test_the_report_schema_is_valid_and_agrees_with_the_checks_on_a_good_and_som
         with_block({"type": "bar", "metric": "revenue"}), with_block({"type": "table", "query": "top", "max_rows": 0}),
         with_block({"type": "text"}), with_block({"type": "pie", "query": "top"}),
         with_block({"type": "kpi", "metric": "revenue", "format": "euro"}),
+        with_block({"type": "bar", "query": "by_city", "x": "city", "y": "revenue", "max_points": 0}),
+        with_block({"type": "line", "query": "by_city", "x": "city", "y": "revenue", "max_points": 10001}),
+        with_block({"type": "line", "query": "by_city", "x": "city", "y": "revenue", "max_points": 2.5}),
+        with_block({"type": "kpi", "query": "by_city", "value": "revenue", "max_points": 5}),
     ]
     for spec in bad:
         assert list(validator.iter_errors(spec)), spec
@@ -445,6 +449,28 @@ def test_the_blocks_of_a_report_are_a_list_of_objects_that_have_a_type(blocks, e
     ({"type": "table", "query": "top", "max_rows": True}, "metadata.blocks[7].max_rows: must be a whole number from 1 "
                                                           "to 10000"),
     ({"type": "table", "query": "top", "value": "x"}, "has unknown keys ['value']; allowed for a table"),
+    ({"type": "bar", "query": "by_city", "x": "city", "y": "revenue", "max_points": 0},
+     "metadata.blocks[7].max_points: must be a whole number from 1 to 10000, got 0"),
+    ({"type": "line", "query": "by_city", "x": "city", "y": "revenue", "max_points": 10001},
+     "metadata.blocks[7].max_points: must be a whole number from 1 to 10000, got 10001"),
+    ({"type": "line", "query": "by_city", "x": "city", "y": "revenue", "max_points": 2.5},
+     "metadata.blocks[7].max_points: must be a whole number from 1 to 10000, got 2.5"),
+    ({"type": "bar", "query": "by_city", "x": "city", "y": "revenue", "max_points": True},
+     "metadata.blocks[7].max_points: must be a whole number from 1 to 10000, got True"),
+    ({"type": "bar", "metric": "revenue", "by": "city", "max_points": "5"},
+     "metadata.blocks[7].max_points: must be a whole number from 1 to 10000, got '5'"),
+    ({"type": "kpi", "query": "by_city", "value": "revenue", "max_points": 5},
+     "has unknown keys ['max_points']; allowed for a kpi"),
+    ({"type": "table", "query": "top", "max_points": 5}, "has unknown keys ['max_points']; allowed for a table"),
+    ({"type": "bar", "metric": "revenue", "by": ["city", "cuisine", "day"]},
+     "metadata.blocks[7].by: names 3 dimensions, and a bar shows at most 2, one along the axis and one that splits "
+     "the bars into series"),
+    ({"type": "bar", "metric": "revenue", "grain": "day", "by": ["city", "cuisine"]},
+     "metadata.blocks[7].by: names 2 dimensions, and a bar that shows periods shows at most 1, which splits it into "
+     "series"),
+    ({"type": "line", "metric": "revenue", "grain": "day", "by": ["city", "cuisine"]},
+     "metadata.blocks[7].by: names 2 dimensions, and a line that shows periods shows at most 1, which splits it "
+     "into series"),
     ({"type": "text"}, "metadata.blocks[7].text: is required and must be the words to show"),
     ({"type": "text", "text": "  "}, "metadata.blocks[7].text: is required and must be the words to show"),
     ({"type": "text", "text": "a { b"}, "metadata.blocks[7].text: has a lone '{'. Write '{{' for a brace"),
@@ -460,6 +486,50 @@ def test_the_blocks_of_a_report_are_a_list_of_objects_that_have_a_type(blocks, e
 def test_each_type_of_block_has_what_it_needs_and_nothing_else(block, expected):
     spec = with_block(block)
     assert any(expected in message for message in messages(spec)), messages(spec)
+
+
+@pytest.mark.parametrize("block", [
+    {"type": "bar", "query": "by_city", "x": "city", "y": "revenue", "max_points": 1},
+    {"type": "line", "query": "by_city", "x": "city", "y": "revenue", "max_points": 10000},
+    {"type": "bar", "metric": "revenue", "by": ["city", "cuisine"]},
+    {"type": "bar", "metric": "revenue", "by": "city"},
+    {"type": "bar", "metric": "revenue", "grain": "day", "by": "city"},
+    {"type": "bar", "metric": "revenue", "grain": "day"},
+    {"type": "line", "metric": "revenue", "grain": "week", "by": ["city"], "max_points": 52},
+])
+def test_a_chart_may_limit_its_points_and_name_the_dimensions_that_it_can_show(block):
+    assert messages(with_block(block)) == []
+
+
+def test_a_chart_keeps_its_max_points_and_the_default_is_500():
+    spec = with_block({"type": "line", "query": "by_city", "x": "city", "y": "revenue", "max_points": 7})
+    report = build(spec)
+
+    assert report.blocks[-1].max_points == 7 and report.blocks[2].max_points == report_spec.DEFAULT_MAX_POINTS == 500
+    assert report_spec.MAX_POINTS == 10000 and report_spec.MAX_SERIES == 8
+
+
+def test_the_schema_gives_a_bar_and_a_line_their_max_points_and_no_other_block_has_it():
+    options = report_schema()["$defs"]["block"]["oneOf"]
+    kinds = {item["properties"]["type"]["const"]: item["properties"] for item in options}
+
+    for kind in ("bar", "line"):
+        assert kinds[kind]["max_points"] == {
+            "type": "integer", "minimum": 1, "maximum": 10000, "default": 500,
+            "description": "How many rows of the query the chart draws. It says how many it left out."}
+    assert "max_points" not in kinds["kpi"] and "max_points" not in kinds["table"] and "max_points" not in kinds["text"]
+    assert kinds["table"]["max_rows"]["maximum"] == 10000
+
+
+def test_placeholders_are_filled_by_a_lookup_and_a_double_brace_is_one_brace():
+    def lookup(query, column):
+        return f"<{query}.{column}>"
+
+    assert report_spec.fill_placeholders("Revenue was {by_city.revenue}.", lookup) == "Revenue was <by_city.revenue>."
+    assert report_spec.fill_placeholders("{{braces}} and {top.n}", lookup) == "{braces} and <top.n>"
+    assert report_spec.fill_placeholders("{top.n}{top.n}", lookup) == "<top.n><top.n>"
+    assert report_spec.fill_placeholders("no placeholder", lookup) == "no placeholder"
+    assert report_spec.fill_placeholders("", lookup) == ""
 
 
 @pytest.mark.parametrize("number_format", ["integer", "number", "number:0", "number:6", "percent", "percent:2",

@@ -1,0 +1,390 @@
+{
+  "ldp_report": 1,
+  "report": {
+    "identifier": "daily_sales",
+    "title": "Daily sales",
+    "who": "owner@example.com",
+    "what": "Orders and revenue of one day, from the gold tables.",
+    "where": null,
+    "when": null,
+    "how": null
+  },
+  "window": {
+    "start": "2026-07-30T18:30:00Z",
+    "end": "2026-07-31T18:30:00Z"
+  },
+  "timezone": "Asia/Kolkata",
+  "built_at": "2026-08-02T06:30:15Z",
+  "built": "2026-08-02 06:30:15 UTC",
+  "release": null,
+  "live": false,
+  "parameters": {},
+  "tables": [
+    {
+      "table": "gold.gold_sales",
+      "release": "r3",
+      "snapshot_id": 8420615207115790441,
+      "source": "release r3, cut 2026-08-02 06:00:00 UTC"
+    },
+    {
+      "table": "gold.gold_customers",
+      "release": null,
+      "snapshot_id": 3187645520913349012,
+      "source": "the tables as they are now, because release r3 does not hold gold.gold_customers"
+    }
+  ],
+  "queries": {
+    "totals": {
+      "kind": "query",
+      "rows": 1,
+      "truncated": false,
+      "columns": [
+        {
+          "name": "revenue",
+          "type": "decimal128(18, 2)",
+          "kind": null,
+          "format": null,
+          "description": null
+        },
+        {
+          "name": "previous",
+          "type": "decimal128(18, 2)",
+          "kind": null,
+          "format": null,
+          "description": null
+        },
+        {
+          "name": "orders",
+          "type": "int64",
+          "kind": null,
+          "format": null,
+          "description": null
+        },
+        {
+          "name": "previous_orders",
+          "type": "int64",
+          "kind": null,
+          "format": null,
+          "description": null
+        },
+        {
+          "name": "share",
+          "type": "double",
+          "kind": null,
+          "format": null,
+          "description": null
+        }
+      ],
+      "data": [
+        {
+          "revenue": 1234.5,
+          "previous": 1100.0,
+          "orders": 87,
+          "previous_orders": 90,
+          "share": 0.1875
+        }
+      ]
+    },
+    "by_city": {
+      "kind": "query",
+      "rows": 3,
+      "truncated": false,
+      "columns": [
+        {
+          "name": "city",
+          "type": "string",
+          "kind": null,
+          "format": null,
+          "description": null
+        },
+        {
+          "name": "revenue",
+          "type": "decimal128(18, 2)",
+          "kind": null,
+          "format": null,
+          "description": null
+        }
+      ],
+      "data": [
+        {
+          "city": "Pune",
+          "revenue": 520.25
+        },
+        {
+          "city": "Delhi",
+          "revenue": 410.0
+        },
+        {
+          "city": "Mumbai",
+          "revenue": 304.25
+        }
+      ]
+    },
+    "by_day": {
+      "kind": "query",
+      "rows": 4,
+      "truncated": false,
+      "columns": [
+        {
+          "name": "day",
+          "type": "date32[day]",
+          "kind": null,
+          "format": null,
+          "description": null
+        },
+        {
+          "name": "city",
+          "type": "string",
+          "kind": null,
+          "format": null,
+          "description": null
+        },
+        {
+          "name": "revenue",
+          "type": "decimal128(18, 2)",
+          "kind": null,
+          "format": null,
+          "description": null
+        }
+      ],
+      "data": [
+        {
+          "day": "2026-07-31",
+          "city": "Pune",
+          "revenue": 520.25
+        },
+        {
+          "day": "2026-07-30",
+          "city": "Pune",
+          "revenue": 480.0
+        },
+        {
+          "day": "2026-07-30",
+          "city": "Delhi",
+          "revenue": 350.5
+        },
+        {
+          "day": "2026-07-31",
+          "city": "Delhi",
+          "revenue": 410.0
+        }
+      ]
+    },
+    "top": {
+      "kind": "query",
+      "rows": 5,
+      "truncated": false,
+      "columns": [
+        {
+          "name": "cuisine",
+          "type": "string",
+          "kind": null,
+          "format": null,
+          "description": null
+        },
+        {
+          "name": "orders",
+          "type": "int64",
+          "kind": null,
+          "format": null,
+          "description": null
+        },
+        {
+          "name": "share",
+          "type": "double",
+          "kind": null,
+          "format": null,
+          "description": null
+        }
+      ],
+      "data": [
+        {
+          "cuisine": "Thai",
+          "orders": 31,
+          "share": 0.3563
+        },
+        {
+          "cuisine": "Italian",
+          "orders": 24,
+          "share": 0.2759
+        },
+        {
+          "cuisine": "Indian",
+          "orders": 17,
+          "share": 0.1954
+        },
+        {
+          "cuisine": "Mexican",
+          "orders": 9,
+          "share": 0.1034
+        },
+        {
+          "cuisine": "Greek",
+          "orders": 6,
+          "share": 0.069
+        }
+      ]
+    }
+  },
+  "blocks": [
+    {
+      "index": 0,
+      "type": "kpi",
+      "title": "Revenue",
+      "notes": [],
+      "result": "totals",
+      "value": "$1,234.50",
+      "raw": 1234.5,
+      "compare": "$1,100.00",
+      "raw_compare": 1100.0,
+      "change": "+12.2%",
+      "direction": "up",
+      "format": "currency:USD"
+    },
+    {
+      "index": 1,
+      "type": "kpi",
+      "title": "Orders",
+      "notes": [],
+      "result": "totals",
+      "value": "87",
+      "raw": 87,
+      "compare": "90",
+      "raw_compare": 90,
+      "change": "-3.3%",
+      "direction": "down",
+      "format": "integer"
+    },
+    {
+      "index": 2,
+      "type": "kpi",
+      "title": "Share of the week",
+      "notes": [],
+      "result": "totals",
+      "value": "18.8%",
+      "raw": 0.1875,
+      "compare": null,
+      "raw_compare": null,
+      "change": null,
+      "direction": null,
+      "format": "percent"
+    },
+    {
+      "index": 3,
+      "type": "bar",
+      "title": "Revenue by city",
+      "notes": [],
+      "result": "by_city",
+      "x": "city",
+      "y": "revenue",
+      "series": null,
+      "format": "currency:USD",
+      "categories": [
+        "Pune",
+        "Delhi",
+        "Mumbai"
+      ],
+      "rows": 3,
+      "total_rows": 3,
+      "values": [
+        {
+          "name": "revenue",
+          "values": [
+            520.25,
+            410.0,
+            304.25
+          ],
+          "texts": [
+            "$520.25",
+            "$410.00",
+            "$304.25"
+          ]
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "type": "line",
+      "title": "Revenue by day",
+      "notes": [],
+      "result": "by_day",
+      "x": "day",
+      "y": "revenue",
+      "series": "city",
+      "format": "currency:USD",
+      "categories": [
+        "2026-07-30",
+        "2026-07-31"
+      ],
+      "rows": 4,
+      "total_rows": 4,
+      "values": [
+        {
+          "name": "Pune",
+          "values": [
+            480.0,
+            520.25
+          ],
+          "texts": [
+            "$480.00",
+            "$520.25"
+          ]
+        },
+        {
+          "name": "Delhi",
+          "values": [
+            350.5,
+            410.0
+          ],
+          "texts": [
+            "$350.50",
+            "$410.00"
+          ]
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "type": "table",
+      "title": "Top cuisines",
+      "notes": [
+        "The table shows the first 3 of 5 rows. 2 rows are left out."
+      ],
+      "result": "top",
+      "columns": [
+        "cuisine",
+        "orders",
+        "share"
+      ],
+      "rows": 3,
+      "total_rows": 5,
+      "cells": [
+        [
+          "Thai",
+          "31",
+          "35.6%"
+        ],
+        [
+          "Italian",
+          "24",
+          "27.6%"
+        ],
+        [
+          "Indian",
+          "17",
+          "19.5%"
+        ]
+      ]
+    },
+    {
+      "index": 6,
+      "type": "text",
+      "title": "Note",
+      "notes": [],
+      "paragraphs": [
+        "Orders & revenue of <Pune> and Delhi. There were 87 orders in all.",
+        "Numbers are from the gold tables."
+      ]
+    }
+  ]
+}

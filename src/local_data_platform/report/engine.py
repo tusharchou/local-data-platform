@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 from local_data_platform.exceptions import ConfigError
 from local_data_platform.orchestration.windows import get_timezone
 from local_data_platform.paths import resolve_path
+from local_data_platform.report.formats import metric_format
 from local_data_platform.report.spec import BUILTIN_PARAMETERS, Block, Parameter, Report, read_report
 from local_data_platform.spec import format_instant, parse_window
 
@@ -84,6 +85,8 @@ class QueryRun:
         sql: The SQL that ran.
         table: The rows, or ``None`` when the query did not run.
         problem: Why it did not run, as a sentence that starts with a JSON path, or ``None``.
+        formats: The format that writes each metric column of a metric block, by column, as a format string.
+        columns_info: What a metric block says about its columns, each ``{"name", "kind", "format", "description"}``.
     """
 
     name: str
@@ -97,6 +100,8 @@ class QueryRun:
     sql: str = ""
     table: pa.Table | None = None
     problem: str | None = None
+    formats: dict[str, str] = field(default_factory=dict)
+    columns_info: tuple[dict[str, Any], ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -125,6 +130,9 @@ class ReportRun:
         unavailable: The tables that were found but cannot be read, each ``{"table", "reason", "source"}``.
         problems: Every problem, each starting with a JSON path. Empty when everything ran.
         duration_ms: How long the whole run took.
+        row_cap: The row cap that the queries ran with.
+        views: What each block shows, from :func:`local_data_platform.report.view.resolve`, for the blocks that can
+            be shown.
     """
 
     report: Report
@@ -137,6 +145,8 @@ class ReportRun:
     unavailable: list[dict[str, str]] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     duration_ms: float = 0.0
+    row_cap: int = 0
+    views: list[Any] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -452,6 +462,9 @@ def _run_metric(run: ReportRun, sandbox: DuckDBSandbox, block: Block, definition
                                  by=list(block.by) or None, grain=block.grain, filters=list(block.filters) or None,
                                  start=first, end=last, table_sql=table_sql)
         item.sql, item.tables = compiled.sql, (table,)
+        item.formats = {column.name: written for column in compiled.columns
+                        if column.kind == "metric" and (written := metric_format(column.format)) is not None}
+        item.columns_info = tuple(column.to_dict() for column in compiled.columns)
         result = sandbox.query(compiled.sql, max_rows=cap, timeout_s=limit, params=compiled.parameters)
     except (ConfigError, ToolError) as error:
         item.problem = f"{where}: {_failure(error, run, sandbox)}"
@@ -508,7 +521,7 @@ def run_queries(report: Report, window: Any = None, *, params: Mapping[str, Any]
     cap = row_cap if row_cap is not None else report.row_cap
     limit = timeout_s if timeout_s is not None else report.timeout_s
     started = time.perf_counter()
-    run = ReportRun(report=report, window=bounds, parameters=values, release=release, live=live)
+    run = ReportRun(report=report, window=bounds, parameters=values, release=release, live=live, row_cap=cap)
     try:
         discovery = discover_tables([resolve_path(item, report.base_dir) for item in report.tables.config],
                                     [resolve_path(item, report.base_dir) for item in report.tables.catalog],
@@ -546,6 +559,10 @@ def run_queries(report: Report, window: Any = None, *, params: Mapping[str, Any]
             read = {table for item in run.queries.values() for table in item.tables}
             run.reads = {name: version for name, version in versions.items() if name in read}
         run.problems.extend(item.problem for item in run.queries.values() if item.problem)
+        from local_data_platform.report.view import resolve
+
+        run.views, found = resolve(run)  # what each block shows, and a column that a block names and its query lacks
+        run.problems.extend(found)
     finally:
         discovery.close()
         run.duration_ms = round((time.perf_counter() - started) * 1000, 3)
