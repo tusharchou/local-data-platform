@@ -54,6 +54,7 @@ from typing import Any
 
 from local_data_platform.exceptions import ConfigError
 from local_data_platform.logger import get_logger
+from local_data_platform.urls import LOCAL_HOSTS  # the hosts that a channel that wants https may reach over plain http
 
 logger = get_logger(__name__)
 
@@ -94,9 +95,6 @@ BACKOFF_S = 1.0
 
 MAX_WAIT_S = 60.0
 """The longest that a retry waits. An answer that asks for more than this is not retried."""
-
-LOCAL_HOSTS = ("127.0.0.1", "localhost")
-"""The only hosts that a channel that wants https may reach over plain ``http://``."""
 
 SLACK_MAX_BLOCKS = 50
 SLACK_MAX_SECTION = 3000

@@ -10,6 +10,9 @@ data through this module, so a dataset path can be any of:
   :class:`pyarrow.fs.S3FileSystem`;
 * a ``gs://`` URI (alias ``gcs://``), read with :class:`pyarrow.fs.GcsFileSystem`.
 
+A CSV source can also be an ``https://`` address. That is not a filesystem, so :mod:`local_data_platform.urls` reads it
+and this module does not.
+
 Object-store settings come from the environment when a filesystem is created, never from a
 config file:
 

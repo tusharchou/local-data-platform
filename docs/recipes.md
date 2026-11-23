@@ -197,6 +197,164 @@ print(open(f"{drive}/sales.csv").read())
 Dates become timestamps, whole numbers `int64` and other numbers `float64`. To load the sheet into an Iceberg table
 instead, make the target an Iceberg block, as in [the quickstart](quickstart.md).
 
+## A Google Sheet that stays in sync
+
+The sales of a small shop live in a Google Sheet that someone types into every day. This recipe loads the sheet into an
+Iceberg table every night, so that you can query it with SQL and build a report from the same rows. It needs no Google
+API and no credentials. A sheet that is shared by link has a CSV export address, and a CSV source may be an
+`https://` address.
+
+First share the sheet. In Google Sheets choose Share, and under General access choose Anyone with the link, as a Viewer.
+Anyone who has the link can then read the sheet, so keep the link as private as the data. LDP reads the address with no
+credentials, and `ldp plan` and `ldp schedule tick` refuse a config whose address has a token, a key or a password in
+it, because a secret does not belong in a config.
+
+The export address of a tab is shown below. `SHEET_ID` is the part of the address of the sheet between `/d/` and
+`/edit`, and `TAB_ID` is the number after `gid=` when the tab is open. A tab is one CSV, so each tab has a config of its
+own.
+
+```text
+https://docs.google.com/spreadsheets/d/SHEET_ID/export?format=csv&gid=TAB_ID
+```
+
+The config has the address as the `path` of the source, an Iceberg table as the target, `upsert` as the `write_mode`
+with the key columns of the sheet as `join_cols`, and `"schedule": "@daily"` under `metadata`. The first row of the
+sheet holds the column names. A row whose key is in the table is updated, and any other row is added.
+
+```json
+{
+  "identifier": "sheet_sales",
+  "what": "The daily sales of the shop, from its Google Sheet",
+  "metadata": {
+    "source": {"name": "sales", "format": "CSV",
+               "path": "https://docs.google.com/spreadsheets/d/SHEET_ID/export?format=csv&gid=0"},
+    "target": {"name": "sales", "format": "ICEBERG",
+               "catalog": {"identifier": "shop", "warehouse_path": "../warehouse"},
+               "write_mode": "upsert", "join_cols": ["day", "dish"]},
+    "schedule": "@daily"
+  }
+}
+```
+
+The next block stands in for Google with a small server on this machine, so that the recipe runs with no network. It
+writes the config above with the address of that server as the `path`, and ticks on four nights. `ldp schedule tick` is
+what cron or launchd calls, and a tick reads the sheet once for the window that is due. Between the nights someone edits
+a cell and adds a row.
+
+```python
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+from local_data_platform.format.iceberg import Iceberg
+from local_data_platform.orchestration.schedule import tick
+
+SHEET = ["day,dish,orders,revenue", "2026-07-01,pad thai,12,143.5", "2026-07-02,green curry,9,117.0"]
+CATALOG = {"identifier": "shop", "warehouse_path": "../warehouse"}
+
+
+class Google(BaseHTTPRequestHandler):
+    """Answers every request with the rows of SHEET, as the export address of a sheet does."""
+
+    def do_GET(self):
+        body = "\n".join(SHEET).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), Google)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+
+shop = Path("shop")
+shop.mkdir()
+address = f"http://127.0.0.1:{server.server_port}/spreadsheets/d/SHEET_ID/export?format=csv&gid=0"
+(shop / "sheet_sales.json").write_text(json.dumps({
+    "identifier": "sheet_sales",
+    "what": "The daily sales of the shop, from its Google Sheet",
+    "metadata": {
+        "source": {"name": "sales", "format": "CSV", "path": address},
+        "target": {"name": "sales", "format": "ICEBERG", "catalog": CATALOG,
+                   "write_mode": "upsert", "join_cols": ["day", "dish"]},
+        "schedule": "@daily",
+    },
+}))
+
+
+def night(day):
+    """Tick at 02:05 on a day of August, as cron does, and say what the run of that night wrote."""
+    tick(shop, now=f"2026-08-{day:02d}T02:05:00Z")
+    events = [json.loads(line) for line in (shop / ".ldp" / "events.jsonl").read_text().splitlines()]
+    run = [event["payload"] for event in events if event["type"] == "run.finished"][-1]
+    print(f"night {day}: read {run['rows_read']} rows, wrote {run['rows_written']}")
+
+
+night(5)
+night(6)                                      # nobody changed the sheet
+SHEET[2] = "2026-07-02,green curry,10,124.0"  # someone edits a cell
+night(7)
+SHEET.append("2026-07-03,tom yum,5,60.0")     # and adds a row
+night(8)
+
+table = Iceberg("sales", catalog=CATALOG, base_dir=shop)
+for row in sorted(table.get().to_pylist(), key=lambda row: row["day"]):
+    print(row["day"], row["dish"], row["orders"], row["revenue"])
+server.shutdown()
+```
+
+<!-- docs-runner: output -->
+```text
+night 5: read 2 rows, wrote 2
+night 6: read 2 rows, wrote 0
+night 7: read 2 rows, wrote 1
+night 8: read 3 rows, wrote 1
+2026-07-01 pad thai 12 143.5
+2026-07-02 green curry 10 124.0
+2026-07-03 tom yum 5 60.0
+```
+
+Every night reads the whole tab, and the upsert writes only the rows that changed, so a night with no change writes no
+data file at all. To run the sync once by hand, run `ldp run shop/sheet_sales.json`. To run it every night, print the line
+for cron, or the plist for launchd on a Mac, and install it as [A scheduler](orchestration.md#part-7-a-scheduler)
+shows. It ticks every 5 minutes and does the work when a window is due.
+
+```bash
+ldp schedule install --print cron shop
+```
+
+<!-- docs-runner: output -->
+```text
+# ldp schedule tick for .../shop, every 5 minutes
+*/5 * * * * mkdir -p .../shop/.ldp && .../ldp schedule tick .../shop >> .../shop/.ldp/schedule.log 2>&1
+```
+
+What to know about a sheet.
+
+- A row that you delete in the sheet stays in the table, because an upsert only updates and adds. To make the table
+  match the sheet, delete rows included, set `write_mode` to `overwrite`. Every night then writes every row.
+- Each key must be there once. An empty key cell or a key that appears twice fails the run with a message that says so,
+  and nothing is written. So does a header that someone renames, because a key column is then missing.
+- The cells decide the types, as the sheet shows them. A date such as `2026-07-01` is a date, TRUE and FALSE are
+  booleans, a whole number is `int64`, another number is `float64`, and anything else is text, so a date that the sheet
+  shows as `7/1/2026` and an amount that it shows as `$12.50` are text. Give the date columns the format `yyyy-mm-dd` and
+  the number columns a plain format. An empty cell is null. If someone types text into a number column, the column
+  becomes text, the write fails with `Cannot change column type`, and nothing is written.
+- A run that fails is not lost. The next tick, 5 minutes later, runs the same window again, so the sync works as soon as
+  the cell is fixed. With `metadata.retries` a run also tries again within the tick when Google answers 429 or a 5xx
+  status, or does not answer in time. Any other answer, such as 403 or 404, is not retried within the tick.
+- A sheet that is not shared by link answers with a sign-in page. LDP does not read that page as rows. The run fails and
+  says that the answer is a web page, and that the sheet has to be shared with anyone who has the link.
+- A download may take 30 seconds and have 50 MiB after it is decompressed. Set `timeout`, in seconds, and `max_bytes`
+  in `metadata.source` to change that.
+- A private sheet cannot be read, because LDP sends no credentials. Reading one with a service account is not part of
+  this release.
+
 ## Monthly churn from an orders table
 
 Needs the `duckdb` extra, which `pip install "local-data-platform[duckdb]"` installs. A customer churns in the month they

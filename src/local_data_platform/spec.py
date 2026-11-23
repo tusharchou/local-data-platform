@@ -35,6 +35,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -43,7 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any
 
-from local_data_platform import contracts, notify
+from local_data_platform import contracts, notify, urls
 from local_data_platform.exceptions import ConfigError, PipelineNotFound
 from local_data_platform.monitoring import sla as sla_settings
 from local_data_platform.orchestration import retries, windows
@@ -606,6 +607,12 @@ def json_schema() -> dict[str, Any]:
                     "name": non_empty,
                     "format": {"$ref": "#/$defs/format"},
                     "path": non_empty,
+                    "timeout": {"type": "number", "exclusiveMinimum": 0,
+                                "description": "CSV source with an https path: the seconds that the whole download may "
+                                               "take. 30 by default."},
+                    "max_bytes": {"type": "integer", "minimum": 1,
+                                  "description": "CSV source with an https path: the most bytes that the download may "
+                                                 "have after it is decompressed. 52428800 (50 MiB) by default."},
                     "engine": non_empty,
                     "catalog": {"$ref": "#/$defs/catalog"},
                     "credentials": {"type": "object", "properties": {"name": string, "path": non_empty}},
@@ -652,7 +659,9 @@ def json_schema() -> dict[str, Any]:
                              "description": "Where the source is. It may hold {window_start:FORMAT} and "
                                             "{window_end:FORMAT}, where FORMAT is a Python strftime format, e.g. "
                                             "drops/orders_{window_start:%Y-%m-%d}.csv. A run reads the path of its "
-                                            "window, and a run without a window fails."},
+                                            "window, and a run without a window fails. A CSV source may be an "
+                                            "https:// address, such as the export link of a Google Sheet that is "
+                                            "shared by link."},
                 },
             },
             "window": {
@@ -840,6 +849,7 @@ def _check_block(problems: _Problems, block: Any, section: str) -> None:
             _check_iceberg_target(problems, block, where)
         return
     _check_string(problems, block, "path", where, required=not (fmt == "DUCKDB" and block.get("inputs") is not None))
+    _check_http_path(problems, block, fmt, section, where)
     if fmt == "DUCKDB":
         _check_duckdb_block(problems, block, section, where)
     if fmt == "XLSX":
@@ -851,6 +861,41 @@ def _check_block(problems: _Problems, block: Any, section: str) -> None:
                 problems.add(f"{where}.credentials", "must be an object with a 'path' to a key file")
             else:
                 _check_string(problems, credentials, "path", f"{where}.credentials")
+
+
+def _check_http_path(problems: _Problems, block: Mapping[str, Any], fmt: str, section: str, where: str) -> None:
+    """Check an http(s) ``path``, which only a CSV source reads, and the ``timeout`` and ``max_bytes`` that go with it.
+
+    The address has to be https, with no user name or password and no parameter that looks like a secret. It is not
+    opened here, so the check needs no network.
+    """
+    path = block.get("path")
+    address = isinstance(path, str) and urls.is_http(path)
+    if address and fmt != "CSV":
+        problems.add(f"{where}.path", "is an http(s) address, which only a CSV source can read")
+    elif address and section == "target":
+        problems.add(f"{where}.path", "is an http(s) address, which can be read and not written, so it cannot be a "
+                                      "target")
+    elif address:
+        reason = urls.problem(path)
+        if reason:
+            problems.add(f"{where}.path", f"the address {reason}")
+        parameter = urls.secret_parameter(path)
+        if parameter:
+            problems.add(f"{where}.path", f"looks like an inline secret, in its parameter {parameter!r}. Keep secrets "
+                                          "out of specs. A source that is read over https is read with no credentials, "
+                                          "so the file has to be one that anyone with the link can read")
+    for key in ("timeout", "max_bytes"):
+        value = block.get(key)
+        if value is None:
+            continue
+        if not (address and fmt == "CSV" and section == "source"):
+            problems.add(f"{where}.{key}", "only applies to a CSV source whose path is an http(s) address")
+        elif key == "timeout" and not (isinstance(value, (int, float)) and not isinstance(value, bool)
+                                       and math.isfinite(value) and value > 0):
+            problems.add(f"{where}.timeout", f"must be a number of seconds above 0, got {value!r}")
+        elif key == "max_bytes" and not (isinstance(value, int) and not isinstance(value, bool) and value > 0):
+            problems.add(f"{where}.max_bytes", f"must be a whole number of bytes above 0, got {value!r}")
 
 
 def _check_duckdb_block(problems: _Problems, block: Mapping[str, Any], section: str, where: str) -> None:
