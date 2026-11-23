@@ -816,6 +816,122 @@ def test_the_detail_of_a_rendered_event_says_the_format_where_it_went_how_big_an
     assert events._event_detail(rendered) == "format=html output=site/daily.html bytes=1234 queries=2 rows=5"
 
 
+# ---------------------------------------------------------------------- the send of a report
+
+SEND_WINDOW = "2026-07-31T00:00:00Z/2026-08-01T00:00:00Z"
+
+
+def _send_events(outcome="delivered"):
+    """The events of a send to two destinations, in which the second one is delivered, skipped or failed."""
+    sink = MemorySink()
+    emitter = RunEmitter(sink, events.uuid7(), context={"pipeline": "daily", "report": "daily"})
+    emitter.emit("run.started", {"task_kind": "report_send", "window": SEND_WINDOW, "output": "page, team",
+                                 "force": False, "destinations": ["page", "team"]})
+    emitter.emit("report.delivered", {"destination": "page", "type": "file", "idempotency_key": "a" * 64,
+                                      "window": SEND_WINDOW, "attempts": 1})
+    if outcome == "delivered":
+        emitter.emit("report.delivered", {"destination": "team", "type": "slack", "idempotency_key": "b" * 64,
+                                          "window": SEND_WINDOW, "attempts": 2})
+    elif outcome == "skipped":
+        emitter.emit("report.skipped_duplicate", {"destination": "team", "type": "slack",
+                                                  "idempotency_key": "b" * 64, "window": SEND_WINDOW,
+                                                  "delivered_at": "2026-08-01T06:00:00Z"})
+    else:
+        emitter.emit("run.failed", {"stage": "deliver", "destination": "team", "type": "slack",
+                                    "error_type": "DeliveryError", "message": "it answered HTTP 400"})
+    emitter.emit("run.finished", {"status": {"delivered": "succeeded", "skipped": "skipped_duplicate",
+                                             "failed": "failed"}[outcome], "duration_s": 0.5})
+    return sink.events
+
+
+def test_the_delivery_of_a_report_is_two_event_types_that_a_send_emits_between_its_start_and_its_finish():
+    assert "report.delivered" in events.EVENT_TYPES and "report.skipped_duplicate" in events.EVENT_TYPES
+    assert events.EVENT_TYPES.index("report.delivered") > events.EVENT_TYPES.index("report.held")
+
+    assert [event.type for event in _send_events()] == ["run.started", "report.delivered", "report.delivered",
+                                                        "run.finished"]
+    assert [event.type for event in _send_events("skipped")][2] == "report.skipped_duplicate"
+
+
+def test_a_send_is_a_report_run_whose_output_names_the_destinations_and_whose_format_is_send():
+    [run] = summarize_runs(_send_events())
+
+    assert run["is_report"] is True and run["pipeline"] == "daily" and run["status"] == "succeeded"
+    assert (run["window"], run["output"], run["format"]) == (SEND_WINDOW, "page, team", "send")
+    assert run["idempotency_key"] == "a" * 64  # the key of the first delivery
+
+
+@pytest.mark.parametrize("outcome, status", [("skipped", "skipped_duplicate"), ("failed", "failed")])
+def test_a_send_ends_in_the_status_that_run_finished_gives_and_a_failed_one_is_still_a_report_run(outcome, status):
+    [run] = summarize_runs(_send_events(outcome))
+
+    assert run["status"] == status and run["is_report"] is True and run["format"] == "send"
+    assert (run["window"], run["output"]) == (SEND_WINDOW, "page, team")
+
+
+def test_a_send_that_failed_before_any_delivery_is_a_report_run_from_the_start_of_the_run_alone():
+    sink = MemorySink()
+    emitter = RunEmitter(sink, events.uuid7(), context={"pipeline": "daily"})
+    emitter.emit("run.started", {"task_kind": "report_send", "window": SEND_WINDOW, "output": "team"})
+    emitter.emit("run.failed", {"stage": "queries", "error_type": "ReportBuildError", "message": "no"})
+    emitter.emit("run.finished", {"status": "failed", "duration_s": 0.1})
+
+    [run] = summarize_runs(sink.events)
+
+    assert (run["is_report"], run["status"], run["window"], run["output"], run["format"]) == (
+        True, "failed", SEND_WINDOW, "team", "send")
+
+
+def test_a_send_that_was_held_keeps_its_destinations_and_ends_blocked_quality():
+    sink = MemorySink()
+    emitter = RunEmitter(sink, events.uuid7(), context={"pipeline": "daily"})
+    emitter.emit("run.started", {"task_kind": "report_send", "window": SEND_WINDOW, "output": "page, team"})
+    emitter.emit("report.held", {"format": "send", "output": "page, team", "window": SEND_WINDOW,
+                                 "tables": [{"table": "gold.a", "reasons": ["x"]}]})
+    emitter.emit("run.finished", {"status": "blocked_quality", "duration_s": 0.1})
+
+    [run] = summarize_runs(sink.events)
+
+    assert (run["status"], run["window"], run["output"], run["format"]) == (
+        "blocked_quality", SEND_WINDOW, "page, team", "send")
+
+
+def test_the_build_of_a_report_is_still_a_build_and_not_a_send():
+    [run] = summarize_runs(_build_events())
+
+    assert run["format"] == "html"
+
+
+def test_a_delivery_event_marks_a_run_as_a_report_run_and_keeps_the_window_that_the_run_already_has():
+    sink = MemorySink()
+    emitter = RunEmitter(sink, events.uuid7(), context={"pipeline": "daily"})
+    emitter.emit("report.delivered", {"destination": "team", "window": SEND_WINDOW})
+    emitter.emit("report.skipped_duplicate", {"destination": "page",
+                                              "window": "2020-01-01T00:00:00Z/2020-01-02T00:00:00Z"})
+
+    [run] = summarize_runs(sink.events)
+
+    assert run["is_report"] is True and run["window"] == SEND_WINDOW
+
+
+def test_a_skipped_delivery_alone_marks_a_run_as_a_report_run():
+    sink = MemorySink()
+    emitter = RunEmitter(sink, events.uuid7(), context={"pipeline": "daily"})
+    emitter.emit("report.skipped_duplicate", {"destination": "team", "window": SEND_WINDOW})
+
+    [run] = summarize_runs(sink.events)
+
+    assert run["is_report"] is True and run["window"] == SEND_WINDOW
+
+
+def test_the_detail_of_a_delivery_says_where_how_many_attempts_and_the_start_of_the_key():
+    delivered, skipped = _send_events("delivered")[2], _send_events("skipped")[2]
+
+    assert events._event_detail(delivered) == "destination=team type=slack attempts=2 key=" + "b" * 12
+    assert events._event_detail(skipped) == ("destination=team delivered_at=2026-08-01T06:00:00Z key=" + "b" * 12)
+    assert events._event_detail(_send_events()[0]) == "task_kind=report_send"
+
+
 # ---------------------------------------------------------------------- docs
 
 

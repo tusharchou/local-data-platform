@@ -26,9 +26,18 @@ from local_data_platform.exceptions import ConfigError
 from local_data_platform.notify import (
     ALERT_SCHEMA,
     ALERT_VERSION,
+    BACKOFF_S,
     DEFAULT_FILE,
     DEFAULT_ON,
     EVENTS,
+    MAX_WAIT_S,
+    RETRIES,
+    SLACK_MAX_BLOCKS,
+    SLACK_MAX_CONTEXT,
+    SLACK_MAX_FIELD,
+    SLACK_MAX_FIELDS,
+    SLACK_MAX_HEADER,
+    SLACK_MAX_SECTION,
     TIMEOUT_S,
     Alert,
     Channel,
@@ -39,9 +48,18 @@ from local_data_platform.notify import (
     alert_problems,
     alerts_schema,
     command_of,
+    context_block,
+    cut,
     deliver,
+    escape_mrkdwn,
+    header_block,
     notifier_for,
     parse_alerts,
+    post,
+    section_block,
+    slack_message,
+    url_problem,
+    write_file,
 )
 from local_data_platform.spec import json_schema, validate_spec
 
@@ -1099,3 +1117,505 @@ def test_the_test_message_leaves_the_configs_alerts_alone(tmp_path, channels_env
     before = copy.deepcopy(json.loads(path.read_text()))
     main(["alert", "test", str(path)])
     assert json.loads(path.read_text()) == before
+
+
+# ---------------------------------------------------------------------- retries, https, headers, files, Block Kit
+
+
+@pytest.fixture
+def post_env(lineage_server, monkeypatch):
+    """``POST_URL`` points at the local server, with a path that looks like a secret. Yields ``(url, handler)``."""
+    url, handler = lineage_server
+    monkeypatch.setenv("POST_URL", url + "/hook" + SECRET_PATH)
+    handler.status = 200
+    return url, handler
+
+
+HOOK = Channel(kind="webhook", url_env="POST_URL")
+SLACK_HOOK = Channel(kind="slack", url_env="POST_URL")
+
+
+def test_a_post_that_gets_429_is_sent_again_after_the_wait_that_the_answer_asks_for(post_env, no_retry_wait):
+    url, handler = post_env
+    handler.replies = [(429, {"Retry-After": "3"}, ""), (200, {}, "ok")]
+
+    delivery = post(HOOK, {"a": 1})
+
+    assert delivery == Delivery("webhook POST_URL", True, "", 2)
+    assert no_retry_wait == [3.0] and len(handler.received) == 2
+
+
+def test_a_post_that_gets_a_5xx_answer_is_sent_again_after_waits_that_double(post_env, no_retry_wait):
+    url, handler = post_env
+    handler.replies = [(503, {}, ""), (500, {}, ""), (502, {}, ""), (200, {}, "ok")]
+
+    delivery = post(HOOK, {"a": 1})
+
+    assert (delivery.ok, delivery.attempts) == (True, 4)
+    assert no_retry_wait == [BACKOFF_S, 2 * BACKOFF_S, 4 * BACKOFF_S] == [1.0, 2.0, 4.0]
+
+
+def test_a_post_that_keeps_getting_a_5xx_answer_is_sent_four_times_and_then_gives_up(post_env, no_retry_wait):
+    url, handler = post_env
+    handler.status = 500
+
+    delivery = post(HOOK, {"a": 1})
+
+    assert (delivery.ok, delivery.reason, delivery.attempts) == (False, "it answered HTTP 500", 1 + RETRIES)
+    assert RETRIES == 3 and len(handler.received) == 4 and no_retry_wait == [1.0, 2.0, 4.0]
+
+
+@pytest.mark.parametrize("retries", [0, 1, 2, 5])
+def test_a_channel_is_sent_again_at_most_as_often_as_its_retries_say(post_env, no_retry_wait, retries):
+    url, handler = post_env
+    handler.status = 503
+
+    delivery = post(dataclasses.replace(HOOK, retries=retries), {"a": 1})
+
+    assert (delivery.ok, delivery.attempts) == (False, retries + 1) and len(handler.received) == retries + 1
+    assert no_retry_wait == [BACKOFF_S * 2 ** place for place in range(retries)]
+
+
+@pytest.mark.parametrize("status", [500, 501, 502, 503, 504, 599])
+def test_every_5xx_answer_is_retried(post_env, status):
+    url, handler = post_env
+    handler.replies = [(status, {}, ""), (200, {}, "")]
+
+    assert post(HOOK, {"a": 1}).attempts == 2
+
+
+@pytest.mark.parametrize("status", [300, 301, 400, 401, 403, 404, 410, 422, 499, 600])
+def test_any_other_answer_than_429_and_a_5xx_is_final(post_env, no_retry_wait, status):
+    url, handler = post_env
+    handler.status = status
+
+    delivery = post(HOOK, {"a": 1})
+
+    assert (delivery.ok, delivery.attempts, delivery.reason) == (False, 1, f"it answered HTTP {status}")
+    assert len(handler.received) == 1 and no_retry_wait == []
+
+
+@pytest.mark.parametrize("error", ["ConnectionError", "Timeout"])
+def test_a_url_that_cannot_be_reached_is_not_retried(monkeypatch, no_retry_wait, error):
+    import requests
+
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append(1)
+        raise getattr(requests, error)("boom for https://hooks.slack.com/services/T/B/XX")
+
+    monkeypatch.setenv("POST_URL", "http://127.0.0.1:9/hook")
+    monkeypatch.setattr(requests, "post", fail)
+
+    delivery = post(HOOK, {"a": 1})
+
+    assert delivery.ok is False and delivery.attempts == 1 and len(calls) == 1 and no_retry_wait == []
+    assert "hooks.slack.com" not in delivery.reason and "boom" not in delivery.reason
+
+
+@pytest.mark.parametrize("value, seconds", [
+    ("0", 0.0), ("2", 2.0), ("2.5", 2.5), (" 7 ", 7.0), ("-5", 0.0), ("60", 60.0),
+    ("soon", None), ("", None), (None, None), ("nan", None), ("inf", None), ("-inf", None), ("Wed, 99 Foo 2026", None),
+])
+def test_retry_after_is_a_number_of_seconds_or_nothing_that_can_be_read(value, seconds):
+    from local_data_platform.notify import _retry_after
+
+    assert _retry_after(value) == seconds
+
+
+def test_retry_after_can_be_a_date_and_a_date_in_the_past_is_no_wait():
+    import email.utils
+
+    from local_data_platform.notify import _retry_after
+
+    soon = email.utils.format_datetime(dt.datetime.now(UTC) + dt.timedelta(seconds=30), usegmt=True)
+    past = email.utils.format_datetime(dt.datetime.now(UTC) - dt.timedelta(hours=1), usegmt=True)
+
+    assert 25 < _retry_after(soon) <= 30 and _retry_after(past) == 0.0
+
+
+@pytest.mark.parametrize("value, waits", [("0", [0.0]), ("garbage", [BACKOFF_S]), ("60", [60.0])])
+def test_the_wait_before_a_retry_is_what_retry_after_asks_for_and_else_the_backoff(
+        post_env, no_retry_wait, value, waits):
+    url, handler = post_env
+    handler.replies = [(429, {"Retry-After": value}, ""), (200, {}, "")]
+
+    assert post(HOOK, {"a": 1}).ok and no_retry_wait == waits
+
+
+def test_an_answer_that_asks_to_wait_longer_than_the_limit_is_not_retried_and_says_so(post_env, no_retry_wait):
+    url, handler = post_env
+    handler.replies = [(429, {"Retry-After": "120"}, ""), (200, {}, "")]
+
+    delivery = post(HOOK, {"a": 1})
+
+    assert (delivery.ok, delivery.attempts) == (False, 1) and no_retry_wait == [] and MAX_WAIT_S == 60.0
+    assert delivery.reason == "it answered HTTP 429 and asked for a wait of more than 60 seconds"
+    assert len(handler.received) == 1
+
+
+@pytest.mark.parametrize("status, word", [(400, "invalid_payload"), (404, "no_service"), (403, "invalid_token"),
+                                          (410, "channel_is_archived"), (400, "no_text")])
+def test_slack_says_what_is_wrong_in_one_word_and_that_word_is_in_the_reason_at_once(
+        post_env, no_retry_wait, status, word):
+    url, handler = post_env
+    handler.replies = [(status, {}, word), (200, {}, "ok")]
+
+    delivery = post(SLACK_HOOK, {"text": "x"})
+
+    assert delivery == Delivery("slack POST_URL", False, f"it answered HTTP {status} ({word})", 1)
+    assert no_retry_wait == [] and len(handler.received) == 1
+
+
+@pytest.mark.parametrize("body", ["", "Bad Request: https://hooks.slack.com/services/T/B/XXSECRETXXTOKEN",
+                                  "invalid payload", "Invalid_Payload", "a" * 65, "invalid-payload", "<html>"])
+def test_slack_text_that_is_not_one_plain_word_is_never_repeated(post_env, body):
+    url, handler = post_env
+    handler.replies = [(400, {}, body)]
+
+    delivery = post(SLACK_HOOK, {"text": "x"})
+
+    assert delivery.reason == "it answered HTTP 400" and "XXSECRETXXTOKEN" not in delivery.reason
+
+
+def test_a_word_of_64_characters_is_a_word_that_slack_gave_and_one_of_65_is_not_and_499_is_a_slack_answer(post_env):
+    url, handler = post_env
+    handler.replies = [(400, {}, "a" * 64), (400, {}, "a" * 65), (499, {}, "gone_away")]
+
+    reasons = [post(SLACK_HOOK, {"text": "x"}).reason for _ in range(3)]
+
+    assert reasons == ["it answered HTTP 400 (" + "a" * 64 + ")", "it answered HTTP 400",
+                       "it answered HTTP 499 (gone_away)"]
+
+
+def test_an_answer_that_asks_for_too_long_a_wait_after_a_retry_says_how_many_attempts_it_took(post_env, no_retry_wait):
+    url, handler = post_env
+    handler.replies = [(503, {}, ""), (429, {"Retry-After": "600"}, ""), (200, {}, "")]
+
+    delivery = post(HOOK, {"a": 1})
+
+    assert (delivery.ok, delivery.attempts) == (False, 2) and no_retry_wait == [1.0]
+    assert delivery.reason == "it answered HTTP 429 and asked for a wait of more than 60 seconds"
+
+
+def test_the_word_that_slack_gave_is_read_without_the_line_break_or_the_spaces_around_it(post_env):
+    url, handler = post_env
+    handler.replies = [(400, {}, "invalid_payload\n"), (400, {}, "  no_text  ")]
+
+    assert post(SLACK_HOOK, {"text": "x"}).reason == "it answered HTTP 400 (invalid_payload)"
+    assert post(SLACK_HOOK, {"text": "x"}).reason == "it answered HTTP 400 (no_text)"
+
+
+def test_the_body_of_an_answer_to_a_webhook_is_never_repeated_even_when_it_is_one_word(post_env):
+    url, handler = post_env
+    handler.replies = [(400, {}, "invalid_payload")]
+
+    assert post(HOOK, {"a": 1}).reason == "it answered HTTP 400"
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
+def test_slack_says_no_word_for_an_answer_that_is_retried_even_when_the_retries_ran_out(post_env, status):
+    url, handler = post_env
+    handler.status = status
+    handler.replies = [(status, {}, "rate_limited")] * (1 + RETRIES)
+
+    assert post(SLACK_HOOK, {"text": "x"}).reason == f"it answered HTTP {status}"
+
+
+@pytest.mark.parametrize("address", [
+    "https://hooks.slack.com/services/T0001/B0002/XXSECRETXXTOKEN", "https://example.com",
+    "https://example.com:8443/x?a=1", "http://127.0.0.1:8080/x", "http://localhost/x", "http://LOCALHOST:1/x",
+    "http://127.0.0.1"])
+def test_a_url_that_is_https_or_plain_http_to_the_machine_itself_is_taken(address):
+    assert url_problem(address) is None
+
+
+@pytest.mark.parametrize("address, reason", [
+    ("http://example.com/x", "its URL is plain http, which is only for 127.0.0.1 and localhost"),
+    ("http://127.0.0.2/x", "its URL is plain http, which is only for 127.0.0.1 and localhost"),
+    ("http://[::1]/x", "its URL is plain http, which is only for 127.0.0.1 and localhost"),
+    ("http://localhost.example.com/x", "its URL is plain http, which is only for 127.0.0.1 and localhost"),
+    ("http://hooks.slack.com/services/T/B/XXSECRETXXTOKEN",
+     "its URL is plain http, which is only for 127.0.0.1 and localhost"),
+    ("ftp://example.com/x", "its URL does not start with https://"),
+    ("file:///etc/passwd", "its URL is not a valid address"),
+    ("example.com/x", "its URL is not a valid address"), ("https://", "its URL is not a valid address"),
+    ("http://[bad", "its URL is not a valid address"), ("   ", "its URL is not a valid address")])
+def test_any_other_url_is_refused_and_the_reason_never_holds_it(address, reason):
+    assert url_problem(address) == reason and "XXSECRETXXTOKEN" not in reason
+
+
+def test_a_channel_that_wants_https_refuses_a_plain_http_url_before_it_posts_anything(monkeypatch):
+    import requests
+
+    calls = []
+    monkeypatch.setenv("POST_URL", "http://hooks.example.com/services/T/B/XXSECRETXXTOKEN")
+    monkeypatch.setattr(requests, "post", lambda *a, **k: calls.append(1))
+
+    delivery = post(dataclasses.replace(HOOK, https_only=True), {"a": 1})
+
+    assert delivery == Delivery("webhook POST_URL", False, "its URL is plain http, which is only for 127.0.0.1 and "
+                                                           "localhost", 1)
+    assert calls == [] and "XXSECRETXXTOKEN" not in delivery.reason
+
+
+def test_a_channel_of_alerts_keeps_taking_plain_http_to_any_host_as_it_always_did(monkeypatch):
+    import requests
+
+    seen = []
+
+    class Answer:
+        status_code = 200
+
+    monkeypatch.setenv("POST_URL", "http://hooks.example.com/hook")
+    monkeypatch.setattr(requests, "post", lambda url, **k: seen.append(url) or Answer())
+
+    assert post(HOOK, {"a": 1}).ok and seen == ["http://hooks.example.com/hook"]
+    assert Channel(kind="slack").https_only is False
+
+
+def test_a_channel_that_wants_https_takes_the_local_server(post_env):
+    url, handler = post_env
+
+    delivery = post(dataclasses.replace(SLACK_HOOK, https_only=True), {"text": "x"})
+
+    assert delivery.ok and [path for path, _, _ in handler.received] == ["/hook" + SECRET_PATH]
+
+
+def test_a_url_that_is_not_set_is_a_delivery_that_names_the_variable(monkeypatch):
+    monkeypatch.delenv("POST_URL", raising=False)
+
+    assert post(HOOK, {"a": 1}) == Delivery("webhook POST_URL", False, "the environment variable POST_URL is not set")
+
+
+def test_post_is_for_a_slack_or_a_webhook_channel_and_not_for_a_file():
+    with pytest.raises(ValueError, match="slack or a webhook"):
+        post(Channel(kind="file", path="x"), {"a": 1})
+
+
+def test_the_body_that_is_posted_is_the_bytes_that_were_given_with_a_json_content_type(post_env):
+    url, handler = post_env
+    document = '{"a":   1,\n "b": "caf\\u00e9"}\n'.encode("utf-8")
+
+    assert post(HOOK, document).ok
+
+    assert handler.raw == [document] and handler.content_types == ["application/json"]
+
+
+def test_a_mapping_is_posted_as_json_text_that_keeps_its_letters(post_env):
+    url, handler = post_env
+
+    assert post(HOOK, {"text": "caf\u00e9"}).ok
+
+    assert handler.raw == [json.dumps({"text": "caf\u00e9"}, ensure_ascii=False).encode("utf-8")]
+
+
+def _capture(monkeypatch):
+    """Replace requests.post by a function that keeps what it was given and answers 200."""
+    import requests
+
+    seen = []
+
+    class Answer:
+        status_code = 200
+
+    def fake(url, **kwargs):
+        seen.append(kwargs)
+        return Answer()
+
+    monkeypatch.setattr(requests, "post", fake)
+    return seen
+
+
+def test_the_headers_of_a_webhook_are_the_json_object_in_the_variable_that_it_names(monkeypatch):
+    seen = _capture(monkeypatch)
+    monkeypatch.setenv("POST_URL", "http://127.0.0.1:9/hook")
+    monkeypatch.setenv("POST_HEADERS", json.dumps({"X-Team": "ops", "X-Api-Key": "k-123"}))
+
+    assert post(dataclasses.replace(HOOK, headers_env="POST_HEADERS"), {"a": 1}).ok
+
+    assert seen[0]["headers"] == {"X-Team": "ops", "X-Api-Key": "k-123", "Content-Type": "application/json"}
+
+
+def test_a_header_name_may_have_the_punctuation_that_http_allows(monkeypatch):
+    seen = _capture(monkeypatch)
+    monkeypatch.setenv("POST_URL", "http://127.0.0.1:9/hook")
+    monkeypatch.setenv("POST_HEADERS", json.dumps({"X_Team.Id": "1", "X-Api-Key": "k"}))
+
+    assert post(dataclasses.replace(HOOK, headers_env="POST_HEADERS"), {"a": 1}).ok
+
+    assert seen[0]["headers"] == {"X_Team.Id": "1", "X-Api-Key": "k", "Content-Type": "application/json"}
+
+
+def test_a_content_type_in_the_headers_is_dropped_because_a_post_is_always_json(monkeypatch):
+    seen = _capture(monkeypatch)
+    monkeypatch.setenv("POST_URL", "http://127.0.0.1:9/hook")
+    monkeypatch.setenv("POST_HEADERS", json.dumps({"content-type": "text/plain", "X-Team": "ops"}))
+
+    assert post(dataclasses.replace(HOOK, headers_env="POST_HEADERS"), {"a": 1}).ok
+
+    assert seen[0]["headers"] == {"X-Team": "ops", "Content-Type": "application/json"}
+
+
+def test_the_headers_of_a_variable_win_over_the_bearer_token_that_the_channel_also_names(monkeypatch):
+    seen = _capture(monkeypatch)
+    monkeypatch.setenv("POST_URL", "http://127.0.0.1:9/hook")
+    monkeypatch.setenv("POST_TOKEN", "tok")
+    monkeypatch.setenv("POST_HEADERS", json.dumps({"Authorization": "Basic abc"}))
+
+    assert post(dataclasses.replace(HOOK, token_env="POST_TOKEN", headers_env="POST_HEADERS"), {"a": 1}).ok
+
+    assert seen[0]["headers"]["Authorization"] == "Basic abc"
+
+
+@pytest.mark.parametrize("value, reason", [
+    (None, "the environment variable POST_HEADERS is not set"),
+    ("", "the environment variable POST_HEADERS is not set"),
+    ("not json", "the environment variable POST_HEADERS does not hold a JSON object of headers"),
+    ("[]", "the environment variable POST_HEADERS does not hold a JSON object of headers"),
+    ("{}", "the environment variable POST_HEADERS does not hold a JSON object of headers"),
+    ('"text"', "the environment variable POST_HEADERS does not hold a JSON object of headers"),
+    ('{"X-A": 1}', "a header in the environment variable POST_HEADERS is not a name and a text without line breaks"),
+    ('{"bad name": "x"}',
+     "a header in the environment variable POST_HEADERS is not a name and a text without line breaks"),
+    ('{"X-A": "x\\ny"}',
+     "a header in the environment variable POST_HEADERS is not a name and a text without line breaks"),
+    ('{"X-A": "x\\r"}',
+     "a header in the environment variable POST_HEADERS is not a name and a text without line breaks"),
+    ('{"X-A": "x\\u0000y"}',
+     "a header in the environment variable POST_HEADERS is not a name and a text without line breaks"),
+    ('{"": "x"}', "a header in the environment variable POST_HEADERS is not a name and a text without line breaks"),
+])
+def test_headers_that_cannot_be_used_are_a_delivery_that_says_why_and_posts_nothing(monkeypatch, value, reason):
+    seen = _capture(monkeypatch)
+    monkeypatch.setenv("POST_URL", "http://127.0.0.1:9/hook")
+    if value is None:
+        monkeypatch.delenv("POST_HEADERS", raising=False)
+    else:
+        monkeypatch.setenv("POST_HEADERS", value)
+
+    delivery = post(dataclasses.replace(HOOK, headers_env="POST_HEADERS"), {"a": 1})
+
+    assert delivery == Delivery("webhook POST_URL", False, reason) and seen == []
+
+
+def test_the_headers_of_a_slack_channel_are_not_read_because_slack_takes_none(monkeypatch):
+    seen = _capture(monkeypatch)
+    monkeypatch.setenv("POST_URL", "http://127.0.0.1:9/hook")
+    monkeypatch.setenv("POST_HEADERS", "not json")
+
+    assert post(dataclasses.replace(SLACK_HOOK, headers_env="POST_HEADERS"), {"text": "x"}).ok
+    assert seen[0]["headers"] == {"Content-Type": "application/json"}
+
+
+def test_an_alert_is_sent_again_after_a_5xx_answer_like_any_other_post(channels_env, no_retry_wait):
+    url, handler = channels_env
+    handler.replies = [(503, {}, ""), (200, {}, "")]
+
+    [delivery] = _notifier(WEBHOOK).broadcast(Alert("run.failed", AT))
+
+    assert (delivery.ok, delivery.attempts) == (True, 2) and no_retry_wait == [1.0]
+    assert len(handler.received) == 2
+
+
+def test_a_channel_that_names_a_destination_has_a_label_with_the_name_and_no_address():
+    channel = Channel(kind="slack", name="team", url_env="SLACK_URL")
+
+    assert channel.label == "slack team" and "SLACK_URL" not in channel.label
+    assert Channel(kind="file", name="page", path="a.html").label == "file page"
+    assert Channel(kind="slack", url_env="X").label == "slack X"
+    assert Channel(kind="file").label == f"file {DEFAULT_FILE}"
+    assert (Channel(kind="slack").retries, Channel(kind="slack").headers_env) == (RETRIES, None)
+
+
+def test_a_delivery_counts_one_attempt_unless_it_says_more():
+    assert Delivery("x", True) == Delivery("x", True, "", 1) and Delivery("x", True).attempts == 1
+
+
+def test_a_page_is_written_whole_to_a_path_next_to_the_folder_it_is_relative_to(tmp_path):
+    delivery = write_file("file page", "out/daily.html", "page of caf\u00e9".encode("utf-8"), tmp_path)
+
+    assert delivery == Delivery("file page", True)
+    assert (tmp_path / "out" / "daily.html").read_bytes() == "page of caf\u00e9".encode("utf-8")
+    assert [path.name for path in (tmp_path / "out").iterdir()] == ["daily.html"]
+
+
+def test_a_page_replaces_the_one_that_was_there_and_can_go_to_a_file_uri(tmp_path):
+    target = tmp_path / "a" / "daily.html"
+    assert write_file("f", str(target), b"first").ok and write_file("f", target.as_uri(), b"second").ok
+
+    assert target.read_bytes() == b"second" and [path.name for path in target.parent.iterdir()] == ["daily.html"]
+
+
+def test_a_page_that_cannot_be_written_is_a_delivery_that_says_so_and_never_an_exception(tmp_path):
+    (tmp_path / "taken").mkdir()
+
+    delivery = write_file("file page", tmp_path / "taken", b"x")
+
+    assert delivery.ok is False and delivery.reason.startswith("the file could not be written (")
+    assert str(tmp_path) not in delivery.reason
+    assert write_file("f", "s3://", b"x").ok is False
+
+
+def test_text_that_slack_would_read_as_markup_is_escaped_as_entities():
+    assert escape_mrkdwn("<!channel> & <@U123> <https://x.example|a>") == (
+        "&lt;!channel&gt; &amp; &lt;@U123&gt; &lt;https://x.example|a&gt;")
+    assert escape_mrkdwn("&amp;") == "&amp;amp;" and escape_mrkdwn(12) == "12" and escape_mrkdwn("plain") == "plain"
+
+
+def test_text_is_cut_to_a_limit_with_dots_and_text_under_it_is_left_alone():
+    assert cut("abcdef", 6) == "abcdef" and cut("abcdefg", 6) == "abc..." and cut("", 3) == ""
+    assert len(cut("x" * 500, 100)) == 100 and cut("abcd", 3) == "abc" and cut("abc", 2) == "ab"
+    assert cut("abcd", 0) == "" and cut("abcde", 4) == "a..."
+
+
+def test_the_blocks_are_the_shapes_that_slack_asks_for():
+    assert header_block("Daily") == {"type": "header", "text": {"type": "plain_text", "text": "Daily"}}
+    assert len(header_block("x" * 400)["text"]["text"]) == SLACK_MAX_HEADER
+    assert section_block("*a*") == {"type": "section", "text": {"type": "mrkdwn", "text": "*a*"}}
+    assert section_block(fields=["a", "b"]) == {"type": "section", "fields": [{"type": "mrkdwn", "text": "a"},
+                                                                              {"type": "mrkdwn", "text": "b"}]}
+    assert section_block("t", ["f"]) == {"type": "section", "text": {"type": "mrkdwn", "text": "t"},
+                                         "fields": [{"type": "mrkdwn", "text": "f"}]}
+    assert context_block("a", "b") == {"type": "context", "elements": [{"type": "mrkdwn", "text": "a"},
+                                                                       {"type": "mrkdwn", "text": "b"}]}
+
+
+def test_a_message_is_the_text_and_the_blocks_and_nothing_else():
+    blocks = [header_block("Daily"), section_block("body"), context_block("note")]
+
+    message = slack_message("Daily", blocks)
+
+    assert message == {"text": "Daily", "blocks": blocks} and message["blocks"] is not blocks
+
+
+@pytest.mark.parametrize("blocks, problem", [
+    ([], "a message has from 1 to 50 blocks, and this has 0"),
+    ([section_block("x")] * (SLACK_MAX_BLOCKS + 1), "a message has from 1 to 50 blocks, and this has 51"),
+    ([{"type": "header", "text": {"type": "plain_text", "text": "x" * (SLACK_MAX_HEADER + 1)}}],
+     "block 1 is a header of 151 characters, and the limit is 150"),
+    ([section_block("x" * (SLACK_MAX_SECTION + 1))], "block 1 is a section of 3001 characters, and the limit is 3000"),
+    ([header_block("a"), section_block(fields=["x"] * (SLACK_MAX_FIELDS + 1))],
+     "block 2 has more than 10 fields or a field of more than 2000 characters"),
+    ([section_block(fields=["x" * (SLACK_MAX_FIELD + 1)])],
+     "block 1 has more than 10 fields or a field of more than 2000 characters"),
+    ([context_block(*["x"] * (SLACK_MAX_CONTEXT + 1))],
+     "block 1 is a context of more than 10 elements or an element of more than 2000 characters"),
+    ([context_block("x" * (SLACK_MAX_FIELD + 1))],
+     "block 1 is a context of more than 10 elements or an element of more than 2000 characters"),
+])
+def test_a_message_over_a_limit_of_slack_is_refused_with_the_block_and_the_limit(blocks, problem):
+    with pytest.raises(ValueError) as caught:
+        slack_message("t", blocks)
+
+    assert str(caught.value) == problem
+
+
+def test_a_message_at_the_limits_of_slack_is_taken():
+    blocks = [header_block("x" * SLACK_MAX_HEADER), section_block("x" * SLACK_MAX_SECTION),
+              section_block(fields=["x" * SLACK_MAX_FIELD] * SLACK_MAX_FIELDS),
+              context_block(*["x" * SLACK_MAX_FIELD] * SLACK_MAX_CONTEXT)] + [section_block("a")] * (
+        SLACK_MAX_BLOCKS - 4)
+
+    assert len(slack_message("t", blocks)["blocks"]) == SLACK_MAX_BLOCKS

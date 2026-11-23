@@ -1,0 +1,61 @@
+{
+  "text": "Daily sales, 2026-07-31 00:00 to 2026-08-01 00:00, Asia/Kolkata",
+  "blocks": [
+    {
+      "type": "header",
+      "text": {
+        "type": "plain_text",
+        "text": "Daily sales"
+      }
+    },
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "mrkdwn",
+          "text": "Window 2026-07-31 00:00 to 2026-08-01 00:00, Asia/Kolkata"
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "fields": [
+        {
+          "type": "mrkdwn",
+          "text": "*Revenue*\n$1,234.50\n+12.2% from $1,100.00"
+        },
+        {
+          "type": "mrkdwn",
+          "text": "*Orders*\n87\n-3.3% from 90"
+        },
+        {
+          "type": "mrkdwn",
+          "text": "*Share of the week*\n18.8%"
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*Top cuisines*\n```\ncuisine  orders  share\n-------  ------  -----\nThai         31  35.6%\nItalian      24  27.6%\nIndian       17  19.5%\n```\nShowing the first 3 of 5 rows."
+      }
+    },
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "mrkdwn",
+          "text": "Data health: 1 table is stale, gold.gold_sales"
+        }
+      ]
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "<https://example.com/reports/daily.html|Open the report>"
+      }
+    }
+  ]
+}

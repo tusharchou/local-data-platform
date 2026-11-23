@@ -130,6 +130,7 @@ _NAME = re.compile(NAME_PATTERN)
 _FORMAT = re.compile(FORMAT_PATTERN)
 _COLUMN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_PUBLIC_URL = re.compile(r"https?://\S+")
 _SECTION = re.compile(r"--[ \t]*name:[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*")
 _PLACEHOLDER = re.compile(r"\{\{|\}\}|\{[^{}]*\}|[{}]")
 _REFERENCE = re.compile(r"([a-z][a-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)")
@@ -738,6 +739,9 @@ def _check_delivery(problems: _Problems, value: Any) -> None:
         for key in ("path", "public_url"):
             if key in destination and not _is_text(destination[key]):
                 problems.add(f"{here}.{key}", f"must be a non-empty string, got {destination[key]!r}")
+        if _is_text(destination.get("public_url")) and not _PUBLIC_URL.fullmatch(destination["public_url"]):
+            problems.add(f"{here}.public_url", "must be an address that starts with http:// or https:// and has no "
+                                               f"spaces, got {destination['public_url']!r}")
         if "retries" in destination and not (_whole(destination["retries"]) and 0 <= destination["retries"] <= 10):
             problems.add(f"{here}.retries", f"must be a whole number from 0 to 10, got {destination['retries']!r}")
 

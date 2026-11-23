@@ -160,7 +160,15 @@ def report_events(path: str | Path, run_id: str | None = None) -> tuple[list[eve
     """
     from local_data_platform.report.spec import load_report
 
-    report = load_report(path)
+    return report_events_of(load_report(path), run_id)
+
+
+def report_events_of(report: Report, run_id: str | None = None) -> tuple[list[events.RunEvent], str]:
+    """The events of a report that is already read, from where its sinks keep them.
+
+    ``ldp report send`` reads the ``report.delivered`` events of a report with it, to find the deliveries that were
+    made. A report that has no sink has no events.
+    """
     metadata: Mapping[str, Any] = {"observability": dict(report.observability)} if report.observability else {}
     return events.run_events(_EventsOf(report.identifier, report.base_dir, metadata), run_id=run_id)
 
@@ -168,6 +176,21 @@ def report_events(path: str | Path, run_id: str | None = None) -> tuple[list[eve
 def _window_text(run: ReportRun) -> str | None:
     """The window of a run as the two UTC instants that the events give, or ``None`` when it has none."""
     return f"{format_instant(run.window[0])}/{format_instant(run.window[1])}" if run.window else None
+
+
+def held_payload(report: Report, held: ReportHeld, *, fmt: str, output: str | None, window: str | None,
+                 release: str | None, live: bool) -> dict[str, Any]:
+    """The payload of the ``report.held`` event that a build and a send emit when the freshness gate holds a report.
+
+    It has the rule of the gate and each stale table with its pipeline and its reasons, and no row of data.
+    """
+    return {
+        "format": fmt, "output": output, "window": window, "timezone": report.timezone, "release": release,
+        "live": live,
+        "rule": {"max_age_hours": report.freshness.max_age_hours, "on_stale": report.freshness.on_stale}
+        if report.freshness else None,
+        "tables": [{"table": item.table, "pipeline": item.pipeline, "reasons": list(item.reasons)}
+                   for item in held.tables]}
 
 
 def build_report(report: Report, window: Any = None, *, out: str | Path | None = None, fmt: str = "html",
@@ -231,13 +254,8 @@ def build_report(report: Report, window: Any = None, *, out: str | Path | None =
         if target is not None:
             write_document(out, data)
     except ReportHeld as held:
-        emitter.emit("report.held", {
-            "format": fmt, "output": target, "window": _window_text(run), "timezone": report.timezone,
-            "release": release, "live": live,
-            "rule": {"max_age_hours": report.freshness.max_age_hours, "on_stale": report.freshness.on_stale}
-            if report.freshness else None,
-            "tables": [{"table": item.table, "pipeline": item.pipeline, "reasons": list(item.reasons)}
-                       for item in held.tables]})
+        emitter.emit("report.held", held_payload(report, held, fmt=fmt, output=target, window=_window_text(run),
+                                                 release=release, live=live))
         emitter.emit("run.finished", {"status": "blocked_quality",
                                       "duration_s": round(time.perf_counter() - started, 3)})
         emitter.flush()
@@ -265,5 +283,5 @@ def build_report(report: Report, window: Any = None, *, out: str | Path | None =
                  health=run.health)
 
 
-__all__ = ["Build", "FORMATS", "ReportBuildError", "ReportHeld", "STDOUT", "build_report", "render", "report_events",
-           "report_sink", "write_document"]
+__all__ = ["Build", "FORMATS", "ReportBuildError", "ReportHeld", "STDOUT", "build_report", "held_payload", "render",
+           "report_events", "report_events_of", "report_sink", "write_document"]
