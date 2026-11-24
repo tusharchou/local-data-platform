@@ -9,6 +9,8 @@
 * :mod:`~local_data_platform.orchestration.tasks`: the registry of task kinds, with the ``pipeline`` and ``maintain``
   kinds.
 * :mod:`~local_data_platform.orchestration.dbt_task`: the ``dbt`` kind, which builds a dbt project for the window.
+* :mod:`~local_data_platform.orchestration.report_task`: the ``report`` kind, which builds a report for the window and
+  sends it.
 * :mod:`~local_data_platform.orchestration.retries`: how a failed task is tried again, and which errors are worth it.
 * :mod:`~local_data_platform.orchestration.runner`: the runner, :func:`run_workflow`.
 * :mod:`~local_data_platform.orchestration.backfills`: :func:`backfill`, which runs a workflow for every window of a

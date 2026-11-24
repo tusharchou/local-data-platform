@@ -6,12 +6,13 @@ does::
     {"id": "orders", "pipeline": "config/orders.json"}
     {"id": "tidy", "depends_on": ["orders"], "maintain": {"config": "config/orders.json", "expire": 7, "apply": true}}
 
-This module ships four kinds, ``pipeline`` (the path of a dataset config, relative to the workflow file), ``maintain``
+This module ships five kinds, ``pipeline`` (the path of a dataset config, relative to the workflow file), ``maintain``
 (the path of a dataset config and the options of ``ldp maintain``), ``dbt`` (a dbt project, run for the window, which
-:mod:`local_data_platform.orchestration.dbt_task` describes) and ``gold`` (the gold tables of a folder, built for the
-window with a release cut at the end, which :mod:`local_data_platform.orchestration.gold_task` describes). Each is a
-:class:`TaskKind` in a small registry, and :func:`register_task_kind` adds more. A later milestone adds a ``report``
-task the same way, and neither the runner nor the workflow file format changes.
+:mod:`local_data_platform.orchestration.dbt_task` describes), ``gold`` (the gold tables of a folder, built for the
+window with a release cut at the end, which :mod:`local_data_platform.orchestration.gold_task` describes) and ``report``
+(a report file, built for the window and sent, which :mod:`local_data_platform.orchestration.report_task` describes).
+Each is a :class:`TaskKind` in a small registry, and :func:`register_task_kind` adds more. Neither the runner nor the
+workflow file format changes for a new one.
 
 A kind says how its value is checked (``validate`` and ``json_schema``), what ``ldp workflow plan`` shows and checks
 about it (``plan``), and what it does when a workflow runs (``run``). ``run`` returns a :class:`TaskOutcome` and raises
@@ -293,7 +294,7 @@ def unregister_task_kind(name: str) -> TaskKind:
     return _KINDS.pop(name)
 
 
-BUILTIN_KINDS = ("pipeline", "maintain", "dbt", "gold")
+BUILTIN_KINDS = ("pipeline", "maintain", "dbt", "gold", "report")
 """The kinds this package registers, in the order that the docs, the schema and the messages list them."""
 
 
@@ -576,11 +577,12 @@ register_task_kind(
     changes_data=False,
     description="Expire snapshots and find orphan files of a config's Iceberg table, as ldp maintain does.")
 
-# The dbt and gold kinds live in their own modules and register themselves when those are imported, which has to come
-# last: the modules import from this one. Importing one first works too, because this import finds it half loaded and
-# goes on.
+# The dbt, gold and report kinds live in their own modules and register themselves when those are imported, which has to
+# come last: the modules import from this one. Importing one first works too, because this import finds it half loaded
+# and goes on.
 from local_data_platform.orchestration import dbt_task  # noqa: E402,F401
 from local_data_platform.orchestration import gold_task  # noqa: E402,F401
+from local_data_platform.orchestration import report_task  # noqa: E402,F401
 
 
 __all__ = [
