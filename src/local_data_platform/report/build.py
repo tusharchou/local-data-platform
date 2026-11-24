@@ -180,9 +180,10 @@ def _window_text(run: ReportRun) -> str | None:
 
 def held_payload(report: Report, held: ReportHeld, *, fmt: str, output: str | None, window: str | None,
                  release: str | None, live: bool) -> dict[str, Any]:
-    """The payload of the ``report.held`` event that a build and a send emit when the freshness gate holds a report.
+    """The payload of the ``report.held`` event that a build and a send emit when a report is held back.
 
-    It has the rule of the gate and each stale table with its pipeline and its reasons, and no row of data.
+    It has the rule of the freshness gate and each stale table with its pipeline and its reasons, and for a send that
+    waits for the pipelines of ``metadata.after``, each of them with why. It has no row of data.
     """
     return {
         "format": fmt, "output": output, "window": window, "timezone": report.timezone, "release": release,
@@ -190,7 +191,8 @@ def held_payload(report: Report, held: ReportHeld, *, fmt: str, output: str | No
         "rule": {"max_age_hours": report.freshness.max_age_hours, "on_stale": report.freshness.on_stale}
         if report.freshness else None,
         "tables": [{"table": item.table, "pipeline": item.pipeline, "reasons": list(item.reasons)}
-                   for item in held.tables]}
+                   for item in held.tables],
+        "waiting": [{"pipeline": item.pipeline, "reason": item.reason} for item in held.waiting]}
 
 
 def build_report(report: Report, window: Any = None, *, out: str | Path | None = None, fmt: str = "html",

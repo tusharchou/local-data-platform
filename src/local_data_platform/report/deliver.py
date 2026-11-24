@@ -28,7 +28,10 @@ sent again each time, and the log says so.
 A send is a run of its own. It emits ``run.started``, a ``report.delivered`` or ``report.skipped_duplicate`` for each
 destination, a ``run.failed`` for each one that did not arrive, and ``run.finished``. When the freshness gate holds the
 report back, nothing is sent and the send emits ``report.held`` and raises
-:class:`~local_data_platform.report.health.ReportHeld`, which ``ldp report send`` turns into exit status 3.
+:class:`~local_data_platform.report.health.ReportHeld`, which ``ldp report send`` turns into exit status 3. So does
+a pipeline of ``metadata.after`` that has no published run for the window, see :mod:`local_data_platform.report.after`,
+which is checked before any query runs. A destination that was delivered already is never held, so a window that was
+sent is not asked about its pipelines again.
 """
 
 from __future__ import annotations
@@ -45,6 +48,7 @@ from typing import TYPE_CHECKING, Any
 from local_data_platform import events, notify
 from local_data_platform.exceptions import ConfigError
 from local_data_platform.logger import get_logger
+from local_data_platform.report.after import waiting_for
 from local_data_platform.report.build import (
     ReportBuildError,
     build_report,
@@ -367,7 +371,8 @@ def send_report(report: Report, window: Any, *, params: Mapping[str, Any] | None
         ConfigError: If the report has no ``metadata.delivery``, no window is given, or the window or a parameter is
             not valid.
         ReportBuildError: If a query did not run or a block cannot be shown. Nothing was sent.
-        ReportHeld: If ``metadata.freshness`` says ``block`` and a table is stale. Nothing was sent.
+        ReportHeld: If a pipeline of ``metadata.after`` has no published run for the window, or ``metadata.freshness``
+            says ``block`` and a table is stale. Nothing was sent.
         EngineNotFound: If ``duckdb`` is not installed.
     """
     if not report.delivery:
@@ -408,6 +413,11 @@ def send_report(report: Report, window: Any, *, params: Mapping[str, Any] | None
     stage = "queries"
     try:
         if pending:
+            stage = "after"
+            waiting = waiting_for(report, bounds)
+            if waiting:
+                raise ReportHeld(report.identifier, waiting=waiting, window=span)
+            stage = "queries"
             built = build_report(report, window, out=None, fmt="json", params=params, release=release, live=live,
                                  row_cap=row_cap, timeout_s=timeout_s, now=moment, sink=events.NullSink(),
                                  clock=tick)

@@ -159,7 +159,7 @@ def _print_plan(result: dict[str, Any]) -> None:
         for task in result["tasks"]:
             row = {"order": task["order"], "id": task["id"], "kind": task["kind"],
                    "depends_on": ", ".join(task["depends_on"]) or "-",
-                   "runs": task.get("config") or task.get("project") or task.get("dir") or "-",
+                   "runs": task.get("config") or task.get("project") or task.get("dir") or task.get("spec") or "-",
                    "target": task.get("target") or task.get("table") or "-",
                    "key": _short(task.get("idempotency_key")) or "-"}
             if retried:  # the most attempts a task gets, which is 1 for a task that is not retried
@@ -185,6 +185,10 @@ def _cmd_plan(args: Any) -> int:
     return 0 if result["valid"] else 1
 
 
+_SENT = {"skipped": "already delivered", "failed": "not delivered"}
+"""How a line of a report task says what became of a destination, for the statuses that are not plain words."""
+
+
 def _print_result(result: Any) -> None:
     from local_data_platform.cli import format_table
     from local_data_platform.spec import format_instant
@@ -207,6 +211,8 @@ def _print_result(result: Any) -> None:
             if isinstance(item, dict):  # the tables a dbt task wrote, as `ldp dbt build` prints them
                 _out(f"{task.id} published {item['table']}: {item['mode']}, {item['rows_before']} -> "
                      f"{item['rows_after']} rows, snapshot {item['snapshot_id']}")
+        for item in task.detail.get("destinations", []) if task.kind == "report" else []:  # what a send did
+            _out(f"{task.id} {item['destination']} ({item['type']}): {_SENT.get(item['status'], item['status'])}")
         if task.kind == "gold" and task.detail.get("tables"):  # the tables that a gold task built, and its release
             for item in task.detail["tables"]:
                 if item.get("run_status") == "skipped_duplicate":

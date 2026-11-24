@@ -174,29 +174,65 @@ class Health:
         return stale_text(self.stale)
 
 
-class ReportHeld(DataQualityError):
-    """A report was not built, because a table that it read is stale and ``metadata.freshness`` says ``block``.
+@dataclass(frozen=True)
+class Waiting:
+    """A pipeline of ``metadata.after`` that has no published run for the window, so the report does not go yet.
 
-    It is a data gate, so ``ldp report build`` exits with 3 and a scheduler does not retry it, because the data has to
-    change first.
+    Attributes:
+        pipeline: The identifier of the pipeline.
+        reason: Why, as the end of a sentence, such as ``it has not run for the window``.
+    """
+
+    pipeline: str
+    reason: str
+
+
+class ReportHeld(DataQualityError):
+    """A report was held back, because the data it needs is not ready.
+
+    That is a table that it read and that is stale while ``metadata.freshness`` says ``block``, which stops a build and
+    a send, or a pipeline of ``metadata.after`` that has no published run for the window, which stops a send. It is a
+    data gate, so ``ldp report build`` and ``ldp report send`` exit with 3 and a scheduler does not retry it within the
+    tick, because the data has to change first. A window that was held has no delivery, so the next tick runs it again.
 
     Attributes:
         identifier: The identifier of the report.
         tables: The stale tables, each with its reasons.
+        waiting: The pipelines of ``metadata.after`` that have no published run for the window, each with its reason.
+        window: The window that the pipelines are waited for, as ``START/END`` in UTC, or ``None``.
     """
 
-    def __init__(self, identifier: str, tables: Sequence[TableHealth]):
+    def __init__(self, identifier: str, tables: Sequence[TableHealth] = (), *, waiting: Sequence[Waiting] = (),
+                 window: str | None = None):
         self.identifier = identifier
         self.tables = tuple(tables)
-        count = len(self.tables)
-        lines = [f"the report {identifier} was held, because {count} table{'s' if count != 1 else ''} "
-                 f"{'are' if count != 1 else 'is'} stale and metadata.freshness says block"]
-        lines += [f"  - {item.table}: {' and '.join(item.reasons)}" for item in self.tables]
+        self.waiting = tuple(waiting)
+        self.window = window
+        lines: list[str] = []
+        if self.waiting:
+            count = len(self.waiting)
+            when = f" {window}" if window else ""
+            lines.append(f"the report {identifier} was held, because {count} pipeline{'s' if count != 1 else ''} of "
+                         f"metadata.after {'have' if count != 1 else 'has'} no published run for the window{when}:")
+            lines += [f"  - {item.pipeline}: {item.reason}" for item in self.waiting]
+        if self.tables:
+            count = len(self.tables)
+            lines.append(f"the report {identifier} was held, because {count} table{'s' if count != 1 else ''} "
+                         f"{'are' if count != 1 else 'is'} stale and metadata.freshness says block")
+            lines += [f"  - {item.table}: {' and '.join(item.reasons)}" for item in self.tables]
         super().__init__("\n".join(lines))
 
     def summary(self) -> str:
-        """The stale tables in one line, as :meth:`Health.summary` writes them."""
-        return stale_text(self.tables)
+        """What holds the report in one line, such as ``2 tables are stale, gold.a, gold.b`` or ``waiting for a``.
+
+        A report that is held for both says both, with ``and`` between them.
+        """
+        parts = []
+        if self.waiting:
+            parts.append(f"waiting for {', '.join(item.pipeline for item in self.waiting)}")
+        if self.tables:
+            parts.append(stale_text(self.tables))
+        return " and ".join(parts)
 
 
 # --------------------------------------------------------------------------- judging a table
@@ -269,21 +305,26 @@ def judge(table: str, pipeline: str | None, row: StatusRow | None, rule: Freshne
 # --------------------------------------------------------------------------- collecting the rows
 
 
-def _config_files(report: Report) -> dict[str, Path]:
-    """The config file of each pipeline in the config folders of the report, by identifier."""
+def config_index(report: Report) -> dict[str, tuple[Path, Any]]:
+    """The config file and the config of each pipeline in the config folders of the report, by identifier."""
     from local_data_platform.exceptions import ConfigError
     from local_data_platform.monitoring.configs import load_configs
     from local_data_platform.paths import resolve_path
 
-    files: dict[str, Path] = {}
+    found: dict[str, tuple[Path, Any]] = {}
     for item in report.tables.config:
         try:
             configs, _failures = load_configs(resolve_path(item, report.base_dir))
         except ConfigError:
             continue  # a folder that holds no dataset config, such as one of metrics
         for file, config in configs:
-            files.setdefault(config.identifier, file)
-    return files
+            found.setdefault(config.identifier, (file, config))
+    return found
+
+
+def _config_files(report: Report) -> dict[str, Path]:
+    """The config file of each pipeline in the config folders of the report, by identifier."""
+    return {identifier: file for identifier, (file, _config) in config_index(report).items()}
 
 
 def _status_row(file: Path, as_of: dt.datetime) -> tuple[StatusRow | None, str | None]:
@@ -477,10 +518,12 @@ __all__ = [
     "ReportHeld",
     "STALE_RUNS",
     "TableHealth",
+    "Waiting",
     "banner",
     "cells",
     "collect",
     "columns",
+    "config_index",
     "judge",
     "news_of",
     "news_text",

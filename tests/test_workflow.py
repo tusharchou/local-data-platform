@@ -178,12 +178,13 @@ def test_a_workflow_is_checked_for_its_envelope_and_its_metadata(changes, expect
 
 
 @pytest.mark.parametrize("task, expected", [
-    ({"id": "a"}, "tasks[0]: needs exactly one task kind of ['pipeline', 'maintain', 'dbt', 'gold'], and has none"),
+    ({"id": "a"}, "tasks[0]: needs exactly one task kind of ['pipeline', 'maintain', 'dbt', 'gold', 'report'], and has "
+                  "none"),
     ({"id": "a", "pipeline": "a.json", "maintain": {"config": "a.json"}},
-     "tasks[0]: needs exactly one task kind of ['pipeline', 'maintain', 'dbt', 'gold'], and has 2: "
+     "tasks[0]: needs exactly one task kind of ['pipeline', 'maintain', 'dbt', 'gold', 'report'], and has 2: "
      "['pipeline', 'maintain']"),
-    ({"id": "a", "pipeline": "a.json", "report": {}},
-     "tasks[0]: has unknown keys ['report']; a task has an id, depends_on"),
+    ({"id": "a", "pipeline": "a.json", "email": {}},
+     "tasks[0]: has unknown keys ['email']; a task has an id, depends_on"),
     ({"id": "a", "pipeline": ""}, "tasks[0].pipeline: must be the path of a dataset config, got ''"),
     ({"id": "a", "pipeline": 5}, "tasks[0].pipeline: must be the path of a dataset config, got 5"),
     ({"pipeline": "a.json"}, "tasks[0].id: is required and must be a non-empty string"),
@@ -256,8 +257,8 @@ def test_the_schema_lists_the_task_kinds_and_checks_a_workflow_file():
     task = schema["$defs"]["task"]
     assert task["required"] == ["id"] and task["additionalProperties"] is False
     assert task["oneOf"] == [{"required": ["pipeline"]}, {"required": ["maintain"]}, {"required": ["dbt"]},
-                             {"required": ["gold"]}]
-    assert {"pipeline", "maintain", "dbt", "gold", "depends_on", "retries"} <= set(task["properties"])
+                             {"required": ["gold"]}, {"required": ["report"]}]
+    assert {"pipeline", "maintain", "dbt", "gold", "report", "depends_on", "retries"} <= set(task["properties"])
     assert set(schema["properties"]["metadata"]["properties"]) == {"schedule", "window", "catchup", "start", "retries",
                                                                    "observability"}
 
@@ -276,7 +277,8 @@ def test_ldp_schema_prints_the_workflow_schema(capsys):
 
     printed = json.loads(capsys.readouterr().out)
     assert printed["$defs"]["task"]["oneOf"] == [{"required": ["pipeline"]}, {"required": ["maintain"]},
-                                                 {"required": ["dbt"]}, {"required": ["gold"]}]
+                                                 {"required": ["dbt"]}, {"required": ["gold"]},
+                                                 {"required": ["report"]}]
 
 
 def test_a_new_task_kind_is_checked_planned_and_run_without_changing_the_runner(tmp_path, custom_kind):

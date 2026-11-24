@@ -785,7 +785,12 @@ def validate_report(spec: Mapping[str, Any]) -> list[ConfigError]:
     if not isinstance(metadata, Mapping):
         problems.add("metadata", "is required and must be an object with tables, queries and blocks")
     else:
-        _unknown_keys(problems, "metadata", metadata, METADATA_KEYS)
+        if "schedule" in metadata:
+            problems.add("metadata.schedule", "a report has no schedule of its own. A workflow with one report task "
+                                              "and a metadata.schedule runs it on a schedule, as ldp schedule tick "
+                                              "runs a workflow")
+        _unknown_keys(problems, "metadata", {key: value for key, value in metadata.items() if key != "schedule"},
+                      METADATA_KEYS)
         _optional_text(problems, "metadata", metadata, "title")
         _check_tables(problems, metadata.get("tables"))
         queries = _check_queries(problems, metadata.get("queries"))

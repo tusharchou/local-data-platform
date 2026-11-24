@@ -260,7 +260,7 @@ call:
 | `ldp metrics query DIR METRICS [--by DIMS] [--grain GRAIN] [--filter DIM=VALUE] [--from DAY] [--to DAY] [--release RN\|--live] [--sql] [--out FILE] [--raw] [--json]` | Compute metrics from the current release of the gold tables, grouped and filtered, and print them in their format. `--sql` prints the SQL and runs nothing, and `--out` writes CSV, Parquet or JSONL | `metrics.query(folder, metrics, by=..., grain=..., filters=[...])` returns a `pyarrow.Table` |
 | `ldp report check REPORT [--window W] [--param NAME=VALUE] [--release RN\|--live] [--row-cap N] [--timeout S] [--json]` | Check a report file, or every report file of a folder, and run each of its queries and metric blocks once in a locked-down DuckDB on the gold tables of the current release. It lists the rows, the columns and the time of each, the version of each table that was read, and every problem by its JSON path, and exits with 1 if there is one. See [Define a report](#define-a-report) | `report.check_report(path, window)`, `report.run_queries(report, window)` |
 | `ldp report build REPORT_OR_FOLDER --out PATH [--format html\|md\|json] [--window W] [--param NAME=VALUE] [--release RN\|--live] [--row-cap N] [--timeout S]` | Run a report as `ldp report check` does and write it as one self-contained HTML page, as Markdown, or as JSON. The page has the key figures, charts drawn inline as SVG, tables and texts, and a footer that names each table that was read with its release and snapshot, the window, the time zone and the time of the build. `--out` is a path, a `file://`, `s3://` or `gs://` address, or `-` for standard output. A report with a problem is not written, and the file that was there stays. Every report shows a data health panel, one row for each table that it read, from the rows of `ldp status`. With `metadata.freshness`, a stale table puts a banner on the report, or with `on_stale` `block` holds it back, writes nothing and exits with 3. A build is recorded as run events in the sinks of `metadata.observability`, and `ldp runs REPORT` lists the builds. Given a folder, it builds every report file of it as a site, a page for each report and an `index.html` with a card for each, and exits with 1 when any report failed. See [Define a report](#define-a-report) | `report.build.build_report(report, window, out=path)`, `report.health.collect(report, reads, now)`, `report.site.build_site(folder, out, window)` |
-| `ldp report send REPORT --window W [--param NAME=VALUE] [--release RN\|--live] [--row-cap N] [--timeout S] [--dry-run] [--force]` | Run a report for a window and send it to each destination of `metadata.delivery`, which is a `slack` channel, a `webhook` or a `file`. Slack gets a message with Block Kit blocks that has the title, the window, each key figure with its change, the first table, the data health and a link to the page. A webhook gets the JSON of `ldp report build --format json`, and a file gets the page. The address of a destination is in the environment variable that the report names and is never printed or recorded. A delivery has an idempotency key made from the report, the window and the destination, and a destination that got the report for the window is skipped, unless `--force` sends it again. HTTP 429 and 5xx answers are sent again with backoff. `--dry-run` prints each payload and sends nothing. A report that `metadata.freshness` holds back is not sent and the exit status is 3, and the exit status is 1 when a destination did not get the report. See [Define a report](#define-a-report) | `report.deliver.send_report(report, window)`, `report.deliver.slack_payload(run)` |
+| `ldp report send REPORT --window W [--param NAME=VALUE] [--release RN\|--live] [--row-cap N] [--timeout S] [--dry-run] [--force]` | Run a report for a window and send it to each destination of `metadata.delivery`, which is a `slack` channel, a `webhook` or a `file`. Slack gets a message with Block Kit blocks that has the title, the window, each key figure with its change, the first table, the data health and a link to the page. A webhook gets the JSON of `ldp report build --format json`, and a file gets the page. The address of a destination is in the environment variable that the report names and is never printed or recorded. A delivery has an idempotency key made from the report, the window and the destination, and a destination that got the report for the window is skipped, unless `--force` sends it again. HTTP 429 and 5xx answers are sent again with backoff. `--dry-run` prints each payload and sends nothing. `W` is `START/END`, or `yesterday`, `last-week` or `last-month`, counted in the time zone of the report. A report that `metadata.freshness` holds back, or that waits for a pipeline of `metadata.after` that has no published run for the window, is not sent and the exit status is 3, and the exit status is 1 when a destination did not get the report. See [Define a report](#define-a-report) and [Send a report on a schedule](#send-a-report-on-a-schedule) | `report.deliver.send_report(report, window)`, `report.deliver.slack_payload(run)` |
 | `ldp monitor CONFIG [--json] [--now TIME]` | Check the SLA of a config, or of every dataset config of a folder, and print one line for each monitor. The freshness monitor measures the age of a table from the metadata of its last commit, or from the newest value of `freshness.column`, and scans no rows. The volume monitor compares the rows of the latest run with `min_rows` and `max_rows`, and with the median of the runs before it, and the schema monitor compares the columns of the table, and of its source in the latest run, with the last evaluation. A metric monitor computes a metric of the metrics file, or one query, for the latest complete period of its grain, and compares it with `min` and `max` and with the median of the periods before it in the history of the monitors, see the [monitoring guide](docs/monitoring.md). The command writes to no table and creates no catalog. It records the results in `_ldp.monitor_results` when the config has an `iceberg` sink and its catalog exists, and in `.ldp/monitor.jsonl` next to the config otherwise. A config that lists channels in `metadata.observability.alerts` is told when a monitor changes state and when it recovers, see [Alerts](docs/alerts.md). The exit status is 0 when every monitor is `ok` or `warn`, 2 when one is `error` and 1 when `ldp` itself fails | `monitoring.evaluate(config, now=...)` returns a `MonitorResult` for each monitor, and `monitoring.history.record` and `read_results` write and read the history |
 | `ldp status CONFIG [--json] [--html FILE] [--now TIME]` | Print one row for each dataset config of a file or a folder, the worst first, with the last run and how long ago it started, how long ago a run succeeded, the rows of the table, what the freshness, volume, schema and metrics monitors say now, the checks that failed in the last 7 days and the open alerts. It evaluates the monitors in memory and records and sends nothing, reads each `_ldp` table once for the configs that share a catalog, and says how far back the history goes. The exit status is 0 unless `ldp` itself fails. `--json` prints the rows, and `--html FILE` also writes one self-contained page with the table, the monitors and the last 20 runs of each pipeline | `monitoring.status.rows(path, now=None)` returns a `StatusRow` for each config, and `monitoring.ledger.Ledger` reads the history of many configs with one read of each table |
 | `ldp alert test CONFIG` | Send one test message to each channel of `metadata.observability.alerts`, whatever its `on` says, and print which ones got it. It sends real messages. The exit status is 0 when every channel got it and 1 otherwise | `notify.notifier_for(config).test()` returns a `Delivery` for each channel, and `notify.NotifySink` is the event sink that alerts when a run fails or is blocked |
@@ -365,8 +365,9 @@ ldp runs .ldp/events.jsonl                                           # the workf
 
 - Each task has an `id`, an optional `depends_on`, and exactly one kind: `pipeline` (the path of a dataset config,
   relative to the workflow file), `dbt` (a dbt project, built for the window, see below), `maintain` (a config's Iceberg
-  table and the options of `ldp maintain`, a dry run unless `apply` is true) or `gold` (the gold tables of a folder, built
-  for the window, with a release cut at the end, see [Release the gold tables](#release-the-gold-tables)). Later
+  table and the options of `ldp maintain`, a dry run unless `apply` is true), `gold` (the gold tables of a folder, built
+  for the window, with a release cut at the end, see [Release the gold tables](#release-the-gold-tables)) or `report` (a
+  report file, built for the window and sent, see [Send a report on a schedule](#send-a-report-on-a-schedule)). Later
   milestones add kinds without changing the file format.
 - Tasks run one at a time, in dependency order. A pipeline task runs with the window of the workflow, so its idempotency key
   is the one `ldp plan CONFIG --window` prints.
@@ -1056,16 +1057,76 @@ its own.
   whether that is set, and sends and records nothing. A report with no sink in `metadata.observability` cannot remember
   a delivery, so it is sent again each time and the log says so. A send needs `--window`, because the window is part of the
   key. When `metadata.freshness` has `on_stale` `block` and a table is stale, nothing is sent, the send emits `report.held`,
-  and `ldp report send` exits with 3. It exits with 1 when a destination did not get the report, and the others were sent
+  and `ldp report send` exits with 3. `metadata.after` lists pipelines of the config folders of the report. Before any
+  query runs, a send asks, for each one, whether a run of it for the window published, or found the window already
+  published, in the run events of the pipeline, where `ldp status` reads them. A pipeline that has no such run holds the send
+  back in the same way, with a `report.held` event that names each pipeline and why, and exit status 3, and the window has
+  no delivery, so the next send or tick asks again. A run counts only when its window is the window of the report to the
+  instant, and a run with no window does not. A destination that was delivered is never held, a dry run and `--force` are
+  held too, and `ldp report build` does not wait. It exits with 1 when a destination did not get the report, and the others were sent
   as usual, so a second run sends only to the destination that failed. A send is one run, with `run.started`, a
   `report.delivered` for each destination, a `run.failed` for each one that failed, and `run.finished`, and `ldp runs
   REPORT` lists it. It is the reporting half of the Google Sheets request, and
   [a sheet that stays in sync](#a-google-sheet-as-a-source) is the other half.
 
 A `title` is what the report is called, and the identifier by default. `delivery` is what `ldp report send` sends to, and
-`after` is part of the file and is checked for its shape. What it does arrives with the schedule of the 0.1.6 milestone. A
+`after` lists the pipelines that a send waits for, see [Send a report on a schedule](#send-a-report-on-a-schedule). A
 `delivery` entry names the environment variable that holds an address (`webhook_env`, `url_env`), and an address or a
 token written into the file is refused.
+
+### Send a report on a schedule
+
+A `report` task builds a report for the window of a workflow run and sends it, as `ldp report send` does. A workflow with
+one report task and a `schedule` is a report on its own schedule, and `ldp schedule tick` runs it like any other workflow.
+This one sends the sales of yesterday to Slack at eight in the morning, Kolkata time.
+
+```json
+{
+  "apiVersion": "ldp/v1",
+  "kind": "Workflow",
+  "identifier": "daily_sales_report",
+  "metadata": {"schedule": "0 8 * * *", "window": {"size": "day", "timezone": "Asia/Kolkata"}},
+  "tasks": [{"id": "daily", "report": {"spec": "reports/daily_sales.json", "send": true}}]
+}
+```
+
+A report task can also come after the tasks that load its tables, so that the report goes out when the night is built.
+
+```json
+{"id": "daily", "depends_on": ["gold"], "report": {"spec": "reports/daily_sales.json", "send": true}}
+```
+
+- `spec` is the report file, relative to the workflow file. `send` is false unless it says true, and a task that does not
+  send builds the report, which runs its queries and applies its freshness gate, and writes and sends nothing, as a
+  `maintain` task is a dry run unless `apply` is true.
+- The report is run for the window of the workflow run. A report counts its days in its own time zone, so give the workflow
+  the same `metadata.window.timezone`, and `ldp workflow plan` says when the two differ. It also says when the report
+  reads a table that a task writes and no `depends_on` orders them.
+- A delivery is made once for each window and destination. A tick that finds the window done sends nothing, and the same
+  window run again sends nothing, because of the idempotency key of each delivery. A replace does not send the report
+  again, and `ldp report send --force` does.
+- A report that is held back, by its freshness gate or because a pipeline of `metadata.after` has not published the window,
+  is a task that ended `blocked_quality`, so the workflow exits with 3. The window has no delivery and is not done, so the
+  next tick runs it again as the next attempt of the same run, and the report goes out as soon as the data is ready.
+- A destination that did not get the report fails the task, and the workflow exits with 1. The others got it, so the next
+  tick sends to the destination that failed and to no other.
+- A report whose workflow does not load its own tables lists the pipelines that do in `metadata.after`, so that the send
+  waits for each of them to publish the window.
+- `ldp backfill` and a workflow with `metadata.catchup` true run the report task for every window that they run, so each
+  of those windows is sent once, and running the backfill again sends nothing.
+- A report file has no `schedule` of its own. A `metadata.schedule` in a report is refused, and the message says to use a
+  workflow of one report task.
+
+A machine that does not use `ldp schedule` calls the command itself. This crontab line sends yesterday's report at eight in
+the morning, and the report is delivered once, however many times the line runs.
+
+```bash
+0 8 * * * /path/to/.venv/bin/ldp report send /path/to/reports/daily_sales.json --window yesterday
+```
+
+`yesterday`, `last-week` and `last-month` count their days in the time zone of the report. A day that was missed is caught
+up by running the command with the window of that day, such as `--window 2026-07-31/2026-08-01`, and a repeated run sends
+nothing. A report that is held back exits with 3, so a wrapper can run it again later.
 
 ### Open the gold tables in a spreadsheet or a BI tool
 

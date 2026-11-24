@@ -174,7 +174,7 @@ The file says four things.
 | `kind` and `apiVersion` | That this is a workflow and not a dataset config. Every JSON file of LDP can say what it is, and `ldp schema --kind Workflow` prints the schema of this one |
 | `metadata.schedule` | When it runs. `5 2 * * *` is five past two in the morning, and the run is for the day before. `metadata.window.size` says that a window is one day, and `window.timezone` counts the days in another time zone, with UTC as the default |
 | `metadata.retries` | How often a task that fails with an error that another try may fix is run again. `max_attempts` counts every try, so 2 is one retry, and `delay_s` is the longest wait before it. A task can have `retries` of its own |
-| `tasks` | The steps. Each has an `id`, an optional `depends_on`, and one kind. The kinds are `pipeline` (a dataset config), `dbt` (a dbt project, built for the window), `maintain` (the options of `ldp maintain`) and `gold` (the gold tables of a folder, built for the window, with a release cut at the end). Paths are relative to the workflow file |
+| `tasks` | The steps. Each has an `id`, an optional `depends_on`, and one kind. The kinds are `pipeline` (a dataset config), `dbt` (a dbt project, built for the window), `maintain` (the options of `ldp maintain`), `gold` (the gold tables of a folder, built for the window, with a release cut at the end) and `report` (a report file, built for the window and, with `send` true, sent to its destinations). Paths are relative to the workflow file |
 
 Here the orders and their lines wait for nothing, the models wait for both, the gold task waits for the models, and the tidy task waits for the gold task. The `select` of the dbt task builds the daily sales model, what it reads, and `stg_customers`, which a data test of `fct_orders` reads, and it runs their data tests. A model that fails a data test blocks the task, as a quality check blocks a pipeline. Tasks run one at a time, in dependency order.
 
@@ -631,7 +631,7 @@ Every `ldp` command follows one table, and `ldp backfill`, `ldp workflow run` an
 | 0 | Success, including a window that published and a window that was skipped because it was done | Nothing |
 | 1 | An error, such as a bad config, a missing file or a failed write | Retries it, because the cause may pass |
 | 2 | An SLA breach, which `ldp monitor` reports when a monitor is in error | Never retries it, because running the monitor again finds the same table, and tells a person |
-| 3 | A data gate held a run back, such as a quality check that blocked a write, a failing dbt data test, a gold table whose contract does not hold, or a report whose freshness says block and whose data is stale | Never retries it, because the data has to change first, and tells a person |
+| 3 | A data gate held a run back, such as a quality check that blocked a write, a failing dbt data test, a gold table whose contract does not hold, or a report whose freshness says block and whose data is stale, or that waits for a pipeline that has not published the window | Never retries it, because the data has to change first, and tells a person |
 
 ## When something goes wrong
 
