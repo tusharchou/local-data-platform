@@ -6,6 +6,8 @@ the whole gold layer as one DuckDB file, with the tables, what each table and co
 ``release`` names an older one, and ``live`` reads the tables as they are now. A DuckDB file holds the tables of one
 release and nothing else, so the file is as consistent as the release is.
 
+A table that is too large to copy can be a view in that file instead, see ``views`` of :func:`write_duckdb_file`.
+
 ``ldp gold export`` and ``ldp gold duckdb`` are these two functions, and ``ldp gold build --duckdb`` calls
 :func:`refresh_after_build`. Every file is written to a temporary path next to its final one and renamed, so a reader
 never sees a half-written file, and a failed write leaves the file that was there.
@@ -75,6 +77,9 @@ cannot open, and every DuckDB from 1.0 on reads this one."""
 
 DUCKDB_HINT = 'pip install "local-data-platform[duckdb]"'
 
+ICEBERG_HINT = "Install DuckDB's iceberg extension once with duckdb.connect().execute('INSTALL iceberg')"
+"""What to do about a DuckDB that cannot read an Iceberg table, which the views of ``--views`` need."""
+
 _CATALOG_COLUMNS = {
     "table_name": "The table, as it is called in this file.",
     "description": "What the table means.",
@@ -84,6 +89,12 @@ _CATALOG_COLUMNS = {
                "when the file was written.",
     "snapshot_id": "The snapshot of the Iceberg table that was copied.",
     "built_at": "When that snapshot was written, in UTC, which is when the table was built.",
+}
+_VIEW_CATALOG_COLUMNS = {
+    **_CATALOG_COLUMNS,
+    "release": "The release of the gold layer that the view reads, or no value for the tables as they were when the "
+               "file was written.",
+    "snapshot_id": "The snapshot of the Iceberg table that the view reads.",
 }
 _METRICS_COLUMNS = {
     "metric": "The name of the metric.",
@@ -152,6 +163,8 @@ class DuckDBFile:
         left_out: The gold tables that the release does not hold, which the file does not have.
         source: Which version of the tables was read, in words.
         size: The size of the file in bytes.
+        views: How many of the tables are views that read the Iceberg table, which is what ``views=True`` writes, and
+            not copies. The rows of those are counted from the metadata of their tables.
     """
 
     path: Path
@@ -162,17 +175,23 @@ class DuckDBFile:
     left_out: tuple[str, ...]
     source: str
     size: int
+    views: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """The result as JSON-serialisable primitives."""
         return {"path": str(self.path), "release": self.release, "tables": list(self.tables), "rows": self.rows,
-                "metrics": self.metrics, "left_out": list(self.left_out), "source": self.source, "size": self.size}
+                "metrics": self.metrics, "left_out": list(self.left_out), "source": self.source, "size": self.size,
+                "views": self.views}
 
     def summary(self) -> str:
         """A sentence that says what the file holds."""
-        tables = f"{len(self.tables)} table{'' if len(self.tables) == 1 else 's'}"
+        kind = "view" if self.views and self.views == len(self.tables) else "table"
+        tables = f"{len(self.tables)} {kind}{'' if len(self.tables) == 1 else 's'}"
         metrics = f" and {self.metrics} metric{'' if self.metrics == 1 else 's'}" if self.metrics else ""
         text = f"wrote {self.path}, {tables}{metrics}, from {self.source}, {self.size / 1024:.1f} KB"
+        if self.views:
+            text += (". A view reads its Iceberg table where it is, so a reader needs DuckDB's iceberg extension and "
+                     "the warehouse at the same path")
         if self.left_out:
             text += f". Left out, because {self.release} does not hold them, {', '.join(self.left_out)}"
         return text
@@ -256,6 +275,24 @@ class _Read:
     rows_in_snapshot: int
 
 
+def _pin(loaded: Any, gold: GoldConfig, snapshot: int | None) -> tuple[int | None, Any]:
+    """The snapshot of an Iceberg table that a read uses, and the snapshot itself.
+
+    ``None`` asks for the current snapshot, and a table that has none gives ``(None, None)``.
+
+    Raises:
+        ReleaseError: If ``snapshot`` was named and the table no longer has it.
+    """
+    if snapshot is None:
+        current = loaded.current_snapshot()
+        return (current.snapshot_id, current) if current is not None else (None, None)
+    found = loaded.snapshot_by_id(snapshot)
+    if found is None:
+        raise releases.ReleaseError(f"the release names snapshot {snapshot} of {gold.table}, which no longer exists, "
+                                    f"so the table cannot be read as of that release")
+    return snapshot, found
+
+
 def _read(gold: GoldConfig, snapshot: int | None, check: Callable[[int], None] | None = None) -> _Read:
     """The rows of a gold table at a snapshot, or at its current one when ``snapshot`` is ``None``.
 
@@ -265,13 +302,7 @@ def _read(gold: GoldConfig, snapshot: int | None, check: Callable[[int], None] |
 
     iceberg = iceberg_from_config(gold.config, "target", must_exist=True)
     loaded = iceberg.table()
-    if snapshot is None:
-        current = loaded.current_snapshot()
-        snapshot = current.snapshot_id if current is not None else None
-    elif loaded.snapshot_by_id(snapshot) is None:
-        raise releases.ReleaseError(f"the release names snapshot {snapshot} of {gold.table}, which no longer exists, "
-                                    f"so the table cannot be read as of that release")
-    found = loaded.snapshot_by_id(snapshot) if snapshot is not None else None
+    snapshot, found = _pin(loaded, gold, snapshot)
     if check is not None:
         try:
             counted = int((loaded.scan(snapshot_id=snapshot) if snapshot is not None else loaded.scan()).count())
@@ -281,6 +312,31 @@ def _read(gold: GoldConfig, snapshot: int | None, check: Callable[[int], None] |
             check(counted)
     data = iceberg.get(snapshot_id=snapshot)
     return _Read(data, snapshot, _moment(found.timestamp_ms) if found is not None else None, data.num_rows)
+
+
+@dataclass(frozen=True)
+class _Located:
+    """Where the rows of a gold table at a snapshot are, found without reading them."""
+
+    metadata_location: str
+    snapshot_id: int | None
+    built_at: dt.datetime | None
+    rows_in_snapshot: int
+
+
+def _locate(gold: GoldConfig, snapshot: int | None) -> _Located:
+    """The metadata file of a gold table and the snapshot that a read uses, and how many rows that snapshot has.
+
+    The rows are counted from the metadata of the table, and none is read, so a table that is too large to copy can be
+    located.
+    """
+    from local_data_platform.pipeline.builders import iceberg_from_config
+
+    loaded = iceberg_from_config(gold.config, "target", must_exist=True).table()
+    snapshot, found = _pin(loaded, gold, snapshot)
+    rows = int(loaded.scan(snapshot_id=snapshot).count()) if snapshot is not None else 0
+    return _Located(str(loaded.metadata_location), snapshot,
+                    _moment(found.timestamp_ms) if found is not None else None, rows)
 
 
 def _snapshot_of(version: _Version, table: str) -> int | None:
@@ -683,6 +739,33 @@ def _create(connection: Any, name: str, data: pa.Table, comment: str | None, col
             connection.execute(f"COMMENT ON COLUMN ldp_out.main.{_quote(name)}.{_quote(column)} IS {_literal(text)}")
 
 
+def _need_iceberg(connection: Any) -> None:
+    """Make sure that this connection can read an Iceberg table, which a view that ``--views`` writes has to do.
+
+    Raises:
+        EngineNotFound: If DuckDB's ``iceberg`` extension is not installed and loadable. It is never downloaded here.
+    """
+    from local_data_platform.engine.duckdb import DuckDBEngine
+
+    if not DuckDBEngine(connection=connection).iceberg_extension:
+        raise EngineNotFound("The DuckDB file with views needs DuckDB's iceberg extension, because each view reads its "
+                             "table with iceberg_scan, and the extension is not installed here. " + ICEBERG_HINT)
+
+
+def _create_view(connection: Any, name: str, located: _Located, comment: str | None,
+                 columns: Mapping[str, str]) -> None:
+    """A view of a gold table at the snapshot that a release names, as the comments of ``_create`` describe a copy."""
+    view = f"ldp_out.main.{_quote(name)}"
+    connection.execute(f"CREATE VIEW {view} AS SELECT * FROM iceberg_scan({_literal(located.metadata_location)}, "
+                       f"snapshot_from_id => {int(located.snapshot_id)})")
+    if comment:
+        connection.execute(f"COMMENT ON VIEW {view} IS {_literal(comment)}")
+    held = {row[0] for row in connection.execute(f"DESCRIBE {view}").fetchall()}
+    for column, text in columns.items():
+        if column in held:  # the contract may describe a column that an older snapshot does not have
+            connection.execute(f"COMMENT ON COLUMN {view}.{_quote(column)} IS {_literal(text)}")
+
+
 def _catalog_table(rows: Iterable[Mapping[str, Any]]) -> pa.Table:
     import pyarrow as pa
 
@@ -704,7 +787,7 @@ def _metrics_table(rows: Iterable[Mapping[str, Any]]) -> pa.Table:
 
 
 def write_duckdb_file(folder: str | os.PathLike, out: str | os.PathLike, *, release: str | None = None,
-                      live: bool = False) -> DuckDBFile:
+                      live: bool = False, views: bool = False) -> DuckDBFile:
     """Write the gold layer of a folder as one DuckDB file.
 
     The file holds a copy of every gold table of the release, a ``COMMENT ON TABLE`` and a ``COMMENT ON COLUMN`` from
@@ -712,6 +795,12 @@ def write_duckdb_file(folder: str | os.PathLike, out: str | os.PathLike, *, rele
     definitions. The tables are in the ``main`` schema under their own names, so that ``SELECT * FROM daily_sales``
     works, and no schema has the name of the file, which DuckDB would find ambiguous. The file needs no DuckDB
     extension to open, and it is written in a storage version that DuckDB 1.x opens too.
+
+    With ``views`` the file holds a view of each gold table in place of a copy, for tables that are too large to copy.
+    A view is ``SELECT * FROM iceberg_scan(...)`` on the metadata file of the table and the snapshot that the release
+    names, so it shows the same rows as the copy would, and the file is as small as its two tables. Reading a view
+    needs DuckDB's ``iceberg`` extension and access to the warehouse at the address that the view holds, and so does
+    writing it. A table that has no snapshot yet has nothing to point at, so it is written as an empty table.
 
     It is written to a temporary path next to ``out`` and renamed, so a reader never sees a half-written file, and a
     failure leaves the file that was there. The release is the current one by default, ``release`` names another, and
@@ -723,6 +812,7 @@ def write_duckdb_file(folder: str | os.PathLike, out: str | os.PathLike, *, rele
         out: The file. ``{release}`` in its name is replaced by the name of the release, or by ``live``.
         release: Copy this release, such as ``r3``, and not the current one.
         live: Copy the tables as they are now.
+        views: Write views of the Iceberg tables and not copies.
 
     Returns:
         What was written.
@@ -732,7 +822,7 @@ def write_duckdb_file(folder: str | os.PathLike, out: str | os.PathLike, *, rele
             file is not valid.
         ReleaseError: If ``release`` is not a release of the folder, or a snapshot of it is gone.
         TableNotFound: If a gold table does not exist yet.
-        EngineNotFound: If duckdb is not installed.
+        EngineNotFound: If duckdb is not installed, or ``views`` is set and its iceberg extension is not.
     """
     duckdb = _import_duckdb()
     version = _version(folder, release, live)
@@ -752,16 +842,26 @@ def write_duckdb_file(folder: str | os.PathLike, out: str | os.PathLike, *, rele
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = _temporary(path)
     rows = 0
+    viewed = 0
     try:
         with contextlib.closing(duckdb.connect()) as connection:
+            if views:
+                _need_iceberg(connection)
             _attach(connection, duckdb, temporary)
             for gold in sorted(wanted, key=lambda item: item.table):
                 entry = entries.get(gold.table)
-                read = _read(gold, releases.snapshot_for(gold.table, chosen))
+                snapshot = releases.snapshot_for(gold.table, chosen)
+                located = _locate(gold, snapshot) if views else None
                 docs = {item.name: item.description for item in entry.columns if item.description} if entry else {}
                 name = names[gold.table]
-                _create(connection, name, read.rows, entry.description if entry else None, docs)
-                rows += read.rows.num_rows
+                if located is not None and located.snapshot_id is not None:
+                    read: _Read | _Located = located
+                    _create_view(connection, name, located, entry.description if entry else None, docs)
+                    viewed += 1
+                else:
+                    read = _read(gold, snapshot)
+                    _create(connection, name, read.rows, entry.description if entry else None, docs)
+                rows += read.rows_in_snapshot
                 catalog_rows.append({"table_name": name, "description": entry.description if entry else None,
                                      "owner": entry.owner if entry else None, "grain": entry.grain if entry else None,
                                      "release": chosen.name if chosen is not None else None,
@@ -769,7 +869,7 @@ def write_duckdb_file(folder: str | os.PathLike, out: str | os.PathLike, *, rele
                                      "built_at": read.built_at.replace(tzinfo=None) if read.built_at else None})
             _create(connection, CATALOG_TABLE, _catalog_table(catalog_rows),
                     "One row for each gold table in this file, with what it means, who owns it and where it came "
-                    "from.", _CATALOG_COLUMNS)
+                    "from.", _VIEW_CATALOG_COLUMNS if viewed else _CATALOG_COLUMNS)
             _create(connection, METRICS_TABLE, _metrics_table(metric_rows),
                     "The metrics that are defined on the tables of this file.", _METRICS_COLUMNS)
             connection.execute("DETACH ldp_out")
@@ -781,7 +881,8 @@ def write_duckdb_file(folder: str | os.PathLike, out: str | os.PathLike, *, rele
     source = _source_text(version)
     logger.info("Wrote %s with %d tables from %s", path, len(tables), source)
     return DuckDBFile(path=path, release=chosen.name if chosen is not None else None, tables=tables, rows=rows,
-                      metrics=len(metric_rows), left_out=left_out, source=source, size=path.stat().st_size)
+                      metrics=len(metric_rows), left_out=left_out, source=source, size=path.stat().st_size,
+                      views=viewed)
 
 
 def _source_text(version: _Version) -> str:
@@ -847,6 +948,7 @@ __all__ = [
     "EXTENSIONS",
     "Exported",
     "FileOutcome",
+    "ICEBERG_HINT",
     "METRICS_TABLE",
     "STORAGE_VERSION",
     "XLSX_CELL_CHARS",

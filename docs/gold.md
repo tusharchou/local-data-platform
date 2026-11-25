@@ -805,6 +805,8 @@ sum(revenue) / NULLIF(sum(orders), 0)
 
 `ldp gold build config --duckdb out/gold.duckdb` writes the same file right after every release, so the file on the shared drive always matches the release that readers see. A `{release}` in the file name gives every release a file of its own.
 
+A table that is too large to copy can be a view in the file instead. `ldp gold duckdb config --out out/gold.duckdb --views` writes `SELECT * FROM iceberg_scan(...)` on the snapshot of the release, so the file is small and shows the same rows, comments and catalog. A view reads the table where it is, so whoever opens the file needs DuckDB's iceberg extension and the warehouse at the same path, which means the file cannot go on a shared drive alone. A later build does not change what a view shows, because the view reads the snapshot of the release, and `ldp maintain` never expires a released snapshot. [BI tools on the gold DuckDB file](bi_tools.md) shows how Superset, Metabase and Evidence open the file.
+
 ## Part 8. Let an agent read the gold layer
 
 An AI agent that can read the whole lake finds `raw.orders` as readily as `gold.gold_daily_sales`, and it has no way to know which of them to trust. `ldp mcp --layer gold` serves only the gold tables, which are the ones that have an owner, a meaning and a gate, and nothing upstream of them. It also serves the metrics, so the agent asks for the average ticket by name and does not write the division. Run on its own, the server waits for a client, so `< /dev/null` closes its input and it stops after it says what it serves.

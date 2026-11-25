@@ -179,7 +179,8 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
                     "DuckDB command line, in the DuckDB UI with duckdb -ui FILE and in the BI tools that read DuckDB, "
                     "and needs no extension. It is written to a temporary path and renamed, so a reader never sees "
                     "half a file. A gold table that the release does not hold is left out. {release} in the name "
-                    "is replaced by the release.",
+                    "is replaced by the release. With --views the file holds a view of each table in place of a copy, "
+                    "for tables that are too large to copy.",
         epilog="The DuckDB UI fetches its web pages from ui.duckdb.org. Example: ldp gold duckdb ldp_demo/robotics "
                "--out gold.duckdb")
     duckdb.add_argument("folder", metavar="DIR", help="a folder of dataset configs")
@@ -189,6 +190,10 @@ def add_cli(subparsers: Any, parents: Sequence[Any] = ()) -> Any:
                       help="copy the tables as release RELEASE of ldp gold build names them, such as r2. The default "
                            "is the current release")
     when.add_argument("--live", action="store_true", help="copy the tables as they are now, and no release")
+    duckdb.add_argument("--views", action="store_true",
+                        help="write a view of each table, which reads the Iceberg table with iceberg_scan at the "
+                             "snapshot of the release, and not a copy. The file is small, and whoever opens it needs "
+                             "DuckDB's iceberg extension and the warehouse at the same path")
     duckdb.add_argument("--json", action="store_true", help="print the result as JSON")
     duckdb.set_defaults(handler=_cmd_duckdb)
 
@@ -280,7 +285,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
 def _cmd_duckdb(args: argparse.Namespace) -> int:
     from local_data_platform.gold import serve
 
-    done = serve.write_duckdb_file(args.folder, args.out, release=args.release, live=args.live)
+    done = serve.write_duckdb_file(args.folder, args.out, release=args.release, live=args.live, views=args.views)
     print(json.dumps(done.to_dict(), indent=2) if args.json else done.summary())
     return 0
 

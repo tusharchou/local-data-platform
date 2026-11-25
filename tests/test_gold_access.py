@@ -30,6 +30,7 @@ from local_data_platform.format.excel import Excel
 from local_data_platform.gold import release as releases
 from local_data_platform.gold import serve
 from local_data_platform.gold.build import build_gold
+from tests.support import requires_iceberg_extension
 from tests.test_gold_build import GOLD_CATALOG, external, gold, silver, table, write
 from tests.test_gold_release import more_orders
 
@@ -925,6 +926,242 @@ def test_ldp_gold_duckdb_needs_an_out_and_a_folder_with_a_gold_table(layer, tmp_
     empty.mkdir()
     code, _, err = cli(capsys, "gold", "duckdb", empty, "--out", tmp_path / "x.duckdb")
     assert code == 1 and "has no gold config" in err and not (tmp_path / "x.duckdb").exists()
+
+
+# --------------------------------------------------------------------------- the DuckDB file with views
+
+
+def query_views(path: Path, sql: str) -> list[tuple]:
+    """A read-only connection with DuckDB's iceberg extension loaded, as a BI tool needs to read a file of views."""
+    connection = duckdb.connect(str(path), read_only=True)
+    try:
+        connection.execute("LOAD iceberg")
+        return connection.execute(sql).fetchall()
+    finally:
+        connection.close()
+
+
+@requires_iceberg_extension
+def test_a_file_of_views_has_a_view_for_each_gold_table_with_the_rows_and_comments_of_the_release(layer, tmp_path):
+    out = tmp_path / "gold.duckdb"
+
+    done = serve.write_duckdb_file(layer, out, views=True)
+
+    assert (done.path, done.release, done.tables, done.rows, done.metrics, done.left_out, done.views) == (
+        out, "r1", ("gold_revenue",), 2, 2, (), 1)
+    assert query(out, "SELECT table_name FROM duckdb_tables() ORDER BY 1") == [("_catalog",), ("_metrics",)]
+    assert query(out, "SELECT view_name FROM duckdb_views() WHERE NOT internal") == [("gold_revenue",)]
+    assert query_views(out, "SELECT * FROM gold_revenue ORDER BY 1") == [("north", 2, 30.5), ("south", 1, 7.25)]
+    assert query(out, "SELECT comment FROM duckdb_views() WHERE view_name = 'gold_revenue'") == [
+        ("The gold_revenue table.",)]
+    assert query(out, "SELECT column_name, comment FROM duckdb_columns() WHERE table_name = 'gold_revenue' "
+                      "ORDER BY column_index") == [("restaurant", "The restaurant."), ("orders", "How many orders."),
+                                                   ("revenue", "What they cost.")]
+    assert leftovers(tmp_path) == []
+
+
+@requires_iceberg_extension
+def test_a_file_of_views_and_a_file_of_copies_show_the_same_rows_comments_catalog_and_metrics(layer, tmp_path):
+    serve.write_duckdb_file(layer, tmp_path / "copies.duckdb")
+    serve.write_duckdb_file(layer, tmp_path / "views.duckdb", views=True)
+
+    for sql in ("SELECT * FROM gold_revenue ORDER BY 1", "SELECT * FROM _catalog", "SELECT * FROM _metrics ORDER BY 1"):
+        assert query_views(tmp_path / "views.duckdb", sql) == query_views(tmp_path / "copies.duckdb", sql), sql
+    comments = ("SELECT table_name, column_name, comment FROM duckdb_columns() WHERE table_name = 'gold_revenue' "
+                "ORDER BY column_index")
+    assert query(tmp_path / "views.duckdb", comments) == query(tmp_path / "copies.duckdb", comments)
+
+
+@requires_iceberg_extension
+def test_a_view_reads_the_snapshot_of_its_release_and_a_later_build_does_not_change_what_it_shows(layer, tmp_path):
+    serve.write_duckdb_file(layer, tmp_path / "before.duckdb", views=True)
+    more_orders(layer)
+    build_gold(layer, release=True)  # r2
+
+    newer = serve.write_duckdb_file(layer, tmp_path / "r2.duckdb", views=True)
+    older = serve.write_duckdb_file(layer, tmp_path / "r1.duckdb", release="r1", views=True)
+    live = serve.write_duckdb_file(layer, tmp_path / "live.duckdb", live=True, views=True)
+
+    assert (newer.release, newer.rows, older.release, older.rows, live.release, live.rows) == (
+        "r2", 3, "r1", 2, None, 3)
+    for name, rows in (("before", 2), ("r1", 2), ("r2", 3), ("live", 3)):
+        assert query_views(tmp_path / f"{name}.duckdb", "SELECT count(*) FROM gold_revenue") == [(rows,)], name
+    snapshots = {name: query(tmp_path / f"{name}.duckdb", "SELECT snapshot_id FROM _catalog")
+                 for name in ("before", "r1", "r2")}
+    assert snapshots["before"] == snapshots["r1"] != snapshots["r2"]
+
+
+@requires_iceberg_extension
+def test_the_catalog_of_a_file_of_views_says_that_the_views_read_the_release_and_snapshot(layer, tmp_path):
+    views, copies = tmp_path / "views.duckdb", tmp_path / "copies.duckdb"
+    serve.write_duckdb_file(layer, views, views=True)
+    serve.write_duckdb_file(layer, copies)
+    sql = ("SELECT column_name, comment FROM duckdb_columns() WHERE table_name = '_catalog' AND column_name IN "
+           "('release', 'snapshot_id') ORDER BY column_name")
+
+    assert query(views, sql) == [("release", serve._VIEW_CATALOG_COLUMNS["release"]),
+                                 ("snapshot_id", serve._VIEW_CATALOG_COLUMNS["snapshot_id"])]
+    assert query(copies, sql) == [("release", serve._CATALOG_COLUMNS["release"]),
+                                  ("snapshot_id", serve._CATALOG_COLUMNS["snapshot_id"])]
+    assert "copied" in serve._CATALOG_COLUMNS["snapshot_id"] and "copied" in serve._CATALOG_COLUMNS["release"]
+    for column in ("release", "snapshot_id"):
+        assert "the view reads" in serve._VIEW_CATALOG_COLUMNS[column]
+        assert "copied" not in serve._VIEW_CATALOG_COLUMNS[column]
+
+
+@requires_iceberg_extension
+def test_a_reader_without_the_iceberg_extension_can_list_a_file_of_views_and_is_told_what_it_lacks(layer, tmp_path):
+    out = tmp_path / "gold.duckdb"
+    serve.write_duckdb_file(layer, out, views=True)
+
+    assert query(out, "SELECT table_name FROM _catalog") == [("gold_revenue",)]
+    assert query(out, "SELECT column_name FROM duckdb_columns() WHERE table_name = 'gold_revenue' ORDER BY 1") == [
+        ("orders",), ("restaurant",), ("revenue",)]
+    with pytest.raises(duckdb.Error, match="iceberg"):
+        query(out, "SELECT * FROM gold_revenue")
+
+
+@requires_iceberg_extension
+def test_a_table_that_has_no_snapshot_to_point_at_is_an_empty_table_in_a_file_of_views(layer, tmp_path):
+    gold(layer, "gold_empty")
+    table(layer, "gold_empty")._create(pa.schema([("restaurant", pa.string()), ("orders", pa.int64()),
+                                                  ("revenue", pa.float64())]))
+    out = tmp_path / "gold.duckdb"
+
+    done = serve.write_duckdb_file(layer, out, live=True, views=True)
+
+    assert (done.tables, done.views, done.rows) == (("gold_empty", "gold_revenue"), 1, 2)
+    tables = query(out, "SELECT table_name FROM duckdb_tables() ORDER BY 1")
+    assert tables == [("_catalog",), ("_metrics",), ("gold_empty",)]
+    assert query(out, "SELECT view_name FROM duckdb_views() WHERE NOT internal") == [("gold_revenue",)]
+    counts = "SELECT (SELECT count(*) FROM gold_empty), (SELECT count(*) FROM gold_revenue)"
+    assert query_views(out, counts) == [(0, 2)]
+    assert query(out, "SELECT table_name, snapshot_id IS NULL FROM _catalog ORDER BY 1") == [
+        ("gold_empty", True), ("gold_revenue", False)]
+
+
+@requires_iceberg_extension
+def test_a_comment_on_a_column_that_the_view_does_not_have_is_left_out_and_is_no_error(layer, tmp_path):
+    located = serve._locate(serve._version(layer, None, False).gold[0], None)
+    connection = duckdb.connect()
+    try:
+        connection.execute("LOAD iceberg")
+        connection.execute(f"ATTACH '{tmp_path / 'x.duckdb'}' AS ldp_out")
+        serve._create_view(connection, "t", located, "A view.", {"restaurant": "A column.", "gone": "Not a column."})
+
+        found = connection.execute("SELECT column_name, comment FROM duckdb_columns() WHERE table_name = 't' AND "
+                                   "comment IS NOT NULL").fetchall()
+    finally:
+        connection.close()
+
+    assert found == [("restaurant", "A column.")]
+
+
+@requires_iceberg_extension
+def test_a_view_with_a_hyphen_in_its_name_and_quotes_in_its_columns_and_comments_is_written_as_it_is(tmp_path):
+    silver(tmp_path)
+    columns = {"a b": "It's \"quoted\".", "it's": "A 'name'.", 'say "hi"': "A name with double quotes."}
+    gold(tmp_path, "gold-orders", sql="SELECT 1 AS \"a b\", 2 AS \"it's\", 3 AS \"say \"\"hi\"\"\"", columns=columns,
+         docs={"description": "Don't break; DROP TABLE x --"})
+    build_gold(tmp_path, release=True)
+    out = tmp_path / "gold.duckdb"
+
+    done = serve.write_duckdb_file(tmp_path, out, views=True)
+
+    assert done.tables == ("gold-orders",) and done.views == 1
+    assert query(out, "SELECT comment FROM duckdb_views() WHERE view_name = 'gold-orders'") == [
+        ("Don't break; DROP TABLE x --",)]
+    assert query(out, "SELECT column_name, comment FROM duckdb_columns() WHERE table_name = 'gold-orders' ORDER BY "
+                      "column_index") == [("a b", "It's \"quoted\"."), ("it's", "A 'name'."),
+                                          ('say "hi"', "A name with double quotes.")]
+    assert query_views(out, "SELECT \"a b\", \"it's\", \"say \"\"hi\"\"\" FROM \"gold-orders\"") == [(1, 2, 3)]
+
+
+@requires_iceberg_extension
+def test_a_snapshot_that_a_release_names_and_that_is_gone_is_an_error_for_views_too_and_nothing_is_written(
+        layer, tmp_path, monkeypatch):
+    monkeypatch.setattr(releases, "snapshot_for", lambda name, chosen: 12345 if chosen is not None else None)
+    out = tmp_path / "gold.duckdb"
+
+    with pytest.raises(releases.ReleaseError, match="names snapshot 12345 of gold.gold_revenue, which no longer"):
+        serve.write_duckdb_file(layer, out, views=True)
+
+    assert not out.exists() and leftovers(tmp_path) == []
+
+
+@requires_iceberg_extension
+def test_ldp_gold_duckdb_views_writes_the_views_and_says_what_a_reader_needs(layer, tmp_path, capsys):
+    out = tmp_path / "gold.duckdb"
+
+    code, text, err = cli(capsys, "gold", "duckdb", layer, "--out", out, "--views")
+
+    assert code == 0 and err == ""
+    assert text.startswith(f"wrote {out}, 1 view and 2 metrics, from release r1, cut ")
+    assert text.endswith(". A view reads its Iceberg table where it is, so a reader needs DuckDB's iceberg extension "
+                         "and the warehouse at the same path\n")
+    assert query_views(out, "SELECT count(*) FROM gold_revenue") == [(2,)]
+    code, text, _ = cli(capsys, "gold", "duckdb", layer, "--out", tmp_path / "json.duckdb", "--views", "--json")
+    assert code == 0 and json.loads(text)["views"] == 1
+
+
+def test_views_need_the_iceberg_extension_and_nothing_is_written_without_it(layer, tmp_path, monkeypatch):
+    from local_data_platform.engine.duckdb import DuckDBEngine
+
+    monkeypatch.setattr(DuckDBEngine, "iceberg_extension", property(lambda self: False))
+    out = tmp_path / "gold.duckdb"
+
+    with pytest.raises(EngineNotFound, match=r"needs DuckDB's iceberg extension.*INSTALL iceberg"):
+        serve.write_duckdb_file(layer, out, views=True)
+
+    assert not out.exists() and leftovers(tmp_path) == []
+    assert serve.write_duckdb_file(layer, out).views == 0, "copies need no extension, whatever the machine has"
+
+
+def test_ldp_gold_duckdb_views_without_the_iceberg_extension_says_what_to_install(
+        layer, tmp_path, capsys, monkeypatch):
+    from local_data_platform.engine.duckdb import DuckDBEngine
+
+    monkeypatch.setattr(DuckDBEngine, "iceberg_extension", property(lambda self: False))
+    out = tmp_path / "gold.duckdb"
+
+    code, text, err = cli(capsys, "gold", "duckdb", layer, "--out", out, "--views")
+
+    assert code == 1 and text == "" and not out.exists()
+    assert "needs DuckDB's iceberg extension" in err and "INSTALL iceberg" in err
+
+
+def test_a_file_of_copies_has_no_view_and_says_nothing_about_views(layer, tmp_path):
+    out = tmp_path / "gold.duckdb"
+
+    done = serve.write_duckdb_file(layer, out)
+
+    assert done.views == 0 and done.to_dict()["views"] == 0
+    assert "view" not in done.summary() and done.summary().startswith(f"wrote {out}, 1 table and 2 metrics, ")
+    assert query(out, "SELECT count(*) FROM duckdb_views() WHERE NOT internal") == [(0,)]
+    assert query(out, "SELECT comment FROM duckdb_columns() WHERE table_name = '_catalog' AND column_name = "
+                      "'release'") == [(serve._CATALOG_COLUMNS["release"],)]
+
+
+def test_the_summary_of_a_file_of_views_counts_views_and_says_what_a_reader_needs():
+    path = Path("gold.duckdb")
+    base = {"path": path, "release": "r1", "tables": ("a", "b"), "rows": 5, "metrics": 0, "left_out": (),
+            "source": "release r1", "size": 2048}
+
+    all_views = serve.DuckDBFile(**base, views=2).summary()
+    some = serve.DuckDBFile(**base, views=1).summary()
+
+    assert all_views == ("wrote gold.duckdb, 2 views, from release r1, 2.0 KB. A view reads its Iceberg table where it "
+                         "is, so a reader needs DuckDB's iceberg extension and the warehouse at the same path")
+    assert some.startswith("wrote gold.duckdb, 2 tables, from release r1, 2.0 KB. A view reads ")
+    assert serve.DuckDBFile(**base).summary() == "wrote gold.duckdb, 2 tables, from release r1, 2.0 KB"
+    assert serve.DuckDBFile(**base, views=2).to_dict()["views"] == 2
+
+
+def test_ldp_gold_duckdb_lists_views_in_its_help(capsys):
+    code, out, _ = cli(capsys, "gold", "duckdb", "--help")
+
+    text = " ".join(out.split())
+    assert code == 0 and "--views" in text and "iceberg extension" in text and "too large to copy" in text
 
 
 # --------------------------------------------------------------------------- ldp gold build --duckdb
