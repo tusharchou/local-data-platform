@@ -5,7 +5,9 @@ in the DuckDB file that dbt builds in, and a generated YAML file declares them a
 The contract is ``docs/design/warehousing.md``.
 
 * **View mode**: each relation is a persistent view over DuckDB's ``iceberg_scan`` of the table's
-  metadata file, pinned to the snapshot that was current when registration started.
+  metadata file, pinned to the snapshot that was current when registration started. On a DuckDB
+  that has the ``parquet_can_have_nan`` setting the scan also says ``can_have_nan => true``, so
+  that ``isnan`` finds the NaN rows of files that pyarrow wrote, whichever connection reads the view.
 * **Copy mode**: each relation is a DuckDB table holding that snapshot. It works without the
   ``iceberg`` extension.
 * **Auto** (the default): views when the extension loads without a download, copies otherwise.
@@ -280,10 +282,13 @@ def _register_one(connection: Any, table: Any, use_views: bool, mode: str,
     kind, rows = "table", None
     try:
         if use_views and pinned is not None:
+            from local_data_platform.engine.duckdb import nan_scan_arguments
+
             try:
+                # The view is read by other connections (dbt's), so it carries the option of the scan itself.
                 connection.execute(
                     f"CREATE VIEW {relation} AS SELECT * FROM iceberg_scan({_quote_string(iceberg.metadata_location)}, "
-                    f"snapshot_from_id => {int(pinned)})")
+                    f"snapshot_from_id => {int(pinned)}{nan_scan_arguments(connection)})")
                 kind = "view"
             except duckdb.CatalogException:
                 raise

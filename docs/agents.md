@@ -259,7 +259,9 @@ checks:
    `allow_community_extensions` and `allow_persistent_secrets` are all off. `temp_directory` is
    empty, which means no spill files, and also stops DuckDB from adding a temp folder to the
    allowed paths. Python replacement scans are off, so SQL can't read the server's own
-   variables.
+   variables. On a DuckDB that has the `parquet_can_have_nan` setting (2.0.1 has it and 1.5.6
+   has not) it is set to true, so that `isnan` finds the NaN rows of files that pyarrow wrote,
+   in the views and in an `iceberg_scan` that the SQL of an agent makes.
 2. It loads `iceberg`, and registers each table as a view in a schema named after its namespace.
    The view uses `iceberg_scan('<metadata file>')` when every file the snapshot reads is local and
    under the table's location, and an Arrow copy scanned by pyiceberg otherwise. Tables on `s3://`

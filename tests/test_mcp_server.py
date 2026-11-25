@@ -52,6 +52,7 @@ from local_data_platform.mcp_server.discovery import (  # noqa: E402
 )
 from local_data_platform.mcp_server.guard import first_keyword  # noqa: E402
 from local_data_platform.mcp_server.sandbox import local_path  # noqa: E402
+from tests.support import add_nan_table  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TOOL_NAMES = ["describe_table", "get_dataset", "list_metrics", "list_tables", "query", "query_metric", "sample_rows",
@@ -469,6 +470,30 @@ def test_native_iceberg_scan_is_preferred(tools):
     views = _ok(tools, "query", sql="SELECT sql FROM duckdb_views() WHERE view_name = 'rides' "
                                     "AND schema_name = 'demo'")
     assert "iceberg_scan" in views["rows"][0][0]
+
+
+def test_the_sandbox_keeps_nan_rows_where_duckdb_has_the_setting(tools):
+    # DuckDB 2.0.1 skips a Parquet row group on its min and max statistics, which pyarrow (so pyiceberg) writes without
+    # NaN, unless parquet_can_have_nan is true. DuckDB 1.5.6 has no such setting, and the sandbox leaves it out.
+    with duckdb.connect() as connection:
+        has_setting = bool(connection.execute(
+            "SELECT 1 FROM duckdb_settings() WHERE name = 'parquet_can_have_nan'").fetchall())
+    assert tools.sandbox.settings().get("parquet_can_have_nan") == ("true" if has_setting else None)
+
+
+def test_native_views_and_scans_find_nan_rows_in_files_that_pyarrow_wrote(tmp_path):
+    iceberg = add_nan_table(tmp_path, "nan", "t").table()
+    snapshot = iceberg.current_snapshot().snapshot_id
+    lake_tools = LakeTools.from_sources([tmp_path / "config"], allow="nan.t", audit_path=tmp_path / "audit.jsonl",
+                                        max_rows=50, timeout_s=10)
+    try:
+        _native_or_skip(lake_tools)
+        scan = f"iceberg_scan('{iceberg.metadata_location}', snapshot_from_id => {snapshot})"  # as an agent writes it
+        for source in ("nan.t", scan):
+            assert _ok(lake_tools, "query", sql=f"SELECT id FROM {source} WHERE isnan(x) ORDER BY id")["rows"] == [[2]]
+            assert _ok(lake_tools, "query", sql=f"SELECT id FROM {source} WHERE x IS NULL ORDER BY id")["rows"] == [[4]]
+    finally:
+        lake_tools.close()
 
 
 def test_views_refresh_after_a_new_commit(tools, lake, make_table):

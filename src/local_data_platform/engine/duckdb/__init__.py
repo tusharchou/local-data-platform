@@ -89,6 +89,31 @@ def _columns(names: Sequence[str]) -> str:
     return ", ".join(quote_identifier(name) for name in names)
 
 
+def has_parquet_nan_setting(connection: Any) -> bool:
+    """Whether the DuckDB behind ``connection`` has the ``parquet_can_have_nan`` setting.
+
+    DuckDB 2.0.1 has it, with the default false, and 1.5.6 has not. A Parquet file whose statistics have no
+    ``nan_count`` is then taken to hold no NaN outside its min and max, and a row group that cannot match a predicate
+    on those statistics is skipped. pyarrow, and so pyiceberg, writes no ``nan_count`` and leaves NaN out of min and
+    max, so on DuckDB 2.0.1 ``isnan(fare)`` finds no row of a table that has NaN in ``fare``. A caller that reads
+    Iceberg tables turns the assumption off with ``SET parquet_can_have_nan = true`` on a connection that it owns, or
+    with :func:`nan_scan_arguments` in a view that other connections read.
+    """
+    return bool(connection.execute("SELECT 1 FROM duckdb_settings() WHERE name = 'parquet_can_have_nan'").fetchall())
+
+
+def nan_scan_arguments(connection: Any) -> str:
+    """``", can_have_nan => true"`` to put after the other arguments of an ``iceberg_scan``, ``""`` where DuckDB has no
+    ``parquet_can_have_nan`` setting.
+
+    The option turns off, for that scan, the assumption that :func:`has_parquet_nan_setting` describes, so the NaN rows
+    of a pyiceberg table are read as pyiceberg reads them. A view that other connections read, such as the persistent
+    views of the dbt sources, has to carry the option itself, because a ``SET`` holds for one connection only.
+    ``iceberg_metadata`` and ``iceberg_snapshots`` take no such option.
+    """
+    return ", can_have_nan => true" if has_parquet_nan_setting(connection) else ""
+
+
 @dataclass
 class _Registration:
     """What the engine registered under an alias."""
@@ -444,7 +469,7 @@ class DuckDBEngine(Engine):
             pinned = iceberg_table.current_snapshot().snapshot_id
         registration = _Registration(native=True, table=iceberg_table,
                                      metadata_location=iceberg_table.metadata_location, snapshot_id=pinned)
-        arguments = self._scan_arguments(registration) + self._nan_arguments()
+        arguments = self._scan_arguments(registration) + nan_scan_arguments(self._connection)
         sql = f"SELECT * FROM iceberg_scan({arguments}) AS {quote_identifier(SCAN_RELATION)}"
         if row_filter is not None:
             scan = iceberg_table.scan(snapshot_id=snapshot_id) if snapshot_id is not None else iceberg_table.scan()
@@ -508,20 +533,6 @@ class DuckDBEngine(Engine):
             arguments.append(f"snapshot_from_id => {int(registration.snapshot_id)}")
         return ", ".join(arguments)
 
-    def _nan_arguments(self) -> str:
-        """``", can_have_nan => true"`` when DuckDB has the ``parquet_can_have_nan`` setting, else ``""``.
-
-        DuckDB 2.0.1 has the setting, with the default false, and 1.5.6 has not. A Parquet file whose statistics
-        have no ``nan_count`` is then taken to hold no NaN outside its min and max, and a row group that cannot
-        match a predicate on those statistics is skipped. pyarrow, and so pyiceberg, writes no ``nan_count`` and
-        leaves NaN out of min and max, so on DuckDB 2.0.1 ``isnan(fare)`` found no row of a table that has NaN in
-        ``fare``. The ``can_have_nan`` option of ``iceberg_scan`` turns that assumption off for the view. Where the
-        setting is missing the views keep the SQL they had.
-        """
-        rows = self._connection.execute(
-            "SELECT 1 FROM duckdb_settings() WHERE name = 'parquet_can_have_nan'").fetchall()
-        return ", can_have_nan => true" if rows else ""
-
     def _iceberg_unavailable(self) -> str | None:
         """``None`` when the iceberg extension is loaded, else why it isn't. Checked once per engine."""
         if self._iceberg_problem is _UNCHECKED:
@@ -573,4 +584,5 @@ class DuckDBEngine(Engine):
             raise RuntimeError("DuckDBEngine is closed")
 
 
-__all__ = ["DuckDBEngine", "ICEBERG_EXTENSION_HINT", "INSTALL_HINT", "UntranslatableFilter"]
+__all__ = ["DuckDBEngine", "ICEBERG_EXTENSION_HINT", "INSTALL_HINT", "UntranslatableFilter", "has_parquet_nan_setting",
+           "nan_scan_arguments"]

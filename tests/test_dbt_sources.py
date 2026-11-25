@@ -10,6 +10,7 @@ import logging
 import subprocess
 import sys
 import time
+import types
 from pathlib import Path
 
 import duckdb
@@ -19,10 +20,12 @@ from pyiceberg.types import LongType, NestedField, StringType
 
 from local_data_platform.catalog.local.iceberg import LocalIcebergCatalog
 from local_data_platform.dbt_layer import RegisteredSource, register_sources, sources_yaml
-from local_data_platform.dbt_layer.sources import GENERATED_HEADER
+from local_data_platform.dbt_layer.sources import GENERATED_HEADER, _register_one
 from local_data_platform.engine.duckdb import DuckDBEngine
 from local_data_platform.exceptions import ConfigError, EngineNotFound
 from tests.support import (
+    ScanConnection,
+    add_nan_table,
     add_table,
     build_lake,
     dataset_config,
@@ -260,6 +263,32 @@ def test_a_view_can_become_a_copy_and_back_on_later_calls(lake, database):
     assert relations(database)["raw.orders"] == "BASE TABLE"
     register_sources(database, configs=[lake], mode="view")
     assert relations(database)["raw.orders"] == "VIEW"
+
+
+@requires_iceberg_extension
+def test_a_persistent_view_finds_nan_rows_for_another_connection(tmp_path):
+    # dbt reads the view from a connection of its own, which a SET on the connection that registers it cannot reach.
+    # On DuckDB 2.0.1 isnan(x) finds no row of a file that pyarrow wrote, unless the view says can_have_nan.
+    add_nan_table(tmp_path, "nan", "t")
+    database = tmp_path / "build.duckdb"
+    register_sources(database, configs=[tmp_path / "config"], mode="view")
+    with duckdb.connect(str(database), read_only=True) as another:
+        assert another.execute("SELECT id FROM nan.t WHERE isnan(x) ORDER BY id").fetchall() == [(2,)]
+        assert another.execute("SELECT id FROM nan.t WHERE x IS NULL ORDER BY id").fetchall() == [(4,)]
+
+
+@pytest.mark.parametrize("has_nan_setting", [True, False])
+def test_a_persistent_view_asks_for_can_have_nan_only_where_duckdb_has_the_setting(tmp_path, has_nan_setting):
+    # It needs no extension, so CI runs it. DuckDB 1.5.6 has no such setting, and its view keeps the SQL it had.
+    iceberg = add_table(tmp_path, "raw", "orders", 3).table()
+    table = types.SimpleNamespace(namespace=("raw",), name="orders", load=lambda: iceberg)
+    connection = ScanConnection(has_nan_setting)
+
+    _register_one(connection, table, True, "view", {})
+
+    view, = [sql for sql in connection.statements if sql.startswith("CREATE VIEW")]
+    assert ("can_have_nan => true" in view) is has_nan_setting
+    assert "snapshot_from_id => " in view
 
 
 # --------------------------------------------------------------------------- the dbt sources file

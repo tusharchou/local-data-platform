@@ -275,6 +275,7 @@ from local_data_platform.engine.duckdb import ICEBERG_EXTENSION_HINT  # noqa: E4
 from local_data_platform.engine.duckdb.row_filter import (  # noqa: E402
     UntranslatableFilter, literal_sql, row_filter_to_sql)
 from local_data_platform.exceptions import ConfigError  # noqa: E402
+from tests.support import ScanConnection  # noqa: E402
 
 
 def _iceberg_extension_loads() -> bool:
@@ -560,32 +561,6 @@ def test_native_row_filter_is_pushed_into_iceberg_scan(rides):
     plan = "".join(plan.split())  # DuckDB 1.5 prints city='BKK' and DuckDB 2.0 prints city = 'BKK'
     assert "city='BKK'" in plan  # the view's WHERE, pushed into the scan
     assert "fare>150.0" in plan  # and the query's own predicate
-
-
-class ScanConnection:
-    """A stand-in DuckDB connection that records its SQL, reports the iceberg extension as loaded and says whether
-    DuckDB has the ``parquet_can_have_nan`` setting, which DuckDB 2.0.1 has and 1.5.6 has not. CI has no extension and
-    runs the tests that use it."""
-
-    def __init__(self, has_nan_setting: bool):
-        self.has_nan_setting = has_nan_setting
-        self.statements: list[str] = []
-        self._rows: list[tuple] = []
-
-    def execute(self, sql, params=None):
-        self.statements.append(sql)
-        self._rows = []
-        if "duckdb_extensions()" in sql:
-            self._rows = [(True, True)]
-        elif "duckdb_settings()" in sql and self.has_nan_setting:
-            self._rows = [(1,)]
-        return self
-
-    def fetchall(self):
-        return self._rows
-
-    def to_arrow_table(self):
-        return pa.table({})
 
 
 @pytest.mark.parametrize("has_nan_setting", [True, False])
