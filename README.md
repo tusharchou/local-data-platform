@@ -252,7 +252,7 @@ call:
 | `ldp gold releases DIR [--show RELEASE] [--json]` | List the releases of the gold tables of a folder, newest first, or the tables of one release. See [Release the gold tables](#release-the-gold-tables) | `gold.release.list_releases(folder)`, `current_release(folder)`, `snapshot_for(table, release)` |
 | `ldp gold list DIR [--all-layers] [--json] [--strict]` | One row for each gold table of a folder, with what it means, who owns it, what one row is, its rows, when its data last changed, the status of its last run, the verdict of its last quality check and the release it is in. A table with no contract shows `no description`. `--all-layers` adds the other tables, and `--strict` exits with 1 when a gold table lacks part of its contract, for CI. See [Browse the gold tables](#browse-the-gold-tables) | `gold.catalog.collect(folder)` |
 | `ldp gold export DIR TABLE DEST [--format csv\|parquet\|jsonl\|xlsx] [--release RN\|--live] [--json]` | Write one gold table, as the current release holds it, as a CSV, Parquet, JSONL or Excel file, which opens with no Python and no Iceberg. An Excel file has a second sheet, `about`, with the contract of the table, and needs the `excel` extra. See [Open the gold tables in a spreadsheet or a BI tool](#open-the-gold-tables-in-a-spreadsheet-or-a-bi-tool) | `gold.serve.export_table(folder, table, dest)` |
-| `ldp gold duckdb DIR --out FILE [--release RN\|--live] [--json]` | Write the whole gold layer as one DuckDB file, with a copy of each table of the current release, a comment on each table and column, a `_catalog` table and a `_metrics` table. It opens in the DuckDB command line, the DuckDB UI and the BI tools that read DuckDB. See [Open the gold tables in a spreadsheet or a BI tool](#open-the-gold-tables-in-a-spreadsheet-or-a-bi-tool) | `gold.serve.write_duckdb_file(folder, out)` |
+| `ldp gold duckdb DIR --out FILE [--release RN\|--live] [--views] [--json]` | Write the whole gold layer as one DuckDB file, with a copy of each table of the current release, a comment on each table and column, a `_catalog` table and a `_metrics` table. It opens in the DuckDB command line, the DuckDB UI and the BI tools that read DuckDB. With `--views` it holds a view of each table in place of a copy, for tables that are too large to copy, and whoever opens it needs DuckDB's iceberg extension. See [Open the gold tables in a spreadsheet or a BI tool](#open-the-gold-tables-in-a-spreadsheet-or-a-bi-tool) and [BI tools on the gold DuckDB file](docs/bi_tools.md) | `gold.serve.write_duckdb_file(folder, out, views=False)` |
 | `ldp gold show DIR TABLE [--runs N] [--no-samples] [--json]` | Describe one table: its contract, every column with its type and description, its last runs, the releases that include it, a few sample rows and an `ldp query` line that reads it | `gold.catalog.collect(folder, only=table, detail=True)` |
 | `ldp gold docs DIR --out FILE [--format html\|md] [--all-layers] [--no-samples]` | Write the catalog as one self-contained page with a search box, or as Markdown for a MkDocs site | `gold.render.html_page(catalog)`, `gold.render.markdown_page(catalog)` |
 | `ldp metrics list DIR [--json]` | One row for each metric of the `metrics.json` files of a folder, with its description, owner, format, table, dimensions and grains. See [Define metrics](#define-metrics) | `metrics.load_metrics(folder)` |
@@ -1194,8 +1194,18 @@ SELECT robot_id, round(avg(success_rate), 2) AS success_rate FROM gold_robot_dai
 ```
 
 - **It needs no extension.** The file has plain tables, so a DuckDB with no extension reads it, and no `iceberg_scan` is in
-  it. It is written in the storage version of DuckDB 1.0, so a DuckDB 1.x opens it as well as a DuckDB 2.0. DuckDB 2.0
-  writes a newer version by default, which a DuckDB 1.x cannot open.
+  it, unless it was written with `--views`. It is written in the storage version of DuckDB 1.0, so a DuckDB 1.x opens it as
+  well as a DuckDB 2.0. DuckDB 2.0 writes a newer version by default, which a DuckDB 1.x cannot open.
+- **`--views` is for a table that is too large to copy.** `ldp gold duckdb DIR --out gold.duckdb --views` writes a view of
+  each table, `SELECT * FROM iceberg_scan(...)` on the metadata file of the table and the snapshot that the release names,
+  in place of a copy. The file is small, and it shows the same rows, comments and `_catalog` as a file of copies, and the
+  rows are not read into memory. A view reads the table where it is, so whoever opens the file needs DuckDB's iceberg
+  extension, which is installed once with `INSTALL iceberg`, and the warehouse at the address that the view holds. That
+  means the file does not work alone on a shared drive. Writing the views needs the extension too, and it is never
+  downloaded, so the command stops with exit status 1 and writes nothing when it is not installed. The snapshot is the one
+  of the release, so a later build does not change what a view shows, and `ldp maintain` never expires a released
+  snapshot. A table that has no snapshot yet is written as an empty table. The `_catalog` and `_metrics` tables are copies
+  as before. [BI tools on the gold DuckDB file](docs/bi_tools.md) has recipes for Superset, Metabase and Evidence.
 - **A reader never sees half a file.** It is written to a temporary path next to the file and renamed. A failure leaves the
   file that was there, and no temporary file.
 - **It holds one release.** A gold table that the release does not hold is left out, and the output names it, so that the
@@ -1208,7 +1218,7 @@ SELECT robot_id, round(avg(success_rate), 2) AS success_rate FROM gold_robot_dai
   and the release stays cut. `--duckdb` cannot be used with `--no-release`.
 - **Windows.** Replacing a file that a program has open fails on Windows. `{release}` in the name is replaced by the release,
   so `--out "gold_{release}.duckdb"` writes a new file for each release and never replaces one.
-- **Memory.** A table is read whole before it is written, as `ldp datasets export` does, so a gold table has to fit in memory.
+- **Memory.** A table is read whole before it is written, as `ldp datasets export` does, so a gold table has to fit in memory. `--views` reads none.
 
 ## Catalogs and object storage
 
