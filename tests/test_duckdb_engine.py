@@ -275,6 +275,7 @@ from local_data_platform.engine.duckdb import ICEBERG_EXTENSION_HINT  # noqa: E4
 from local_data_platform.engine.duckdb.row_filter import (  # noqa: E402
     UntranslatableFilter, literal_sql, row_filter_to_sql)
 from local_data_platform.exceptions import ConfigError  # noqa: E402
+from tests.support import ScanConnection  # noqa: E402
 
 
 def _iceberg_extension_loads() -> bool:
@@ -557,8 +558,51 @@ def test_native_row_filter_is_pushed_into_iceberg_scan(rides):
         result = engine.query("SELECT count(*) AS n, min(fare) AS lo FROM bkk").to_pylist()
     assert result == [{"n": 3, "lo": 100.0}]
     assert "ICEBERG_SCAN" in plan
+    plan = "".join(plan.split())  # DuckDB 1.5 prints city='BKK' and DuckDB 2.0 prints city = 'BKK'
     assert "city='BKK'" in plan  # the view's WHERE, pushed into the scan
     assert "fare>150.0" in plan  # and the query's own predicate
+
+
+@pytest.mark.parametrize("has_nan_setting", [True, False])
+def test_native_scan_asks_for_can_have_nan_only_where_duckdb_has_the_setting(rides, has_nan_setting):
+    # DuckDB 2.0.1 skips a Parquet row group that cannot match on its min and max statistics, and takes NaN to be inside
+    # them unless the scan says can_have_nan. pyarrow, and so pyiceberg, leaves NaN out of the statistics, so without
+    # the option isnan(fare) finds no row. DuckDB 1.5.6 has no such setting, and its view keeps the SQL it had.
+    connection = ScanConnection(has_nan_setting)
+    with DuckDBEngine(connection=connection) as engine:
+        engine.register_iceberg(rides, "t", native=True)
+    view, = [sql for sql in connection.statements if sql.startswith("CREATE OR REPLACE TEMP VIEW")]
+    assert ("can_have_nan => true" in view) is has_nan_setting
+    assert "snapshot_from_id => " in view
+
+
+SNAPSHOTS_14 = ["sequence_number", "snapshot_id", "timestamp_ms", "manifest_list"]  # DuckDB 1.4.2 has no operation
+SNAPSHOTS_15 = SNAPSHOTS_14 + ["operation"]  # DuckDB 1.5.6
+SNAPSHOTS_20 = ["sequence_number", "snapshot_id", "parent_id", "timestamp_ms", "manifest_list", "operation", "summary"]
+FILES_1 = ["manifest_path", "manifest_sequence_number", "manifest_content", "status", "content", "file_path",
+           "file_format", "record_count"]  # DuckDB 1.4.2 and 1.5.6
+FILES_20 = FILES_1 + ["data_sequence_number", "file_sequence_number"]  # DuckDB 2.0.1
+
+
+@pytest.mark.parametrize("snapshots, files, kept", [
+    pytest.param(SNAPSHOTS_14, FILES_1, SNAPSHOTS_14, id="duckdb-1.4.2"),
+    pytest.param(SNAPSHOTS_15, FILES_1, SNAPSHOTS_15, id="duckdb-1.5.6"),
+    pytest.param(SNAPSHOTS_20, FILES_20, SNAPSHOTS_15, id="duckdb-2.0.1"),
+    pytest.param(SNAPSHOTS_15[::-1], FILES_1[::-1], SNAPSHOTS_15, id="the-documented-order"),
+])
+def test_native_snapshots_and_files_keep_their_documented_columns(rides, snapshots, files, kept):
+    # The columns of iceberg_snapshots() and iceberg_metadata() differ by DuckDB version, and the stand-in reports the
+    # ones of 1.4.2, 1.5.6 and 2.0.1 as they are. The engine asks for all of them and keeps the documented ones.
+    connection = ScanConnection(True, {"iceberg_snapshots": snapshots, "iceberg_metadata": files})
+    with DuckDBEngine(connection=connection) as engine:
+        engine.register_iceberg(rides, "t", native=True)
+        assert engine.snapshots("t").column_names == kept
+        assert engine.files("t").column_names == FILES_1
+    snapshots_sql, = [sql for sql in connection.statements if "iceberg_snapshots(" in sql]
+    files_sql, = [sql for sql in connection.statements if "iceberg_metadata(" in sql]
+    assert snapshots_sql.startswith("SELECT * FROM iceberg_snapshots(")  # not a list of columns that a DuckDB may lack
+    assert files_sql.startswith("SELECT * FROM iceberg_metadata(")
+    assert "can_have_nan" not in files_sql  # only iceberg_scan takes it, although the setting is there
 
 
 @requires_iceberg_extension

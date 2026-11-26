@@ -10,7 +10,9 @@ Iceberg tables are registered one of two ways:
   extension, ``iceberg_scan('<metadata_location>', snapshot_from_id => <id>)``. Nothing is
   read when the table is registered; each query streams the data files, and DuckDB pushes
   filters and projections into the scan. The extension is loaded from DuckDB's extension
-  folder (``~/.duckdb``) and is never downloaded unless ``install_extensions=True``.
+  folder (``~/.duckdb``) and is never downloaded unless ``install_extensions=True``. On a DuckDB
+  that has the ``parquet_can_have_nan`` setting (2.0.1 has it and 1.5.6 has not) the scan is also
+  given ``can_have_nan => true``, so that it finds the NaN rows of files that pyarrow wrote.
 * **In memory** (the original path): pyiceberg scans the table into a ``pyarrow.Table`` that the
   view reads. Used when the extension can't load, when a row filter can't be rendered as
   DuckDB SQL, or when ``native=False``. The auto path logs a warning when it falls back.
@@ -46,6 +48,14 @@ ICEBERG_EXTENSION_HINT = ("Install DuckDB's iceberg extension once with duckdb.c
 
 _UNCHECKED = object()
 
+#: The columns of :meth:`DuckDBEngine.snapshots` and :meth:`DuckDBEngine.files`. The in-memory path builds
+#: exactly these. The native path reads ``iceberg_snapshots()`` and ``iceberg_metadata()`` and keeps the columns that
+#: are listed here, in this order. DuckDB 2.0.1 reports more (``parent_id`` and ``summary``, ``data_sequence_number``
+#: and ``file_sequence_number``), and 1.4.2 reports no ``operation`` in ``iceberg_snapshots()``.
+_SNAPSHOT_COLUMNS = ("sequence_number", "snapshot_id", "timestamp_ms", "manifest_list", "operation")
+_FILE_COLUMNS = ("manifest_path", "manifest_sequence_number", "manifest_content", "status", "content", "file_path",
+                 "file_format", "record_count")
+
 
 def _import_duckdb():
     """Import ``duckdb`` or raise :class:`EngineNotFound` with an install hint."""
@@ -73,6 +83,38 @@ def _option_sql(value: Any) -> str:
     if isinstance(value, int):
         return str(value)
     return quote_string(str(value))
+
+
+def _documented(table: pa.Table, names: Sequence[str]) -> pa.Table:
+    """The columns of ``table`` that ``names`` lists, in the order of ``names``. A name that ``table`` has no column
+    for is left out, because a DuckDB that reports fewer columns than the documented ones has to keep working."""
+    return table.select([name for name in names if name in table.column_names])
+
+
+def has_parquet_nan_setting(connection: Any) -> bool:
+    """Whether the DuckDB behind ``connection`` has the ``parquet_can_have_nan`` setting.
+
+    DuckDB 2.0.1 has it, with the default false, and 1.5.6 has not. A Parquet file whose statistics have no
+    ``nan_count`` is then taken to hold no NaN outside its min and max, and a row group that cannot match a predicate
+    on those statistics is skipped. pyarrow, and so pyiceberg, writes no ``nan_count`` and leaves NaN out of min and
+    max, so on DuckDB 2.0.1 ``isnan(fare)`` finds no row of a table that has NaN in ``fare``. A caller that reads
+    Iceberg tables turns the assumption off with ``SET parquet_can_have_nan = true`` on a connection that it owns, or
+    with :func:`nan_scan_arguments` in a view that other connections read. DuckDB 2.0.0 skips the same row groups and
+    has no setting, so nothing here reaches it.
+    """
+    return bool(connection.execute("SELECT 1 FROM duckdb_settings() WHERE name = 'parquet_can_have_nan'").fetchall())
+
+
+def nan_scan_arguments(connection: Any) -> str:
+    """``", can_have_nan => true"`` to put after the other arguments of an ``iceberg_scan``, ``""`` where DuckDB has no
+    ``parquet_can_have_nan`` setting.
+
+    The option turns off, for that scan, the assumption that :func:`has_parquet_nan_setting` describes, so the NaN rows
+    of a pyiceberg table are read as pyiceberg reads them. A view that other connections read, such as the persistent
+    views of the dbt sources, has to carry the option itself, because a ``SET`` holds for one connection only.
+    ``iceberg_metadata`` and ``iceberg_snapshots`` take no such option.
+    """
+    return ", can_have_nan => true" if has_parquet_nan_setting(connection) else ""
 
 
 @dataclass
@@ -296,8 +338,10 @@ class DuckDBEngine(Engine):
 
         Native registrations read DuckDB's ``iceberg_snapshots()``; in-memory ones build the same
         columns from pyiceberg metadata: ``sequence_number``, ``snapshot_id``, ``timestamp_ms``
-        (a timestamp), ``manifest_list`` and ``operation``. Snapshots committed after the table was
-        registered are not listed.
+        (a timestamp), ``manifest_list`` and ``operation``. The native path keeps just those
+        columns, so a DuckDB that reports more (2.0.1 adds ``parent_id`` and ``summary``) gives the
+        same columns, and one that reports fewer (1.4.2 has no ``operation``) gives the columns that
+        it has. Snapshots committed after the table was registered are not listed.
 
         Raises:
             KeyError: If ``alias`` is not registered.
@@ -305,8 +349,9 @@ class DuckDBEngine(Engine):
         """
         registration = self._iceberg_registration(alias)
         if registration.native:
-            return self.query(f"SELECT * FROM iceberg_snapshots({quote_string(registration.metadata_location)}) "
-                              "ORDER BY sequence_number, timestamp_ms")
+            table = self.query(f"SELECT * FROM iceberg_snapshots({quote_string(registration.metadata_location)}) "
+                               "ORDER BY sequence_number, timestamp_ms")
+            return _documented(table, _SNAPSHOT_COLUMNS)
         snapshots = sorted(registration.table.snapshots(), key=lambda s: (s.sequence_number or 0, s.timestamp_ms))
         return pa.table({
             "sequence_number": pa.array([s.sequence_number for s in snapshots], pa.uint64()),
@@ -323,9 +368,11 @@ class DuckDBEngine(Engine):
         columns from pyiceberg manifests: ``manifest_path``, ``manifest_sequence_number``,
         ``manifest_content``, ``status`` (``ADDED``/``EXISTING``/``DELETED``, including deleted
         entries, as DuckDB lists them), ``content``, ``file_path``, ``file_format`` and
-        ``record_count``. DuckDB 1.5's extension reports ``content`` with the entry-status names
-        (``EXISTING`` for a data file); the in-memory path reports ``DATA``, ``POSITION_DELETES`` or
-        ``EQUALITY_DELETES``.
+        ``record_count``. The native path keeps just those columns, so a DuckDB that reports more
+        (2.0.1 adds ``data_sequence_number`` and ``file_sequence_number``) gives the same columns.
+        DuckDB 1.5's extension reports ``content`` with the entry-status names (``EXISTING`` for a
+        data file) and 2.0.1's reports ``DATA`` for a data file. The in-memory path reports ``DATA``,
+        ``POSITION_DELETES`` or ``EQUALITY_DELETES``.
 
         Raises:
             KeyError: If ``alias`` is not registered.
@@ -333,13 +380,12 @@ class DuckDBEngine(Engine):
         """
         registration = self._iceberg_registration(alias)
         if registration.native:
-            return self.query(f"SELECT * FROM iceberg_metadata({self._scan_arguments(registration)})")
+            return _documented(self.query(f"SELECT * FROM iceberg_metadata({self._scan_arguments(registration)})"),
+                               _FILE_COLUMNS)
         table = registration.table
         snapshot = (table.snapshot_by_id(registration.snapshot_id) if registration.snapshot_id is not None
                     else table.current_snapshot())
-        rows: dict[str, list[Any]] = {key: [] for key in (
-            "manifest_path", "manifest_sequence_number", "manifest_content", "status", "content", "file_path",
-            "file_format", "record_count")}
+        rows: dict[str, list[Any]] = {key: [] for key in _FILE_COLUMNS}
         for manifest in (snapshot.manifests(table.io) if snapshot is not None else []):
             for entry in manifest.fetch_manifest_entry(table.io, discard_deleted=False):
                 data_file = entry.data_file
@@ -427,7 +473,8 @@ class DuckDBEngine(Engine):
             pinned = iceberg_table.current_snapshot().snapshot_id
         registration = _Registration(native=True, table=iceberg_table,
                                      metadata_location=iceberg_table.metadata_location, snapshot_id=pinned)
-        sql = f"SELECT * FROM iceberg_scan({self._scan_arguments(registration)}) AS {quote_identifier(SCAN_RELATION)}"
+        arguments = self._scan_arguments(registration) + nan_scan_arguments(self._connection)
+        sql = f"SELECT * FROM iceberg_scan({arguments}) AS {quote_identifier(SCAN_RELATION)}"
         if row_filter is not None:
             scan = iceberg_table.scan(snapshot_id=snapshot_id) if snapshot_id is not None else iceberg_table.scan()
             try:
@@ -541,4 +588,5 @@ class DuckDBEngine(Engine):
             raise RuntimeError("DuckDBEngine is closed")
 
 
-__all__ = ["DuckDBEngine", "ICEBERG_EXTENSION_HINT", "INSTALL_HINT", "UntranslatableFilter"]
+__all__ = ["DuckDBEngine", "ICEBERG_EXTENSION_HINT", "INSTALL_HINT", "UntranslatableFilter", "has_parquet_nan_setting",
+           "nan_scan_arguments"]

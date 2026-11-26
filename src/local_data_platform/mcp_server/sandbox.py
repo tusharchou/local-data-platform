@@ -5,7 +5,10 @@ The sandbox is set up in this order, and every step was checked against DuckDB 1
 1. Connect in memory with ``autoinstall_known_extensions``, ``autoload_known_extensions``,
    ``allow_community_extensions`` and ``allow_persistent_secrets`` off, ``temp_directory``
    empty (no spill files, and DuckDB then adds no temp folder to the allowed paths) and
-   Python replacement scans off (SQL cannot read the server's Python variables).
+   Python replacement scans off (SQL cannot read the server's Python variables). On a DuckDB
+   that has the ``parquet_can_have_nan`` setting (2.0.1 has it, 1.5.6 has not) it is set to
+   true, so that ``isnan`` finds the NaN rows of files that pyarrow wrote, in the views and in
+   an ``iceberg_scan`` that the SQL of an agent makes.
 2. ``LOAD iceberg`` (``INSTALL`` first only when ``install_extensions=True``), then register
    each table as a view in a schema named after its namespace: natively as
    ``iceberg_scan('<metadata file>')`` when the table's files are all local and under its
@@ -35,6 +38,7 @@ from typing import Any
 
 import pyarrow as pa
 
+from local_data_platform.engine.duckdb import has_parquet_nan_setting
 from local_data_platform.logger import get_logger
 
 from .discovery import ExposedTable
@@ -162,6 +166,8 @@ class DuckDBSandbox:
             except self._duckdb.Error as error:
                 self._con.close()
                 raise ValueError(f"unknown time zone {timezone!r}: {_first_line(error)}") from error
+        if has_parquet_nan_setting(self._con):
+            self._con.execute("SET parquet_can_have_nan = true")
         self._lock = threading.RLock()
         self._active = False
         self._timed_out = False
@@ -284,6 +290,8 @@ class DuckDBSandbox:
         expected = {"enable_external_access": "false", "lock_configuration": "true",
                     "autoinstall_known_extensions": "false", "autoload_known_extensions": "false",
                     "allow_persistent_secrets": "false", "allowed_configs": "[]", "allowed_paths": "[]"}
+        if "parquet_can_have_nan" in settings:  # DuckDB 2.0.1 has the setting, and 1.5.6 has not
+            expected["parquet_can_have_nan"] = "true"
         if self._timezone:
             settings["TimeZone"] = self._con.execute(
                 "SELECT value FROM duckdb_settings() WHERE name = 'TimeZone'").fetchone()[0]
@@ -301,7 +309,7 @@ class DuckDBSandbox:
         """The sandbox-relevant DuckDB settings, read back from ``duckdb_settings()``."""
         names = ("enable_external_access", "lock_configuration", "allowed_directories", "allowed_paths",
                  "allowed_configs", "autoinstall_known_extensions", "autoload_known_extensions",
-                 "allow_community_extensions", "allow_persistent_secrets", "temp_directory")
+                 "allow_community_extensions", "allow_persistent_secrets", "temp_directory", "parquet_can_have_nan")
         with self._lock:
             rows = self._con.execute(
                 "SELECT name, value FROM duckdb_settings() WHERE list_contains(?, name)", [list(names)]).fetchall()

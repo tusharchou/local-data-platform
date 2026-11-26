@@ -36,6 +36,41 @@ requires_iceberg_extension = pytest.mark.skipif(
     reason="DuckDB's iceberg extension is not installed; run duckdb.connect().execute('INSTALL iceberg') once",
 )
 
+
+class ScanConnection:
+    """A stand-in DuckDB connection that records its SQL, reports the iceberg extension as loaded and says whether
+    DuckDB has the ``parquet_can_have_nan`` setting, which DuckDB 2.0.1 has and 1.5.6 has not. ``reports`` names the
+    columns that ``iceberg_snapshots`` and ``iceberg_metadata`` report, which differ by DuckDB version, and a query of
+    either function gets all of them in one row, as its ``SELECT *`` does. CI has no extension and runs the tests that
+    use it."""
+
+    def __init__(self, has_nan_setting: bool, reports: dict[str, list[str]] | None = None):
+        self.has_nan_setting = has_nan_setting
+        self.reports = reports or {}
+        self.statements: list[str] = []
+        self._rows: list[tuple] = []
+        self._table = pa.table({})
+
+    def execute(self, sql, params=None):
+        self.statements.append(sql)
+        self._rows = []
+        self._table = pa.table({})
+        if "duckdb_extensions()" in sql:
+            self._rows = [(True, True)]
+        elif "duckdb_settings()" in sql and self.has_nan_setting:
+            self._rows = [(1,)]
+        for function, names in self.reports.items():
+            if f"FROM {function}(" in sql:
+                self._table = pa.table({name: [name] for name in names})
+        return self
+
+    def fetchall(self):
+        return self._rows
+
+    def to_arrow_table(self):
+        return self._table
+
+
 # --------------------------------------------------------------------------- a small lake
 
 
@@ -61,6 +96,21 @@ def add_table(root: Path, namespace: str, name: str, rows: int, *, start: int = 
     ids = list(range(start, start + rows))
     table.put(pa.table({"id": pa.array(ids, pa.int64()), "label": pa.array([f"{name}-{i}" for i in ids], pa.string()),
                         "amount": pa.array([i * 1.5 for i in ids], pa.float64())}))
+    (root / "config").mkdir(exist_ok=True)
+    (root / "config" / f"{namespace}.{name}.json").write_text(json.dumps(dataset_config(namespace, name)))
+    return table
+
+
+def add_nan_table(root: Path, namespace: str, name: str) -> Iceberg:
+    """Write the Iceberg table ``namespace.name`` of the lake under ``root``, with a NaN in its float column ``x``.
+
+    The lake is laid out as :func:`add_table` lays it out. pyiceberg writes the data file with pyarrow, which leaves NaN
+    out of the min and max statistics of ``x``, so a DuckDB that skips row groups on those statistics, as DuckDB 2.0.1
+    does unless the scan says ``can_have_nan``, finds no NaN. The NaN row is ``id`` 2, and ``id`` 4 has no ``x``.
+    """
+    table = Iceberg(name, {"identifier": namespace, "warehouse_path": str(root / "warehouse")})
+    table.put(pa.table({"id": pa.array(range(1, 9), pa.int64()),
+                        "x": pa.array([10.0, float("nan"), 5.5, None, 30.0, 12.25, 200.0, 7.0], pa.float64())}))
     (root / "config").mkdir(exist_ok=True)
     (root / "config" / f"{namespace}.{name}.json").write_text(json.dumps(dataset_config(namespace, name)))
     return table
