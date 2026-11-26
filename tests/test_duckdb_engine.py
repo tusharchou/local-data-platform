@@ -576,20 +576,33 @@ def test_native_scan_asks_for_can_have_nan_only_where_duckdb_has_the_setting(rid
     assert "snapshot_from_id => " in view
 
 
-def test_native_snapshots_and_files_select_their_documented_columns(rides):
-    # DuckDB 2.0.1 reports parent_id and summary, data_sequence_number and file_sequence_number as well.
-    connection = ScanConnection(True)
+SNAPSHOTS_14 = ["sequence_number", "snapshot_id", "timestamp_ms", "manifest_list"]  # DuckDB 1.4.2 has no operation
+SNAPSHOTS_15 = SNAPSHOTS_14 + ["operation"]  # DuckDB 1.5.6
+SNAPSHOTS_20 = ["sequence_number", "snapshot_id", "parent_id", "timestamp_ms", "manifest_list", "operation", "summary"]
+FILES_1 = ["manifest_path", "manifest_sequence_number", "manifest_content", "status", "content", "file_path",
+           "file_format", "record_count"]  # DuckDB 1.4.2 and 1.5.6
+FILES_20 = FILES_1 + ["data_sequence_number", "file_sequence_number"]  # DuckDB 2.0.1
+
+
+@pytest.mark.parametrize("snapshots, files, kept", [
+    pytest.param(SNAPSHOTS_14, FILES_1, SNAPSHOTS_14, id="duckdb-1.4.2"),
+    pytest.param(SNAPSHOTS_15, FILES_1, SNAPSHOTS_15, id="duckdb-1.5.6"),
+    pytest.param(SNAPSHOTS_20, FILES_20, SNAPSHOTS_15, id="duckdb-2.0.1"),
+    pytest.param(SNAPSHOTS_15[::-1], FILES_1[::-1], SNAPSHOTS_15, id="the-documented-order"),
+])
+def test_native_snapshots_and_files_keep_their_documented_columns(rides, snapshots, files, kept):
+    # The columns of iceberg_snapshots() and iceberg_metadata() differ by DuckDB version, and the stand-in reports the
+    # ones of 1.4.2, 1.5.6 and 2.0.1 as they are. The engine asks for all of them and keeps the documented ones.
+    connection = ScanConnection(True, {"iceberg_snapshots": snapshots, "iceberg_metadata": files})
     with DuckDBEngine(connection=connection) as engine:
         engine.register_iceberg(rides, "t", native=True)
-        engine.snapshots("t")
-        engine.files("t")
-    snapshots, = [sql for sql in connection.statements if "iceberg_snapshots(" in sql]
-    files, = [sql for sql in connection.statements if "iceberg_metadata(" in sql]
-    assert snapshots.startswith('SELECT "sequence_number", "snapshot_id", "timestamp_ms", "manifest_list", '
-                                '"operation" FROM iceberg_snapshots(')
-    assert files.startswith('SELECT "manifest_path", "manifest_sequence_number", "manifest_content", "status", '
-                            '"content", "file_path", "file_format", "record_count" FROM iceberg_metadata(')
-    assert "can_have_nan" not in files  # only iceberg_scan takes it, although the setting is there
+        assert engine.snapshots("t").column_names == kept
+        assert engine.files("t").column_names == FILES_1
+    snapshots_sql, = [sql for sql in connection.statements if "iceberg_snapshots(" in sql]
+    files_sql, = [sql for sql in connection.statements if "iceberg_metadata(" in sql]
+    assert snapshots_sql.startswith("SELECT * FROM iceberg_snapshots(")  # not a list of columns that a DuckDB may lack
+    assert files_sql.startswith("SELECT * FROM iceberg_metadata(")
+    assert "can_have_nan" not in files_sql  # only iceberg_scan takes it, although the setting is there
 
 
 @requires_iceberg_extension

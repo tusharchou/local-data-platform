@@ -39,28 +39,36 @@ requires_iceberg_extension = pytest.mark.skipif(
 
 class ScanConnection:
     """A stand-in DuckDB connection that records its SQL, reports the iceberg extension as loaded and says whether
-    DuckDB has the ``parquet_can_have_nan`` setting, which DuckDB 2.0.1 has and 1.5.6 has not. CI has no extension and
-    runs the tests that use it."""
+    DuckDB has the ``parquet_can_have_nan`` setting, which DuckDB 2.0.1 has and 1.5.6 has not. ``reports`` names the
+    columns that ``iceberg_snapshots`` and ``iceberg_metadata`` report, which differ by DuckDB version, and a query of
+    either function gets all of them in one row, as its ``SELECT *`` does. CI has no extension and runs the tests that
+    use it."""
 
-    def __init__(self, has_nan_setting: bool):
+    def __init__(self, has_nan_setting: bool, reports: dict[str, list[str]] | None = None):
         self.has_nan_setting = has_nan_setting
+        self.reports = reports or {}
         self.statements: list[str] = []
         self._rows: list[tuple] = []
+        self._table = pa.table({})
 
     def execute(self, sql, params=None):
         self.statements.append(sql)
         self._rows = []
+        self._table = pa.table({})
         if "duckdb_extensions()" in sql:
             self._rows = [(True, True)]
         elif "duckdb_settings()" in sql and self.has_nan_setting:
             self._rows = [(1,)]
+        for function, names in self.reports.items():
+            if f"FROM {function}(" in sql:
+                self._table = pa.table({name: [name] for name in names})
         return self
 
     def fetchall(self):
         return self._rows
 
     def to_arrow_table(self):
-        return pa.table({})
+        return self._table
 
 
 # --------------------------------------------------------------------------- a small lake
