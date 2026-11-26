@@ -51,7 +51,7 @@ from local_data_platform.mcp_server.discovery import (  # noqa: E402
     redact,
 )
 from local_data_platform.mcp_server.guard import first_keyword  # noqa: E402
-from local_data_platform.mcp_server.sandbox import local_path  # noqa: E402
+from local_data_platform.mcp_server.sandbox import DuckDBSandbox, local_path  # noqa: E402
 from tests.support import add_nan_table  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -479,6 +479,16 @@ def test_the_sandbox_keeps_nan_rows_where_duckdb_has_the_setting(tools):
         has_setting = bool(connection.execute(
             "SELECT 1 FROM duckdb_settings() WHERE name = 'parquet_can_have_nan'").fetchall())
     assert tools.sandbox.settings().get("parquet_can_have_nan") == ("true" if has_setting else None)
+
+
+def test_the_sandbox_refuses_to_start_when_the_nan_setting_did_not_take_effect(lake, tmp_path, monkeypatch):
+    # The setting is read back with the others when the configuration is locked. The stand-in reports it as false, as a
+    # DuckDB that ignored the SET would, and it does so whether or not this DuckDB has the setting.
+    read_back = DuckDBSandbox.settings
+    monkeypatch.setattr(DuckDBSandbox, "settings", lambda self: {**read_back(self), "parquet_can_have_nan": "false"})
+
+    with pytest.raises(RuntimeError, match="parquet_can_have_nan"):
+        LakeTools.from_sources([lake.configs], allow="demo.rides", audit_path=tmp_path / "a.jsonl", native=False)
 
 
 def test_native_views_and_scans_find_nan_rows_in_files_that_pyarrow_wrote(tmp_path):
