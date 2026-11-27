@@ -343,6 +343,11 @@ records), so a server that is killed leaves them only in the JSONL file. If the 
 the write, the server logs a warning and the JSONL file stays the audit trail. `--no-iceberg-audit`
 (or `LakeTools.from_sources(..., iceberg_audit=False)`) turns the table off.
 
+A call that `ldp dashboard` makes has `dashboard.` in front of its tool name, such as `dashboard.query`. That is the
+`tool_prefix` of `LakeTools`, which puts any text in front of the tool name of every record and changes nothing else, so
+what a person did at the dashboard can be told from what an agent did. The dashboard writes the JSONL file and not
+`_ldp.audit`. See [A local dashboard in the browser](dashboard.md).
+
 ## From Python
 
 ```python

@@ -96,6 +96,7 @@ More demos, each one a `make` target (see [Development](#development)):
 | `spark` | PySpark | The experimental `SparkEngine`, which also needs a JDK 17+ |
 | `excel` | openpyxl and defusedxml | Excel workbooks (`.xlsx`) as a source, for `ExcelToCSV` and `ExcelToIceberg` |
 | `dbt` | dbt-core, the dbt-duckdb adapter and DuckDB | `ldp dbt`, which runs a dbt project over your Iceberg tables and publishes the models you mark back to Iceberg ([how it works](docs/design/warehousing.md)), and the tests marked `dbt` |
+| `notebook` | marimo, Altair and DuckDB | The local dashboard, `ldp dashboard` ([guide](docs/dashboard.md)) |
 | `dev` | pytest, flake8, build, DuckDB, `moto[server]`, the MCP SDK, openpyxl | Working on the library |
 | `docs` | MkDocs and plugins | Building the docs |
 
@@ -246,6 +247,7 @@ call:
 | `ldp datasets pin\|list\|export` | Pin, list and export dataset versions, as Parquet, JSONL or CSV | `datasets.pin`, `list_versions`, `export` |
 | `ldp maintain CONFIG [--system [--keep-days N]] [--expire DAYS] [--orphans] [--apply]` | Expire snapshots and find orphan files; a dry run unless `--apply`. With `--system` it trims the `_ldp` history tables of the config's catalog instead, deleting the rows older than N days (90 by default) first | `maintenance.expire_snapshots`, `find_orphans`, `remove_orphans`, `delete_old_rows`, `maintain_system_tables` |
 | `ldp mcp --config CONFIG ...` | Serve tables to an agent over MCP (stdio) | `python -m local_data_platform.mcp_server ...`, same options |
+| `ldp dashboard --config PATH [--catalog SPEC] [--allow TABLES] [--reports DIR] [--port N] [--no-browser] [--edit]` | Serve a local web page on 127.0.0.1 with four pages, Tables, SQL, Reports and Health. Every query goes through the tools of `ldp mcp`, so the guard, the row cap, the timeout and the audit apply, and its audit records start with `dashboard.`. A report is built as `ldp report build` builds it, and the page can write its HTML file. `--edit` opens the notebook for editing. It needs the `notebook` extra, and without it the command prints how to install it and exits with 1. See [A local dashboard](#a-local-dashboard) | `dashboard.service.Dashboard.open(settings)` |
 | `ldp dbt init\|build\|test\|docs\|exec PROJECT_DIR` | Run a dbt project over your Iceberg tables; `build` writes the models marked `ldp_publish` back to Iceberg (needs the `dbt` extra) | `dbt_layer.register_sources(...)`, `dbt_layer.publish.plan_publish(...)` and `publish(...)` |
 | `ldp gold sync CONFIG [--dbt-manifest FILE] [--dry-run] [--json]` | Write the contract of a config (its `metadata.docs`) into its existing Iceberg table, with no new data. `--dbt-manifest` reads it from a dbt manifest, for a table that dbt built, and `--dry-run` only says what would change. See [Table contracts](#table-contracts) | `gold.sync.sync_config(path)`, `contracts.apply_contract(table, docs)` |
 | `ldp gold build DIR [--no-release] [--duckdb FILE] [--json]` | Build the gold tables of a folder in the order that their `inputs` say, and check the ones that are built elsewhere. One line for each table, and a gate that blocks a table stops the build with exit status 3. When every table passed, and the metrics of the folder fit them, it cuts a release, unless `--no-release` says not to. `--duckdb FILE` then writes the DuckDB file of the gold layer. See [Build the gold tables](#build-the-gold-tables) | `gold.build.build_gold(folder, release=True)`, `gold.serve.refresh_after_build(folder, out, result)` |
@@ -1127,6 +1129,23 @@ the morning, and the report is delivered once, however many times the line runs.
 `yesterday`, `last-week` and `last-month` count their days in the time zone of the report. A day that was missed is caught
 up by running the command with the window of that day, such as `--window 2026-07-31/2026-08-01`, and a repeated run sends
 nothing. A report that is held back exits with 3, so a wrapper can run it again later.
+
+### A local dashboard
+
+`ldp dashboard` serves a web page on your own machine, so that you can click through the lakehouse and ask it a question
+without writing Python. It needs the `notebook` extra, which installs marimo and Altair.
+
+```bash
+pip install "local-data-platform[notebook]"
+ldp dashboard --config ldp_demo/rides.json --reports ldp_demo/reports
+```
+
+The Tables page lists the tables with their schema, their first rows and their snapshots. The SQL page runs one query and
+shows the result as a table and as a quick chart. The Reports page builds a report of `--reports` for a window, as
+`ldp report build` does, and can write its HTML page. The Health page shows the rows of `ldp status`. It listens on 127.0.0.1
+only, every query goes through the tools of `ldp mcp` so that the statement guard, the row cap, the timeout and the audit
+apply, and the audit records start with `dashboard.`. `--edit` opens the notebook in the marimo editor. The
+[guide](docs/dashboard.md) has the options, what each page shows and what the dashboard can and cannot do.
 
 ### Open the gold tables in a spreadsheet or a BI tool
 

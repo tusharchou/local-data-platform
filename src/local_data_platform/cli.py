@@ -21,6 +21,7 @@ Commands::
     ldp maintain CONFIG                    (maintenance)
     ldp spark CONFIG                       (engine.spark)
     ldp mcp --config DIR_OR_FILE           (mcp_server)
+    ldp dashboard --config PATH [--catalog SPEC] [--reports DIR] [--no-browser] [--edit]   (dashboard.cli)
     ldp dbt init|build|test|docs|exec ...  (dbt_layer.cli)
     ldp workflow plan|run FILE ...         (orchestration.cli)
     ldp backfill FILE --from START [--to END] [--dry-run] [--replace]   (orchestration.cli)
@@ -100,6 +101,7 @@ MODULE_COMMANDS = (
     ("local_data_platform.monitoring.cli", ("monitor", "status")),
     ("local_data_platform.notify", ("alert",)),
     ("local_data_platform.report.cli", ("report",)),
+    ("local_data_platform.dashboard.cli", ("dashboard",)),
 )
 """``(module, commands)``: each module's ``add_cli(subparsers, parents=...)`` registers its commands."""
 

@@ -240,22 +240,28 @@ class LakeTools:
         install_extensions: Passed to :class:`DuckDBSandbox`.
         memory_limit: Passed to :class:`DuckDBSandbox`.
         threads: Passed to :class:`DuckDBSandbox`.
+        tool_prefix: Put in front of the tool name of every audit record, so that the records of a client that is not an
+            agent can be told apart, such as ``"dashboard."``, which ``ldp dashboard`` uses. A call is still answered
+            under its own name, and only the audit record has the prefix.
 
     Raises:
-        ValueError: If ``max_rows`` or ``timeout_s`` is not positive.
+        ValueError: If ``max_rows`` or ``timeout_s`` is not positive, or ``tool_prefix`` is not text.
     """
 
     def __init__(self, discovery: Discovery, *, max_rows: int = DEFAULT_MAX_ROWS, timeout_s: float = DEFAULT_TIMEOUT_S,
                  audit: AuditLog | None = None, native: bool | None = None, install_extensions: bool = False,
                  memory_limit: str | None = None, threads: int | None = None,
-                 metrics_paths: Iterable[str | os.PathLike] = ()):
+                 metrics_paths: Iterable[str | os.PathLike] = (), tool_prefix: str = ""):
         if isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows < 1:
             raise ValueError(f"max_rows must be a whole number of at least 1, got {max_rows!r}")
         if not isinstance(timeout_s, (int, float)) or timeout_s <= 0:
             raise ValueError(f"timeout_s must be a positive number of seconds, got {timeout_s!r}")
+        if not isinstance(tool_prefix, str):
+            raise ValueError(f"tool_prefix must be text, got {tool_prefix!r}")
         self.discovery = discovery
         self.max_rows = max_rows
         self.timeout_s = float(timeout_s)
+        self.tool_prefix = tool_prefix
         self.metrics_paths = list(metrics_paths)
         self.audit = audit if audit is not None else AuditLog(None)
         self.sandbox = DuckDBSandbox(discovery.tables, native=native, install_extensions=install_extensions,
@@ -444,7 +450,7 @@ class LakeTools:
                         if all(isinstance(item, (str, int, float, bool)) for item in value)})
         rows = outcome.data.get("row_count") if outcome.ok else None
         truncated = outcome.data.get("truncated") if outcome.ok and "row_count" in outcome.data else None
-        record = AuditRecord(tool=str(tool)[:200], status=outcome.status,
+        record = AuditRecord(tool=f"{self.tool_prefix}{tool}"[:200], status=outcome.status,
                              duration_ms=round((time.perf_counter() - started) * 1000, 3), sql=sql, table=table,
                              arguments=scalars, rows=rows, truncated=truncated, error=outcome.error)
         try:

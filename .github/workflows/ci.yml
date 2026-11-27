@@ -42,8 +42,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      # dev brings moto[server] (the S3 and Glue tests) and the MCP SDK; s3 and glue bring boto3.
-      - name: Install the package with the dev, bigquery, s3 and glue extras
+      # dev brings moto[server] (the S3 and Glue tests) and the MCP SDK; s3 and glue bring boto3; notebook brings marimo and
+      # Altair, so that the tests of `ldp dashboard` run here and skip in the other jobs.
+      - name: Install the package with the dev, bigquery, s3, glue and notebook extras
         env:
           PYICEBERG_VERSION: ${{ matrix.pyiceberg }}
         run: |
@@ -52,11 +53,11 @@ jobs:
           if [ "$PYICEBERG_VERSION" != "latest" ]; then
             pin="pyiceberg[pyarrow,sql-sqlite,pyiceberg-core]==$PYICEBERG_VERSION"
           fi
-          python -m pip install -e ".[dev,bigquery,s3,glue]" $pin
+          python -m pip install -e ".[dev,bigquery,s3,glue,notebook]" $pin
       - name: Show resolved versions
         run: |
           python -c "import duckdb, pyarrow, pyiceberg; print('pyiceberg', pyiceberg.__version__, '| pyarrow', pyarrow.__version__, '| duckdb', duckdb.__version__)"
-          python -m pip show mcp moto | grep -E "^(Name|Version)"
+          python -m pip show mcp moto marimo altair | grep -E "^(Name|Version)"
       # Offline: the Spark and REST integration tests skip here. They run in jvm.yml, which is opt-in.
       - name: Test
         run: make test PY=python

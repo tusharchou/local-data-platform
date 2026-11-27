@@ -35,6 +35,10 @@ glue = ["pyiceberg[glue]>=0.11,<0.13"]
 # dbt over Iceberg tables (`ldp dbt`, local_data_platform.dbt_layer): dbt-core with the dbt-duckdb adapter, run as a subprocess.
 # It is not part of the dev extra, so the core install and `make test` never need it; tests that do carry the `dbt` marker.
 dbt = ["dbt-core>=1.12,<2", "dbt-duckdb>=1.11,<2", "duckdb>=1.1"]
+# The local dashboard (`ldp dashboard`, local_data_platform.dashboard): a marimo notebook with Altair charts. It is the only
+# notebook extra of the project, and a later release reuses it. The ranges are the minor releases that the tests ran on (marimo
+# 0.26 and Altair 6.3, see docs/dashboard.md), because marimo and Altair change their output between minor releases.
+notebook = ["marimo>=0.26,<0.27", "altair>=6.3,<6.4", "duckdb>=1.1"]
 # Excel workbooks (.xlsx) as a source (the XLSX format, local_data_platform.format.excel). defusedxml makes openpyxl refuse a
 # spreadsheet built to exhaust memory, and openpyxl uses it on its own when it is installed.
 excel = ["openpyxl>=3.1", "defusedxml>=0.7"]

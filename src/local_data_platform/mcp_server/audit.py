@@ -43,7 +43,9 @@ class AuditRecord:
     Attributes:
         event_id: A random id for the record.
         ts: When the call finished, in UTC, ISO 8601.
-        tool: The tool name as the client sent it.
+        tool: The tool name as the client sent it, with the ``tool_prefix`` of the
+            :class:`~local_data_platform.mcp_server.tools.LakeTools` in front when it has one, such as
+            ``dashboard.query`` for a call that ``ldp dashboard`` made.
         status: ``ok``, ``rejected``, ``denied``, ``timeout`` or ``error``.
         duration_ms: Wall time of the call.
         sql: The SQL of a ``query`` call, capped at 100,000 characters.

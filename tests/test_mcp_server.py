@@ -1340,6 +1340,38 @@ def test_every_call_is_audited_without_result_data(tools, tmp_path):
         assert value not in text
 
 
+def test_a_tool_prefix_is_in_front_of_the_tool_name_of_every_audit_record_and_nowhere_else(lake, tmp_path):
+    calls = [("list_tables", {}), ("query", {"sql": "SELECT city FROM demo.rides", "max_rows": 4}),
+             ("query", {"sql": "COPY (SELECT 1) TO 'x.csv'"}), ("nope", {"x": 1})]
+    with LakeTools.from_sources([lake.configs], allow="demo.rides", audit_path=tmp_path / "prefixed.jsonl",
+                                tool_prefix="dashboard.") as prefixed, \
+            LakeTools.from_sources([lake.configs], allow="demo.rides", audit_path=tmp_path / "plain.jsonl") as plain:
+        answers = [(prefixed.call(tool, arguments), plain.call(tool, arguments)) for tool, arguments in calls]
+        assert prefixed.tool_prefix == "dashboard." and plain.tool_prefix == ""
+        prefixed.audit.close()
+        plain.audit.close()
+    records = [json.loads(line) for line in (tmp_path / "prefixed.jsonl").read_text().splitlines()]
+    assert [record["tool"] for record in records] == ["dashboard." + tool for tool, _ in calls]
+    assert [record["status"] for record in records] == ["ok", "ok", "rejected", "rejected"]
+    assert [json.loads(line)["tool"] for line in (tmp_path / "plain.jsonl").read_text().splitlines()] \
+        == [tool for tool, _ in calls]
+    for with_prefix, without in answers:  # the answer to a call does not change, only its record
+        assert (with_prefix.ok, with_prefix.status, with_prefix.error) == (without.ok, without.status, without.error)
+        assert with_prefix.data.get("row_count") == without.data.get("row_count")
+
+
+def test_a_tool_prefix_that_is_not_text_is_refused(lake, tmp_path):
+    with pytest.raises(ValueError, match="tool_prefix must be text"):
+        LakeTools.from_sources([lake.configs], allow="demo.rides", audit_path=tmp_path / "a.jsonl", tool_prefix=7)
+
+
+def test_the_tool_name_of_an_audit_record_is_cut_at_200_characters_with_its_prefix(lake, tmp_path):
+    with LakeTools.from_sources([lake.configs], allow="demo.rides", audit_path=tmp_path / "a.jsonl",
+                                tool_prefix="dashboard.") as served:
+        served.call("x" * 500, {})
+        assert [record.tool for record in served.audit.records] == ["dashboard." + "x" * 190]
+
+
 def test_audit_log_uses_an_iceberg_sink_that_can_audit(tmp_path, monkeypatch):
     received = []
 
