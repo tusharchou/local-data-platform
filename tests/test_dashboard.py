@@ -545,12 +545,15 @@ def test_without_the_extra_the_command_prints_how_to_install_it_and_exits_with_1
     assert INSTALL_HINT in err
 
 
-def test_the_check_for_the_extra_names_what_is_missing(monkeypatch):
-    real = importlib.util.find_spec
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: None if name == "altair" else real(name, *a))
-    assert dashboard_cli.missing_packages() == ["altair"]
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: None)
-    assert dashboard_cli.missing_packages() == ["marimo", "altair"]
+def test_the_check_for_the_extra_names_what_is_missing_whatever_is_installed(monkeypatch):
+    present = object()
+
+    def without(*missing):
+        monkeypatch.setattr(importlib.util, "find_spec", lambda name, *args: None if name in missing else present)
+        return dashboard_cli.missing_packages()
+
+    assert without("altair") == ["altair"] and without("marimo") == ["marimo"]
+    assert without("marimo", "altair") == ["marimo", "altair"] and without() == []
 
 
 @pytest.fixture
