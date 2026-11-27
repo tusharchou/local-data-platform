@@ -25,8 +25,11 @@ REMOVAL_NOTICE = re.compile(r"removed[\s\"']+in[\s\"']+(?:version[\s\"']+)?v?(\d
 # Imports the package (and optionally every submodule) in a fresh interpreter and reports
 # what changed. A fresh process matters: the test session has already imported the package.
 _SIDE_EFFECT_PROBE = r"""
-import contextlib, importlib, io, json, logging, os, pkgutil, sys, warnings
+import contextlib, importlib, importlib.util, io, json, logging, os, pkgutil, sys, warnings
 
+# A module that is a file of another tool and cannot be imported without it. The probe imports it where the tool is
+# installed and leaves it out where it is not.
+NEEDS = {"local_data_platform.dashboard.app": "marimo"}
 walk = sys.argv[1] == "all"
 root = logging.getLogger()
 env_before = {k: v for k, v in os.environ.items() if k.upper().startswith("PYICEBERG")}
@@ -40,6 +43,8 @@ with contextlib.redirect_stdout(stdout), warnings.catch_warnings():
     imported = ["local_data_platform"]
     if walk:
         for info in pkgutil.walk_packages(local_data_platform.__path__, "local_data_platform."):
+            if info.name in NEEDS and importlib.util.find_spec(NEEDS[info.name]) is None:
+                continue
             importlib.import_module(info.name)
             imported.append(info.name)
 

@@ -647,11 +647,40 @@ def test_edit_opens_a_copy_of_the_notebook_that_is_made_once_and_never_overwritt
     assert started.calls[-1][0][3:5] == ["run", str(APP)], "without --edit the notebook of the package is served"
 
 
+def _default_sigint() -> None:
+    """What a person has: a job that a script starts in the background has SIGINT ignored, and so has what it starts."""
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+
 def test_launch_gives_back_the_exit_status_of_what_it_ran():
     code = [sys.executable, "-c", "import os, sys; sys.exit(int(os.environ['STATUS']))"]
 
     assert dashboard_cli.launch(code, {**os.environ, "STATUS": "0"}) == 0
     assert dashboard_cli.launch(code, {**os.environ, "STATUS": "3"}) == 3
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Ctrl-C is a signal to the process group")
+def test_ctrl_c_stops_marimo_and_the_command_says_so_and_exits_with_0(tmp_path):
+    child = ("import signal, sys, time; signal.signal(signal.SIGINT, lambda *args: sys.exit(0)); "
+             "print('marimo is up', flush=True); time.sleep(60)")
+    code = ("import os, sys; from local_data_platform.dashboard import cli; "
+            f"sys.exit(cli.launch([sys.executable, '-c', {child!r}], dict(os.environ)))")
+    log = tmp_path / "launch.log"
+    with log.open("w") as stream:
+        process = subprocess.Popen([sys.executable, "-c", code], stdout=stream, stderr=subprocess.STDOUT,
+                                   start_new_session=True, preexec_fn=_default_sigint)
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and "marimo is up" not in log.read_text():
+            time.sleep(0.1)
+        assert "marimo is up" in log.read_text()
+        os.killpg(process.pid, signal.SIGINT)  # the terminal sends Ctrl-C to the command and to marimo, as this does
+        process.wait(timeout=30)
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+    assert process.returncode == 0 and "ldp dashboard: stopped" in log.read_text()
 
 
 def test_the_command_needs_the_standard_library_only_when_it_is_imported():
@@ -898,7 +927,7 @@ def test_ldp_dashboard_starts_the_server_on_127_0_0_1_and_stops_with_ctrl_c(demo
         process = subprocess.Popen(
             [sys.executable, "-m", "local_data_platform.cli", "dashboard", "--config", str(demo.config), "--reports",
              str(demo.reports), "--no-browser", "--port", str(port)], stdout=stream, stderr=subprocess.STDOUT,
-            cwd=tmp_path, start_new_session=True)
+            cwd=tmp_path, start_new_session=True, preexec_fn=_default_sigint)
     try:
         answers = {}
         deadline = time.monotonic() + 90
