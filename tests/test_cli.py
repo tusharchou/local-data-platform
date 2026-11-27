@@ -572,7 +572,8 @@ def test_python_dash_m_runs_the_cli():
 # ---------------------------------------------------------------------- module commands (platform contract C9)
 
 MODULE_COMMAND_NAMES = ("catalog", "schema", "plan", "runs", "commits", "datasets", "maintain", "spark", "mcp", "dbt",
-                        "workflow", "backfill", "schedule", "gold", "metrics", "monitor", "status", "alert", "report")
+                        "workflow", "backfill", "schedule", "gold", "metrics", "monitor", "status", "alert", "report",
+                        "dashboard")
 
 
 def _command_names(parser) -> list[str]:
@@ -598,7 +599,7 @@ def test_help_lists_every_command_with_the_shared_verbose_flag(capsys):
 @pytest.mark.parametrize("argv", [["catalog", "test", "--help"], ["schema", "--help"], ["plan", "--help"],
                                   ["runs", "--help"], ["commits", "--help"], ["datasets", "pin", "--help"],
                                   ["maintain", "--help"], ["spark", "--help"], ["mcp", "--help"],
-                                  ["dbt", "--help"], ["dbt", "build", "--help"]])
+                                  ["dbt", "--help"], ["dbt", "build", "--help"], ["dashboard", "--help"]])
 def test_module_command_help_exits_zero_and_offers_verbose(argv, capsys):
     assert main(argv) == 0
     out = capsys.readouterr().out
